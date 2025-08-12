@@ -26,6 +26,17 @@ app.use(express.json({ limit: "15mb" }));
 app.use(cors());
 app.use(express.static("public"));
 
+// 🔹 Auth middleware — place right here
+app.use((req, res, next) => {
+  const expected = (process.env.AUTH_TOKEN || "").trim();
+  if (!expected) return next(); // no auth configured
+  const got = (req.get("x-auth-token") || "").trim();
+  if (got !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+});
+
 // ---------- Diagnostics ----------
 app.get("/health", (req, res) => {
   res.json({
@@ -196,4 +207,5 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`mr-broker running on :${PORT}`);
 });
+
 
