@@ -415,7 +415,13 @@ async function listDriveFileIds() {
   return ids;
 }
 
-// ---------- SEARCH (guarded) ----------
+// ---------- SEARCH ----------
+function drivePreviewUrl(fileId, page) {
+  // Google Drive preview supports #page=
+  const p = page ? `#page=${page}` : "";
+  return `https://drive.google.com/file/d/${fileId}/preview${p}`;
+}
+
 app.post("/search", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
@@ -424,6 +430,64 @@ app.post("/search", async (req, res) => {
     if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
+
+    // live Drive filter
+    let pineconeFilter = undefined;
+    if (LIVE_DRIVE_FILTER) {
+      try {
+        const liveIds = await listDriveFileIds();
+        pineconeFilter = liveIds.size ? { fileId: { $in: [...liveIds] } } : { fileId: { $in: ["__none__"] } };
+      } catch (e) {
+        console.error("[search] listDriveFileIds failed:", e);
+        return res.status(503).json({ error: "Drive check failed", detail: e.message });
+      }
+    }
+
+    // Pinecone v2 query
+    const query = await index.namespace(clientId).query({
+      vector,
+      topK: Number(topK) || 6,
+      includeMetadata: true,
+      filter: pineconeFilter,
+    });
+
+    const matches = query.matches || [];
+
+    // Ask for the answer (bullets allowed; we'll render them as real <li> on the client)
+    const answer = await answerWithContext(userQuery, matches);
+
+    // Build references list
+    const references = matches.map((m) => ({
+      fileId: m.metadata?.fileId,
+      fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
+      page: m.metadata?.page ?? m.metadata?.slide,
+    }));
+
+    // Build visuals (unique fileId+page), up to 4 previews
+    const seen = new Set();
+    const visuals = [];
+    for (const m of matches) {
+      const fid = m.metadata?.fileId;
+      const page = m.metadata?.page ?? m.metadata?.slide;
+      if (!fid || !page) continue;
+      const key = `${fid}:${page}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      visuals.push({
+        fileId: fid,
+        fileName: m.metadata?.fileName || "Untitled",
+        page,
+        previewUrl: drivePreviewUrl(fid, page),
+      });
+      if (visuals.length >= 4) break;
+    }
+
+    res.json({ answer, references, visuals });
+  } catch (e) {
+    console.error("[/search] error", e);
+    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+  }
+});
 
     // live Drive filter
     let pineconeFilter = undefined;
@@ -623,4 +687,5 @@ app.post("/admin/ingest-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
+
 
