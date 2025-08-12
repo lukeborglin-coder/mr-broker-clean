@@ -1,4 +1,4 @@
-// server.js — Pinecone v2 + Google Drive + SSE ingest + search + visuals + diagnostics
+// server.js — Pinecone v2 + Google Drive + page PNG previews + narrative answers + SSE ingest
 
 import fs from "node:fs";
 import path from "node:path";
@@ -13,13 +13,11 @@ import { Pinecone } from "@pinecone-database/pinecone";
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 const PORT = process.env.PORT || 3000;
 
-// Core env
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 
-// Pinecone config
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
 const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";
 const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1";
@@ -102,7 +100,7 @@ app.get("/debug/drive-env", (req, res) => {
   });
 });
 
-// ---------- Auth guard (below routes require x-auth-token) ----------
+// ---------- Auth guard ----------
 app.use((req, res, next) => {
   if (!AUTH_TOKEN) return next();
   if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN) {
@@ -180,22 +178,33 @@ async function embedText(text) {
   return data[0].embedding;
 }
 
+// Conversational answer template
 async function answerWithContext(question, contexts) {
+  // Provide file + page for model to cite
   const contextText = contexts
-    .map(
-      (m, i) => `# Source ${i + 1}
-File: ${m?.metadata?.fileName || m?.metadata?.title || "Untitled"}
-Page: ${m?.metadata?.page ?? m?.metadata?.slide ?? "?"}
+    .map((m, i) => `# Source ${i + 1}
+File: ${m?.metadata?.fileName || "Untitled"}  |  Page: ${m?.metadata?.page ?? "?"}
 ---
-${m?.metadata?.text || m?.metadata?.chunk || m?.metadata?.content || m?.values?.text || ""}`
-    )
+${m?.metadata?.text || ""}`)
     .join("\n\n");
 
-  const prompt = `You are a market research analyst. Answer the user's question using ONLY the context below.
-If the context doesn't contain the answer, say you don't have enough information.
-Be concise and factual. Use short bullet points where helpful.
+  const prompt = `You are a pharma market-research analyst writing client-ready insights.
+Answer the question USING ONLY the context. Be conversational and concise.
 
-Question: ${question}
+Write in this structure:
+1) One-sentence headline answer (narrative), e.g., "Evrysdi's latest NPS is 43% (2024 SMA Evrysdi HCP Patient ATU W6 Report)."
+2) Then bullets for trend and supporting insight, e.g.:
+   - Prior NPS readings in order (with % and source file names)
+   - Notable directional changes or context (e.g., "up from 20% to 43%")
+   - Any relevant comparator (e.g., Spinraza)
+
+Rules:
+- Do NOT invent numbers or sources—only use what is in the context.
+- If the latest value or sources aren’t present, say you don’t have enough information.
+- Keep to 3–5 bullets maximum.
+
+Question:
+${question}
 
 Context:
 ${contextText}`;
@@ -274,6 +283,56 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Inf
   }
 }
 
+// ---------- Page PNG preview (exact slide) ----------
+import * as pdfjsLib from "pdfjs-dist";
+pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve("pdfjs-dist/build/pdf.worker.js");
+import { createCanvas } from "canvas";
+
+const PREVIEW_DIR = "/tmp/previews";
+if (!fs.existsSync(PREVIEW_DIR)) fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+
+async function renderPdfPagePng(fileId, pageNumber) {
+  const safeId = fileId.replace(/[^a-zA-Z0-9_-]/g, "");
+  const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNumber}.png`);
+  if (fs.existsSync(pngPath)) return pngPath;
+
+  const data = await downloadDriveFileBuffer(fileId);
+  const loadingTask = pdfjsLib.getDocument({ data });
+  const pdf = await loadingTask.promise;
+  const pageIndex = Math.max(1, Number(pageNumber)) - 1;
+  const page = await pdf.getPage(pageIndex + 1);
+
+  const scale = 1.5; // quality
+  const viewport = page.getViewport({ scale });
+  const canvas = createCanvas(viewport.width, viewport.height);
+  const context = canvas.getContext("2d");
+
+  await page.render({ canvasContext: context, viewport }).promise;
+
+  const out = fs.createWriteStream(pngPath);
+  await new Promise((resolve, reject) => {
+    const stream = canvas.createPNGStream();
+    stream.pipe(out);
+    out.on("finish", resolve);
+    out.on("error", reject);
+  });
+
+  return pngPath;
+}
+
+app.get("/preview/page.png", async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "");
+    const page = Number(req.query.page || 1);
+    if (!fileId) return res.status(400).send("fileId required");
+    const pngPath = await renderPdfPagePng(fileId, page);
+    res.type("image/png");
+    fs.createReadStream(pngPath).pipe(res);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 // ---------- Live Drive allowlist for search ----------
 let _driveCache = { ids: new Set(), ts: 0 };
 async function listDriveFileIds() {
@@ -302,33 +361,19 @@ async function listDriveFileIds() {
   return ids;
 }
 
-// ---------- SEARCH (returns visuals) ----------
-function drivePreviewUrl(fileId, page) {
-  const p = page ? `#page=${page}` : "";
-  return `https://drive.google.com/file/d/${fileId}/preview${p}`;
-}
-
+// ---------- SEARCH (returns page images + deduped refs + narrative) ----------
 app.post("/search", async (req, res) => {
   try {
-    if (!index) {
-      return res.status(503).json({ error: "Pinecone index not ready yet" });
-    }
+    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
     const { clientId = "demo", userQuery, topK = 6 } = req.body || {};
-    if (!userQuery) {
-      return res.status(400).json({ error: "userQuery required" });
-    }
+    if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
 
     let pineconeFilter = undefined;
     if (LIVE_DRIVE_FILTER) {
-      try {
-        const liveIds = await listDriveFileIds();
-        pineconeFilter = liveIds.size ? { fileId: { $in: [...liveIds] } } : { fileId: { $in: ["__none__"] } };
-      } catch (e) {
-        console.error("[search] listDriveFileIds failed:", e);
-        return res.status(503).json({ error: "Drive check failed", detail: e.message });
-      }
+      const liveIds = await listDriveFileIds();
+      pineconeFilter = liveIds.size ? { fileId: { $in: [...liveIds] } } : { fileId: { $in: ["__none__"] } };
     }
 
     const q = await index.namespace(clientId).query({
@@ -341,34 +386,40 @@ app.post("/search", async (req, res) => {
     const matches = q.matches || [];
     const answer = await answerWithContext(userQuery, matches);
 
-    const references = matches.map((m) => ({
-      fileId: m.metadata?.fileId,
-      fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
-      page: m.metadata?.page ?? m.metadata?.slide,
-    }));
+    // Dedup references by fileId; strip ".pdf" from names
+    const seenRef = new Set();
+    const references = [];
+    for (const m of matches) {
+      const fid = m.metadata?.fileId;
+      if (!fid || seenRef.has(fid)) continue;
+      seenRef.add(fid);
+      const cleanName = (m.metadata?.fileName || "Untitled").replace(/\.pdf$/i, "");
+      references.push({
+        fileId: fid,
+        fileName: cleanName,
+        page: m.metadata?.page ?? m.metadata?.slide,
+      });
+    }
 
-    const seen = new Set();
+    // Visuals: concrete page PNGs (limit 4)
+    const seenVis = new Set();
     const visuals = [];
     for (const m of matches) {
       const fid = m.metadata?.fileId;
       const page = m.metadata?.page ?? m.metadata?.slide;
       if (!fid || !page) continue;
       const key = `${fid}:${page}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      visuals.push({
-        fileId: fid,
-        fileName: m.metadata?.fileName || "Untitled",
-        page,
-        previewUrl: drivePreviewUrl(fid, page),
-      });
+      if (seenVis.has(key)) continue;
+      seenVis.add(key);
+      const imageUrl = `/preview/page.png?fileId=${encodeURIComponent(fid)}&page=${encodeURIComponent(page)}`;
+      const cleanName = (m.metadata?.fileName || "Untitled").replace(/\.pdf$/i, "");
+      visuals.push({ fileId: fid, fileName: cleanName, page, imageUrl });
       if (visuals.length >= 4) break;
     }
 
-    return res.json({ answer, references, visuals });
+    res.json({ answer, references, visuals });
   } catch (e) {
-    console.error("[/search] error", e);
-    return res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
@@ -379,9 +430,9 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     const { clientId } = req.body || {};
     if (!clientId) return res.status(400).json({ error: "clientId required" });
     await index.namespace(clientId).deleteAll();
-    return res.json({ ok: true, message: "Namespace purged. Re-ingest to rebuild." });
+    res.json({ ok: true, message: "Namespace purged. Re-ingest to rebuild." });
   } catch (e) {
-    return res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
@@ -406,9 +457,9 @@ app.post("/admin/ingest-list", async (req, res) => {
       });
       pageToken = r.data.nextPageToken || null;
     } while (pageToken);
-    return res.json({ ok: true, count: files.length, files });
+    res.json({ ok: true, count: files.length, files });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
@@ -425,24 +476,20 @@ app.post("/admin/ingest-one", async (req, res) => {
       fileName: meta.name || "Untitled",
       maxPages: Number(maxPages) || Infinity,
     });
-    return res.json({ ok: true, clientId, fileId, fileName: meta.name || "Untitled" });
+    res.json({ ok: true, clientId, fileId, fileName: meta.name || "Untitled" });
   } catch (e) {
-    return res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
 // ---------- Admin: ingest ALL PDFs with live progress (SSE) ----------
 app.post("/admin/ingest-drive", async (req, res) => {
-  // Server-Sent Events headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
-
-  const write = (obj) => {
-    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
-  };
+  const write = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {} };
 
   try {
     if (!index) { write({ level: "error", msg: "Pinecone index not ready yet" }); res.end(); return; }
@@ -455,10 +502,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
       const r = await drive.files.list({
         q,
         fields: "files(id,name,mimeType,size),nextPageToken",
-        pageSize: 1000,
-        includeItemsFromAllDrives: true,
-        supportsAllDrives: true,
-        pageToken,
+        pageSize: 1000, includeItemsFromAllDrives: true, supportsAllDrives: true, pageToken,
       });
       (r.data.files || []).forEach((f) => {
         const mt = (f.mimeType || "").toLowerCase();
@@ -470,21 +514,14 @@ app.post("/admin/ingest-drive", async (req, res) => {
     if (!files.length) { write({ level: "warn", msg: "No PDFs found." }); res.end(); return; }
 
     write({ level: "info", msg: `Found ${files.length} PDF(s). Starting ingest…` });
-
     let done = 0;
     const clientId = req.body?.clientId || "demo";
     for (const f of files) {
       try {
         write({ level: "info", fileId: f.id, fileName: f.name, msg: "Downloading…" });
         const meta = await downloadDriveFileMeta(f.id);
-        write({
-          level: "info",
-          fileId: f.id,
-          fileName: f.name,
-          size: meta.size ? Number(meta.size) : null,
-          msg: "Parsing + embedding…",
-        });
-        await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name }); // ALL pages
+        write({ level: "info", fileId: f.id, fileName: f.name, size: meta.size ? Number(meta.size) : null, msg: "Parsing + embedding…" });
+        await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name });
         done++;
         write({ level: "success", fileId: f.id, fileName: f.name, done, total: files.length, msg: "Ingested" });
       } catch (e) {
