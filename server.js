@@ -14,30 +14,31 @@ const envPath = path.resolve(process.cwd(), ".env");
 dotenv.config({ path: envPath, override: true });
 
 const PORT = process.env.PORT || 3000;
-const AUTH_TOKEN = process.env.AUTH_TOKEN || "";
+const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
 const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
+const LIVE_DRIVE_FILTER = String(process.env.LIVE_DRIVE_FILTER || "true").toLowerCase() === "true";
 
 const app = express();
 app.use(express.json({ limit: "15mb" }));
 app.use(cors());
 app.use(express.static("public"));
 
-// Place BEFORE the auth middleware
+// ---------- Debug routes (no auth so you can test easily) ----------
 app.get("/debug/drive-env", (req, res) => {
   res.json({
-    DRIVE_ROOT_FOLDER_ID: process.env.DRIVE_ROOT_FOLDER_ID,
-    GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    credsFileExists: !!(process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS))
+    DRIVE_ROOT_FOLDER_ID,
+    GOOGLE_APPLICATION_CREDENTIALS,
+    credsFileExists: !!(GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS))
   });
 });
 
 app.get("/debug/drive-list", async (req, res) => {
   try {
-    const q = `'${process.env.DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
     const r = await drive.files.list({
       q,
       fields: "files(id,name,mimeType),nextPageToken",
@@ -51,14 +52,33 @@ app.get("/debug/drive-list", async (req, res) => {
   }
 });
 
-// 🔹 Auth middleware — place right here
-app.use((req, res, next) => {
-  const expected = (process.env.AUTH_TOKEN || "").trim();
-  if (!expected) return next(); // no auth configured
-  const got = (req.get("x-auth-token") || "").trim();
-  if (got !== expected) {
-    return res.status(401).json({ error: "Unauthorized" });
+app.get("/debug/pinecone", async (req, res) => {
+  try {
+    const info = await index.describeIndexStats();
+    res.json({ ok: true, stats: info });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, stack: e.stack });
   }
+});
+
+app.get("/debug/embed-dim", async (req, res) => {
+  try {
+    const r = await openai.embeddings.create({
+      model: "text-embedding-3-small", // must match embedText()
+      input: "hello"
+    });
+    res.json({ ok: true, model: "text-embedding-3-small", dim: r.data[0].embedding.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, stack: e.stack });
+  }
+});
+
+// ---------- Auth middleware (single, trimmed) ----------
+app.use((req, res, next) => {
+  const expected = AUTH_TOKEN;
+  if (!expected) return next(); // auth disabled if no token configured
+  const got = (req.get("x-auth-token") || "").trim();
+  if (got !== expected) return res.status(401).json({ error: "Unauthorized" });
   next();
 });
 
@@ -77,35 +97,25 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ---------- Auth middleware ----------
-app.use((req, res, next) => {
-  if (!AUTH_TOKEN) return next(); // no auth configured
-  const token = req.get("x-auth-token");
-  if (token !== AUTH_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  next();
-});
-
 // ---------- Google Drive client ----------
 if (!GOOGLE_APPLICATION_CREDENTIALS || !fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS)) {
   console.warn("[warn] GOOGLE_APPLICATION_CREDENTIALS missing or not found:", GOOGLE_APPLICATION_CREDENTIALS);
 }
-const auth = new google.auth.GoogleAuth({
+const gauth = new google.auth.GoogleAuth({
   keyFile: GOOGLE_APPLICATION_CREDENTIALS,
   scopes: ["https://www.googleapis.com/auth/drive.readonly"]
 });
-const drive = google.drive({ version: "v3", auth });
+const drive = google.drive({ version: "v3", auth: gauth });
 
 // ---------- OpenAI + Pinecone ----------
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 const index = pinecone.Index(PINECONE_INDEX);
 
-// Embeddings
+// Embeddings (1536 dims to match many existing indexes)
 async function embedText(text) {
   const { data } = await openai.embeddings.create({
-    model: "text-embedding-3-small",
+    model: "text-embedding-3-small", // 1536 dims
     input: text
   });
   return data[0].embedding;
@@ -161,7 +171,7 @@ async function listDriveFileIds() {
     });
     (resp.data.files || []).forEach(f => {
       const mt = (f.mimeType || "").toLowerCase();
-      // keep only typical doc types you index; tailor as needed
+      // keep only doc types you index; tailor as needed
       if (mt.includes("pdf") || mt.includes("presentation") || mt.includes("powerpoint")) {
         ids.add(f.id);
       }
@@ -181,28 +191,40 @@ app.post("/search", async (req, res) => {
 
     const vector = await embedText(userQuery);
 
-    let allowList = [];
-    try {
-      const liveIds = await listDriveFileIds();
-      allowList = [...liveIds];
-    } catch (e) {
-      console.error("[search] listDriveFileIds failed:", e);
-      // Option A (strict): return a clear error
-      return res.status(503).json({ error: "Drive check failed. Verify credentials and folder ID.", detail: e.message });
-      // Option B (temp): comment the line above and fall back with no filter while you fix Drive.
-      // allowList = []; // and omit the filter below to keep the query working for now
+    // Build Pinecone filter
+    let pineconeFilter = undefined;
+    if (LIVE_DRIVE_FILTER) {
+      try {
+        const liveIds = await listDriveFileIds();
+        const allowList = [...liveIds];
+        pineconeFilter = allowList.length
+          ? { fileId: { $in: allowList } }
+          : { fileId: { $in: ["__none__"] } }; // nothing returns if folder is empty
+      } catch (e) {
+        console.error("[search] listDriveFileIds failed:", e);
+        return res.status(503).json({ error: "Drive check failed. Verify credentials and folder ID.", detail: e.message });
+      }
     }
 
-    const query = await index.query({
-      vector,
-      topK,
-      includeMetadata: true,
-      namespace: clientId,
-      filter: allowList.length ? { fileId: { $in: allowList } } : { fileId: { $in: ["__none__"] } } // return nothing if no live ids
-    });
+    // Query Pinecone with clear error surfacing
+    let query;
+    try {
+      query = await index.query({
+        vector,
+        topK,
+        includeMetadata: true,
+        namespace: clientId,
+        filter: pineconeFilter
+      });
+    } catch (e) {
+      console.error("[/search] pinecone.query failed:", e);
+      return res.status(500).json({ error: "pinecone.query failed", detail: e.message });
+    }
 
     const matches = query.matches || [];
     const answer = await answerWithContext(userQuery, matches);
+
+    // Plain-text references (no links)
     const references = matches.map(m => ({
       fileId: m.metadata?.fileId,
       fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
@@ -216,16 +238,14 @@ app.post("/search", async (req, res) => {
   }
 });
 
-
 // ---------- (Optional) purge + rebuild from Drive ----------
-// This is a safe placeholder that only purges. Wire your ingest pipeline if/when you want.
 app.post("/admin/rebuild-from-drive", async (req, res) => {
   try {
     const { clientId } = req.body || {};
     if (!clientId) return res.status(400).json({ error: "clientId required" });
 
     await index.delete({ deleteAll: true, namespace: clientId });
-    // TODO: Run your own ingestion here to re-index current Drive files only.
+    // TODO: Wire your ingestion to re-index current Drive files only.
     res.json({ ok: true, message: "Namespace purged. Re-ingest current Drive files to complete rebuild." });
   } catch (e) {
     console.error("[/admin/rebuild-from-drive] error", e);
@@ -237,7 +257,3 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`mr-broker running on :${PORT}`);
 });
-
-
-
-
