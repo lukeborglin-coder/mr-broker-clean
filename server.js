@@ -1,4 +1,4 @@
-// server.js — minimal, production-safe, with live Drive filter on /search
+// server.js — auto-creates Pinecone index; live Drive filter; clear debug
 
 import fs from "node:fs";
 import path from "node:path";
@@ -14,20 +14,72 @@ const envPath = path.resolve(process.cwd(), ".env");
 dotenv.config({ path: envPath, override: true });
 
 const PORT = process.env.PORT || 3000;
+
+// 🔧 REQUIRED ENV
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
-const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
-const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID; // Google folder ID
+const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // path to JSON
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
+// Index config
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
+const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";        // "aws" or "gcp"
+const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1"; // ex: "us-east-1"
 const LIVE_DRIVE_FILTER = String(process.env.LIVE_DRIVE_FILTER || "true").toLowerCase() === "true";
+
+// Embedding model (1536 dims)
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const EMBEDDING_DIMS = 1536;
 
 const app = express();
 app.use(express.json({ limit: "15mb" }));
 app.use(cors());
 app.use(express.static("public"));
 
-// ---------- Debug routes (no auth so you can test easily) ----------
+// ---------- Google Drive ----------
+if (!GOOGLE_APPLICATION_CREDENTIALS || !fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS)) {
+  console.warn("[warn] GOOGLE_APPLICATION_CREDENTIALS missing or not found:", GOOGLE_APPLICATION_CREDENTIALS);
+}
+const gauth = new google.auth.GoogleAuth({
+  keyFile: GOOGLE_APPLICATION_CREDENTIALS,
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+});
+const drive = google.drive({ version: "v3", auth: gauth });
+
+// ---------- OpenAI + Pinecone ----------
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
+
+// Ensure index exists (serverless)
+async function ensurePineconeIndex() {
+  // list indexes
+  const indexes = await pinecone.listIndexes();
+  const exists = indexes.indexes?.some(i => i.name === PINECONE_INDEX);
+  if (exists) return;
+
+  console.log(`[pinecone] creating index "${PINECONE_INDEX}" (dims=${EMBEDDING_DIMS}, region=${PINECONE_REGION})...`);
+  await pinecone.createIndex({
+    name: PINECONE_INDEX,
+    dimension: EMBEDDING_DIMS,
+    metric: "cosine",
+    spec: {
+      serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION }
+    }
+  });
+
+  // wait until Ready
+  for (let i = 0; i < 30; i++) {
+    const d = await pinecone.describeIndex(PINECONE_INDEX);
+    const status = d.status?.ready ? "Ready" : "NotReady";
+    console.log(`[pinecone] status: ${status}`);
+    if (d.status?.ready) break;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+let index; // will be set after ensurePineconeIndex()
+
+// ---------- Debug (no auth) ----------
 app.get("/debug/drive-env", (req, res) => {
   res.json({
     DRIVE_ROOT_FOLDER_ID,
@@ -54,8 +106,13 @@ app.get("/debug/drive-list", async (req, res) => {
 
 app.get("/debug/pinecone", async (req, res) => {
   try {
-    const info = await index.describeIndexStats();
-    res.json({ ok: true, stats: info });
+    const stats = await pinecone.describeIndexStats({ indexName: PINECONE_INDEX }).catch(async () => {
+      // if index missing, reflect that
+      const list = await pinecone.listIndexes();
+      return { missing: true, indexes: list.indexes || [] };
+    });
+    const desc = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
+    res.json({ ok: true, index: PINECONE_INDEX, desc, stats });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message, stack: e.stack });
   }
@@ -63,20 +120,17 @@ app.get("/debug/pinecone", async (req, res) => {
 
 app.get("/debug/embed-dim", async (req, res) => {
   try {
-    const r = await openai.embeddings.create({
-      model: "text-embedding-3-small", // must match embedText()
-      input: "hello"
-    });
-    res.json({ ok: true, model: "text-embedding-3-small", dim: r.data[0].embedding.length });
+    const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: "hello" });
+    res.json({ ok: true, model: EMBEDDING_MODEL, dim: r.data[0].embedding.length });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message, stack: e.stack });
   }
 });
 
-// ---------- Auth middleware (single, trimmed) ----------
+// ---------- Auth middleware ----------
 app.use((req, res, next) => {
   const expected = AUTH_TOKEN;
-  if (!expected) return next(); // auth disabled if no token configured
+  if (!expected) return next();
   const got = (req.get("x-auth-token") || "").trim();
   if (got !== expected) return res.status(401).json({ error: "Unauthorized" });
   next();
@@ -92,36 +146,22 @@ app.get("/health", (req, res) => {
       googleCreds: Boolean(GOOGLE_APPLICATION_CREDENTIALS),
       openai: Boolean(OPENAI_API_KEY),
       pinecone: Boolean(PINECONE_API_KEY),
-      index: PINECONE_INDEX
+      index: PINECONE_INDEX,
+      cloud: PINECONE_CLOUD,
+      region: PINECONE_REGION
     }
   });
 });
 
-// ---------- Google Drive client ----------
-if (!GOOGLE_APPLICATION_CREDENTIALS || !fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS)) {
-  console.warn("[warn] GOOGLE_APPLICATION_CREDENTIALS missing or not found:", GOOGLE_APPLICATION_CREDENTIALS);
-}
-const gauth = new google.auth.GoogleAuth({
-  keyFile: GOOGLE_APPLICATION_CREDENTIALS,
-  scopes: ["https://www.googleapis.com/auth/drive.readonly"]
-});
-const drive = google.drive({ version: "v3", auth: gauth });
-
-// ---------- OpenAI + Pinecone ----------
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
-const index = pinecone.Index(PINECONE_INDEX);
-
-// Embeddings (1536 dims to match many existing indexes)
+// ---------- Helpers ----------
 async function embedText(text) {
   const { data } = await openai.embeddings.create({
-    model: "text-embedding-3-small", // 1536 dims
+    model: EMBEDDING_MODEL, // 1536 dims
     input: text
   });
   return data[0].embedding;
 }
 
-// LLM answer
 async function answerWithContext(question, contexts) {
   const contextText = contexts
     .map((m, i) => `# Source ${i + 1}
@@ -150,7 +190,7 @@ ${contextText}`;
   return resp.choices?.[0]?.message?.content?.trim() || "";
 }
 
-// ---------- Live Drive filter (cache 60s) ----------
+// Drive file allowlist (cache 60s)
 let _driveCache = { ids: new Set(), ts: 0 };
 async function listDriveFileIds() {
   const now = Date.now();
@@ -171,7 +211,6 @@ async function listDriveFileIds() {
     });
     (resp.data.files || []).forEach(f => {
       const mt = (f.mimeType || "").toLowerCase();
-      // keep only doc types you index; tailor as needed
       if (mt.includes("pdf") || mt.includes("presentation") || mt.includes("powerpoint")) {
         ids.add(f.id);
       }
@@ -183,15 +222,16 @@ async function listDriveFileIds() {
   return ids;
 }
 
-// ---------- SEARCH (filters to current Drive files) ----------
+// ---------- SEARCH ----------
 app.post("/search", async (req, res) => {
   try {
+    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
+
     const { clientId = "demo", userQuery, topK = 6 } = req.body || {};
     if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
 
-    // Build Pinecone filter
     let pineconeFilter = undefined;
     if (LIVE_DRIVE_FILTER) {
       try {
@@ -199,14 +239,13 @@ app.post("/search", async (req, res) => {
         const allowList = [...liveIds];
         pineconeFilter = allowList.length
           ? { fileId: { $in: allowList } }
-          : { fileId: { $in: ["__none__"] } }; // nothing returns if folder is empty
+          : { fileId: { $in: ["__none__"] } };
       } catch (e) {
         console.error("[search] listDriveFileIds failed:", e);
         return res.status(503).json({ error: "Drive check failed. Verify credentials and folder ID.", detail: e.message });
       }
     }
 
-    // Query Pinecone with clear error surfacing
     let query;
     try {
       query = await index.query({
@@ -224,7 +263,6 @@ app.post("/search", async (req, res) => {
     const matches = query.matches || [];
     const answer = await answerWithContext(userQuery, matches);
 
-    // Plain-text references (no links)
     const references = matches.map(m => ({
       fileId: m.metadata?.fileId,
       fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
@@ -238,14 +276,14 @@ app.post("/search", async (req, res) => {
   }
 });
 
-// ---------- (Optional) purge + rebuild from Drive ----------
+// ---------- Admin (purge namespace) ----------
 app.post("/admin/rebuild-from-drive", async (req, res) => {
   try {
+    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
     const { clientId } = req.body || {};
     if (!clientId) return res.status(400).json({ error: "clientId required" });
 
     await index.delete({ deleteAll: true, namespace: clientId });
-    // TODO: Wire your ingestion to re-index current Drive files only.
     res.json({ ok: true, message: "Namespace purged. Re-ingest current Drive files to complete rebuild." });
   } catch (e) {
     console.error("[/admin/rebuild-from-drive] error", e);
@@ -253,7 +291,17 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
   }
 });
 
-// ---------- Start ----------
-app.listen(PORT, () => {
-  console.log(`mr-broker running on :${PORT}`);
-});
+// ---------- Bootstrapping Pinecone then start server ----------
+(async () => {
+  try {
+    await ensurePineconeIndex();
+    index = pinecone.Index(PINECONE_INDEX);
+    console.log(`[pinecone] using index "${PINECONE_INDEX}"`);
+  } catch (e) {
+    console.error("[pinecone] failed to ensure index:", e);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`mr-broker running on :${PORT}`);
+  });
+})();
