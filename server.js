@@ -43,8 +43,9 @@ app.get("/health", (req, res) => {
 
 // ---------- Auth middleware ----------
 app.use((req, res, next) => {
+  if (!AUTH_TOKEN) return next(); // no auth configured
   const token = req.get("x-auth-token");
-  if (AUTH_TOKEN && token !== AUTH_TOKEN) {
+  if (token !== AUTH_TOKEN) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -195,3 +196,4 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`mr-broker running on :${PORT}`);
 });
+
