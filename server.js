@@ -284,8 +284,7 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Inf
 }
 
 // ---------- Page PNG preview (exact slide) ----------
-import * as pdfjsLib from "pdfjs-dist";
-pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve("pdfjs-dist/build/pdf.worker.js");
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createCanvas } from "canvas";
 
 const PREVIEW_DIR = "/tmp/previews";
@@ -297,12 +296,15 @@ async function renderPdfPagePng(fileId, pageNumber) {
   if (fs.existsSync(pngPath)) return pngPath;
 
   const data = await downloadDriveFileBuffer(fileId);
-  const loadingTask = pdfjsLib.getDocument({ data });
+
+  // No worker in Node (avoids workerSrc issues)
+  const loadingTask = pdfjsLib.getDocument({ data, useWorker: false });
   const pdf = await loadingTask.promise;
+
   const pageIndex = Math.max(1, Number(pageNumber)) - 1;
   const page = await pdf.getPage(pageIndex + 1);
 
-  const scale = 1.5; // quality
+  const scale = 1.5;
   const viewport = page.getViewport({ scale });
   const canvas = createCanvas(viewport.width, viewport.height);
   const context = canvas.getContext("2d");
@@ -311,8 +313,7 @@ async function renderPdfPagePng(fileId, pageNumber) {
 
   const out = fs.createWriteStream(pngPath);
   await new Promise((resolve, reject) => {
-    const stream = canvas.createPNGStream();
-    stream.pipe(out);
+    canvas.createPNGStream().pipe(out);
     out.on("finish", resolve);
     out.on("error", reject);
   });
@@ -547,3 +548,4 @@ app.post("/admin/ingest-drive", async (req, res) => {
   }
   app.listen(PORT, () => console.log(`mr-broker running on :${PORT}`));
 })();
+
