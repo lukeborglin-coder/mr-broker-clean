@@ -105,7 +105,7 @@ const index = pinecone.Index(PINECONE_INDEX);
 // Embeddings
 async function embedText(text) {
   const { data } = await openai.embeddings.create({
-    model: "text-embedding-3-large",
+    model: "text-embedding-3-small",
     input: text
   });
   return data[0].embedding;
@@ -237,6 +237,7 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`mr-broker running on :${PORT}`);
 });
+
 
 
 
