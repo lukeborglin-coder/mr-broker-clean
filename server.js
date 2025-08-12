@@ -1,6 +1,6 @@
-// server.js — Pinecone v2 + Drive PDF ingest (guarded) + diagnostics
-// Adds /drive/debug and /drive/files/flat
-// Accepts GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CREDENTIALS_JSON
+// server.js — Pinecone v2 + Google Drive + safer ingest (single-file + list) + diagnostics
+// Adds: /drive/debug, /drive/files/flat, /admin/ingest-list, /admin/ingest-one
+// Safer pdf parsing with fallback + optional maxPages
 
 import fs from "node:fs";
 import path from "node:path";
@@ -40,7 +40,6 @@ app.use(express.static("public"));
 
 // ---------- Google Drive ----------
 function getCredsPath() {
-  // Prefer GOOGLE_APPLICATION_CREDENTIALS; fall back to GOOGLE_CREDENTIALS_JSON
   const p =
     (process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim() ||
     (process.env.GOOGLE_CREDENTIALS_JSON || "").trim();
@@ -84,7 +83,7 @@ async function ensurePineconeIndex() {
   }
 }
 
-let index; // v2 handle: pinecone.index(name)
+let index; // v2 handle
 
 // ---------- Debug (no auth) ----------
 app.get("/debug/drive-env", (req, res) => {
@@ -184,7 +183,7 @@ app.get("/env", (req, res) => {
   });
 });
 
-// ---------- NEW: Drive diagnostics (guarded) ----------
+// ---------- Drive diagnostics (guarded) ----------
 app.get("/drive/debug", async (req, res) => {
   try {
     res.json({
@@ -198,7 +197,6 @@ app.get("/drive/debug", async (req, res) => {
   }
 });
 
-// ---------- NEW: List files (flat) under DRIVE_ROOT_FOLDER_ID (guarded) ----------
 app.get("/drive/files/flat", async (req, res) => {
   try {
     const folderId = DRIVE_ROOT_FOLDER_ID;
@@ -285,28 +283,55 @@ ${contextText}`;
 
 // ===== Drive → PDF → text → chunks → embeddings =====
 
-// Download a Drive file as a Buffer (STRICT: throw if empty)
+async function downloadDriveFileMeta(fileId) {
+  const { data } = await drive.files.get({
+    fileId,
+    fields: "id,name,mimeType,size",
+    supportsAllDrives: true,
+  });
+  return data;
+}
+
+// Download a Drive file as Buffer (STRICT)
 async function downloadDriveFileBuffer(fileId) {
-  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
-  if (!resp || !resp.data) {
-    throw new Error(`Drive returned no data for fileId=${fileId}`);
-  }
+  const resp = await drive.files.get(
+    { fileId, alt: "media" },
+    { responseType: "arraybuffer" }
+  );
+  if (!resp || !resp.data) throw new Error(`Drive returned no data for fileId=${fileId}`);
   const buf = Buffer.from(resp.data);
-  if (!buf.length) {
-    throw new Error(`Downloaded empty buffer from Drive for fileId=${fileId}`);
-  }
+  if (!buf.length) throw new Error(`Downloaded empty buffer for fileId=${fileId}`);
   return buf;
 }
 
-// PDF → pages using internal pdf-parse path to avoid demo fallback
+// PDF → pages with fallback parser
 async function parsePdfPages(buffer) {
-  if (!buffer || !buffer.length) {
-    throw new Error("parsePdfPages called without a PDF buffer");
+  if (!buffer || !buffer.length) throw new Error("parsePdfPages called without a PDF buffer");
+
+  let pdfParseFn = null;
+  let tried = [];
+
+  try {
+    const mod = await import("pdf-parse/lib/pdf-parse.js");
+    pdfParseFn = mod.default || mod;
+    tried.push("pdf-parse/lib/pdf-parse.js");
+  } catch {
+    tried.push("pdf-parse/lib/pdf-parse.js (failed)");
   }
-  // IMPORTANT: load the actual parser function, not the package entry
-  const mod = await import("pdf-parse/lib/pdf-parse.js");
-  const pdfParse = mod.default || mod; // support both ESM/CJS shapes
-  const parsed = await pdfParse(buffer);
+  if (!pdfParseFn) {
+    try {
+      const mod2 = await import("pdf-parse"); // fallback
+      pdfParseFn = (mod2.default || mod2);
+      tried.push("pdf-parse (fallback ok)");
+    } catch {
+      tried.push("pdf-parse (failed)");
+    }
+  }
+  if (!pdfParseFn) {
+    throw new Error("Unable to load pdf-parse. Tried: " + tried.join(" | "));
+  }
+
+  const parsed = await pdfParseFn(buffer);
   const raw = parsed.text || "";
   const pages = raw.split("\f");
   return pages.map((p) => p.trim()).filter(Boolean);
@@ -323,8 +348,7 @@ function chunkText(str, chunkSize = 2000, overlap = 200) {
   return out;
 }
 
-// Upsert a set of chunks for one file (stores page + filename)
-// Pinecone v2 — use namespace chaining
+// Upsert chunks for one file (stores page + filename)
 async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   const vectors = [];
   for (let i = 0; i < chunks.length; i++) {
@@ -341,14 +365,17 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   }
 }
 
-// Ingest ONE Drive PDF (with strict checks + logs)
-async function ingestSingleDrivePdf({ clientId, fileId, fileName }) {
+// Ingest ONE Drive PDF (strict + logs) with optional page cap
+async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Infinity }) {
   console.log(`[ingest] downloading "${fileName}" (${fileId})`);
   const buf = await downloadDriveFileBuffer(fileId);
   console.log(`[ingest] ${fileName}: downloaded ${buf.length.toLocaleString()} bytes`);
+
   const pages = await parsePdfPages(buf);
   console.log(`[ingest] parsed ${pages.length} pages from "${fileName}"`);
-  for (let p = 0; p < pages.length; p++) {
+
+  const limit = Math.min(pages.length, Number.isFinite(maxPages) ? maxPages : pages.length);
+  for (let p = 0; p < limit; p++) {
     const pageText = pages[p];
     if (!pageText) continue;
     const chunks = chunkText(pageText, 2000, 200);
@@ -441,7 +468,7 @@ app.post("/search", async (req, res) => {
   }
 });
 
-// ---------- Admin (purge namespace) ----------
+// ---------- Admin: purge namespace ----------
 app.post("/admin/rebuild-from-drive", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
@@ -456,11 +483,9 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
   }
 });
 
-// ---------- Admin (ingest all PDFs from Drive folder) ----------
-app.post("/admin/ingest-drive", async (req, res) => {
+// ---------- Admin: list PDFs with sizes (safer preview) ----------
+app.post("/admin/ingest-list", async (req, res) => {
   try {
-    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-    const { clientId = "demo" } = req.body || {};
     const files = [];
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
     let pageToken = null;
@@ -468,7 +493,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
     do {
       const r = await drive.files.list({
         q,
-        fields: "files(id,name,mimeType),nextPageToken",
+        fields: "files(id,name,mimeType,size),nextPageToken",
         pageSize: 1000,
         includeItemsFromAllDrives: true,
         supportsAllDrives: true,
@@ -476,14 +501,72 @@ app.post("/admin/ingest-drive", async (req, res) => {
       });
       (r.data.files || []).forEach((f) => {
         const mt = (f.mimeType || "").toLowerCase();
-        if (mt.includes("pdf")) files.push({ id: f.id, name: f.name });
+        if (mt.includes("pdf")) files.push({ id: f.id, name: f.name, size: f.size ? Number(f.size) : null });
+      });
+      pageToken = r.data.nextPageToken || null;
+    } while (pageToken);
+
+    res.json({ ok: true, count: files.length, files });
+  } catch (e) {
+    console.error("[/admin/ingest-list] error", e);
+    res.status(500).json({ ok: false, error: e?.message || String(e), stack: e?.stack });
+  }
+});
+
+// ---------- Admin: ingest ONE PDF (with optional maxPages) ----------
+app.post("/admin/ingest-one", async (req, res) => {
+  try {
+    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
+    const { clientId = "demo", fileId, maxPages } = req.body || {};
+    if (!fileId) return res.status(400).json({ error: "fileId required" });
+
+    const meta = await downloadDriveFileMeta(fileId);
+    const name = meta.name || "Untitled";
+    const size = meta.size ? Number(meta.size) : null;
+    console.log(`[ingest-one] ${name} (${fileId}) size=${size?.toLocaleString?.() || "?"} bytes`);
+
+    await ingestSingleDrivePdf({ clientId, fileId, fileName: name, maxPages: Number(maxPages) || Infinity });
+
+    res.json({ ok: true, clientId, fileId, fileName: name, maxPages: Number(maxPages) || null });
+  } catch (e) {
+    console.error("[/admin/ingest-one] error", e);
+    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+  }
+});
+
+// ---------- Admin: ingest ALL PDFs (unchanged, but relies on safer parser) ----------
+app.post("/admin/ingest-drive", async (req, res) => {
+  try {
+    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
+    const { clientId = "demo", maxPages } = req.body || {};
+    const files = [];
+    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+    let pageToken = null;
+
+    do {
+      const r = await drive.files.list({
+        q,
+        fields: "files(id,name,mimeType,size),nextPageToken",
+        pageSize: 1000,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        pageToken,
+      });
+      (r.data.files || []).forEach((f) => {
+        const mt = (f.mimeType || "").toLowerCase();
+        if (mt.includes("pdf")) files.push({ id: f.id, name: f.name, size: f.size ? Number(f.size) : null });
       });
       pageToken = r.data.nextPageToken || null;
     } while (pageToken);
 
     let ingested = 0;
     for (const f of files) {
-      await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name });
+      await ingestSingleDrivePdf({
+        clientId,
+        fileId: f.id,
+        fileName: f.name,
+        maxPages: Number(maxPages) || Infinity,
+      });
       ingested++;
       console.log(`[ingest] ${ingested}/${files.length} ${f.name}`);
     }
@@ -495,37 +578,11 @@ app.post("/admin/ingest-drive", async (req, res) => {
   }
 });
 
-// ---------- Extra: diagnose Drive quickly ----------
-app.post("/admin/diagnose-drive", async (req, res) => {
-  try {
-    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
-    const r = await drive.files.list({
-      q,
-      fields: "files(id,name,mimeType)",
-      pageSize: 5,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-    });
-    const pdfs = (r.data.files || [])
-      .filter((f) => (f.mimeType || "").toLowerCase().includes("pdf"))
-      .slice(0, 5);
-
-    const sizes = [];
-    for (const f of pdfs) {
-      const buf = await downloadDriveFileBuffer(f.id);
-      sizes.push({ id: f.id, name: f.name, bytes: buf.length });
-    }
-    res.json({ ok: true, sample: sizes });
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
-  }
-});
-
 // ---------- Bootstrapping Pinecone then start server ----------
 (async () => {
   try {
     await ensurePineconeIndex();
-    index = pinecone.index(PINECONE_INDEX); // ✅ v2 handle
+    index = pinecone.index(PINECONE_INDEX);
     console.log(`[pinecone] using index "${PINECONE_INDEX}"`);
   } catch (e) {
     console.error("[pinecone] failed to ensure index:", e);
