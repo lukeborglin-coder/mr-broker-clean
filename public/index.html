@@ -6,142 +6,120 @@
   <title>Cognitive Consulting — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    :root { --brand:#ef6c00; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
-    .page { max-width: 1100px; margin: 32px auto; padding: 0 16px; }
-    .header { display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px; }
-    .title { font-size: 28px; font-weight: 700; }
-    .logo-small { height: 28px; opacity:.9 }
-    .card { border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-top:14px; }
-    .card h3 { margin:0 0 6px 0; font-size:18px; }
-    .muted { color:#6b7280; }
-    .search { display:flex; gap:8px; align-items:center; }
-    .search input { flex:1; padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; outline:none; }
-    .search button { background:var(--brand); color:#fff; border:none; border-radius:10px; padding:10px 16px; cursor:pointer; font-weight:600; }
-    .visuals { display:grid; gap:10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin-top:8px; }
-    .visual { border:1px solid #e5e7eb; border-radius:10px; padding:8px; }
-    .visual img { width:100%; height:auto; border-radius:8px; display:block; }
-    .small { font-size:12px; color:#6b7280; }
+    .prose p { margin: 0 0 .75rem; }
+    .prose ul { margin: .5rem 0 .75rem 1.25rem; }
+    .prose li { margin: .25rem 0; }
+    .visuals { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .visual { border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: #fafafa; }
+    .visual iframe { width: 100%; height: 200px; border: 0; }
+    .visual .cap { font-size: 12px; padding: 6px 8px; color: #555; }
   </style>
 </head>
 <body>
   <div class="page">
+    <!-- Header -->
     <header class="header">
       <h1 class="title">Research Q&amp;A</h1>
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
     </header>
 
-    <section class="card">
-      <div class="search">
-        <input id="q" placeholder="Ask a question about your research…" />
-        <button id="ask">Ask</button>
-      </div>
-      <div id="status" class="small muted" style="margin-top:6px;"></div>
+    <!-- Search -->
+    <section class="search">
+      <input id="q" class="search-input" placeholder="What is the trending satisfaction for Evrysdi?" />
+      <button id="ask" class="button">Ask</button>
     </section>
 
+    <!-- Key findings -->
     <section class="card">
-      <h3>Key Findings</h3>
-      <div id="answer" class="muted">Ask a question to see findings.</div>
+      <h2>Key Findings</h2>
+      <div id="answer" class="prose">Ask a question to see findings…</div>
     </section>
 
+    <!-- Supporting Details -->
     <section class="card">
-      <h3>Supporting Details</h3>
-      <div id="visuals" class="visuals muted">No supporting visuals found.</div>
+      <h2>Supporting Details</h2>
+      <div id="visuals" class="visuals"><div class="muted">No supporting visuals yet.</div></div>
     </section>
 
+    <!-- References -->
     <section class="card">
-      <h3>References</h3>
-      <div id="refs" class="muted">No references detected.</div>
+      <h2>References</h2>
+      <ul id="refs"></ul>
     </section>
   </div>
 
   <script>
-    const API_BASE = window.location.origin; // same host (Render)
-    const CLIENT   = "genentech";            // namespace to search
+    const API = location.origin; // same host
 
-    const elQ      = document.getElementById("q");
-    const elAsk    = document.getElementById("ask");
-    const elStatus = document.getElementById("status");
-    const elAns    = document.getElementById("answer");
-    const elVis    = document.getElementById("visuals");
-    const elRefs   = document.getElementById("refs");
-
-    function t(x){ return (x ?? "").toString().trim(); }
-
-    function renderAnswer(s){
-      const txt = t(s);
-      elAns.textContent = txt || "No findings.";
-      elAns.classList.toggle("muted", !txt);
+    function mdBulletsToHtml(text) {
+      // very small "markdown-lite": turn lines starting with "- " into bullets
+      if (!text) return "";
+      // Split into paragraphs by blank line
+      const blocks = text.split(/\n{2,}/);
+      const htmlBlocks = blocks.map(b => {
+        const lines = b.split(/\n/);
+        const bulletLines = lines.filter(l => /^\s*-\s+/.test(l));
+        if (bulletLines.length >= 1 && bulletLines.length === lines.length) {
+          const lis = bulletLines.map(l => `<li>${l.replace(/^\s*-\s+/, "")}</li>`).join("");
+          return `<ul>${lis}</ul>`;
+        } else {
+          return `<p>${b}</p>`;
+        }
+      });
+      return htmlBlocks.join("");
     }
 
-    function renderVisuals(arr){
-      elVis.innerHTML = "";
-      if (!Array.isArray(arr) || arr.length === 0){
-        elVis.textContent = "No supporting visuals found.";
-        elVis.classList.add("muted");
+    function renderAnswer(answerText) {
+      const el = document.getElementById("answer");
+      el.innerHTML = mdBulletsToHtml(answerText || "No answer.");
+    }
+
+    function renderVisuals(visuals) {
+      const el = document.getElementById("visuals");
+      if (!visuals || visuals.length === 0) {
+        el.innerHTML = `<div class="muted">No supporting visuals found.</div>`;
         return;
       }
-      elVis.classList.remove("muted");
-      arr.forEach(v => {
-        const url = v?.imageUrl || v?.thumbUrl || v?.url;
-        const cap = v?.caption || v?.title || "";
-        const d = document.createElement("div");
-        d.className = "visual";
-        d.innerHTML = url
-          ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}"></a><div class="small">${t(cap)}</div>`
-          : `<div class="small">[image missing]</div>`;
-        elVis.appendChild(d);
-      });
+      el.innerHTML = visuals.map(v => `
+        <div class="visual">
+          <iframe src="${v.previewUrl}" loading="lazy"></iframe>
+          <div class="cap">${v.fileName} (p.${v.page})</div>
+        </div>
+      `).join("");
     }
 
-    function renderReferences(refs){
-      elRefs.innerHTML = "";
-      if (!Array.isArray(refs) || refs.length === 0){
-        elRefs.textContent = "No references detected.";
-        elRefs.classList.add("muted");
+    function renderRefs(refs) {
+      const el = document.getElementById("refs");
+      if (!refs || refs.length === 0) {
+        el.innerHTML = `<li class="muted">No references.</li>`;
         return;
       }
-      elRefs.classList.remove("muted");
-      refs.forEach(r => {
-        const name = r?.fileName || r?.title || r?.name || "Untitled";
-        const page = (r?.page != null) ? ` (p.${r.page})` : "";
-        const div = document.createElement("div");
-        div.textContent = `${name}${page}`;
-        elRefs.appendChild(div);
-      });
+      el.innerHTML = refs.map(r => `<li>${r.fileName} (p.${r.page || "?"})</li>`).join("");
     }
 
-    async function ask(){
-      const userQuery = t(elQ.value);
-      if (!userQuery) return;
-      elStatus.textContent = "Thinking…";
-      elAns.textContent = "";
-      elRefs.textContent = "Loading references…";
-      elVis.textContent = "Loading visuals…";
+    async function ask() {
+      const q = document.getElementById("q").value.trim();
+      if (!q) return;
+      document.getElementById("answer").textContent = "Thinking…";
+      document.getElementById("visuals").innerHTML = `<div class="muted">Looking for visuals…</div>`;
+      document.getElementById("refs").innerHTML = "";
 
-      try {
-        const res = await fetch(`${API_BASE}/search`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-auth-token": "" }, // token is checked on server; if set, add here
-          body: JSON.stringify({ clientId: CLIENT, userQuery, topK: 6 })
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        renderAnswer(data?.answer || "");
-        renderVisuals(data?.visuals || []);
-        renderReferences(data?.references || []);
-        elStatus.textContent = "";
-      } catch (e) {
-        console.error(e);
-        elStatus.textContent = "Error: " + (e.message || e);
-        renderAnswer("");
-        renderVisuals([]);
-        renderReferences([]);
-      }
+      const resp = await fetch(\`\${API}/search\`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-auth-token": "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=" // if your server expects it
+        },
+        body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 6 })
+      }).then(r => r.json());
+
+      renderAnswer(resp.answer);
+      renderVisuals(resp.visuals);
+      renderRefs(resp.references);
     }
 
-    elAsk.addEventListener("click", ask);
-    elQ.addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+    document.getElementById("ask").addEventListener("click", ask);
+    document.getElementById("q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
   </script>
 </body>
 </html>
