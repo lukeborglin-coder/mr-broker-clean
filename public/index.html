@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Cognitive Consulting — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
+  <style>
+    /* tiny extras so the grid looks nice even without styles.css updates */
+    .thumb-card { border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; background:#fff; }
+    .thumb-card a { display:block; text-decoration:none; color:inherit; }
+    .thumb-card img { width:100%; height:160px; object-fit:cover; background:#f3f4f6; display:block; }
+    .thumb-card .meta { padding:10px; font-size:14px; }
+    .thumb-card .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .thumb-card .muted { color:#6b7280; }
+  </style>
 </head>
 <body>
   <div class="page">
@@ -38,7 +47,7 @@
       <section class="card">
         <h2 class="section-title">Supporting Details</h2>
         <div id="supportingEmpty" class="muted">No supporting visuals found.</div>
-        <div id="supportingGrid" class="grid2" hidden></div>
+        <div id="supportingGrid" class="grid3" hidden></div>
       </section>
 
       <section class="card">
@@ -56,49 +65,181 @@
   </div>
 
   <script>
-    // Basic client-side JS to avoid [object Object] in references
-    async function askQuestion() {
-      const q = document.getElementById("q").value.trim();
-      if (!q) return;
+    // ------- CONFIG -------
+    const API_BASE = ''; // same origin on mr-broker.onrender.com
+    const AUTH_TOKEN = 'Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=';
+    const CLIENT_ID = 'demo'; // must match the clientId you used when ingesting
+    const TOKEN_QS = encodeURIComponent(AUTH_TOKEN); // for ?token=... on open GET routes
 
-      const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
-      const data = await res.json();
+    // ------- DOM helpers -------
+    const $ = (id) => document.getElementById(id);
+    const show = (node, on=true) => (node.hidden = !on);
 
-      // Key findings
-      const keyList = document.getElementById("keyFindings");
-      keyList.innerHTML = "";
-      if (data.keyFindings?.length) {
-        document.getElementById("keyFindingsEmpty").hidden = true;
-        keyList.hidden = false;
-        data.keyFindings.forEach(f => {
-          const li = document.createElement("li");
-          li.textContent = f;
-          keyList.appendChild(li);
-        });
+    // ------- API calls -------
+    async function runSearch(userQuery, topK=6) {
+      const resp = await fetch(`${API_BASE}/search`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-token': AUTH_TOKEN
+        },
+        body: JSON.stringify({ clientId: CLIENT_ID, userQuery, topK })
+      });
+      if (!resp.ok) throw new Error(`Search failed (${resp.status})`);
+      return resp.json();
+    }
+
+    // Pull likely visuals from Drive that match the question text
+    async function findVisuals(userQuery, limit=6) {
+      const url = `${API_BASE}/drive/search?q=${encodeURIComponent(userQuery)}&token=${TOKEN_QS}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      const files = Array.isArray(data.files) ? data.files : [];
+      return files.slice(0, limit).map(f => ({
+        id: f.id,
+        name: f.name,
+        mimeType: f.mimeType,
+        link: f.webViewLink,
+        thumb: f.thumbnailLink || f.iconLink
+      }));
+    }
+
+    // ------- Renderers -------
+    function renderAnswer(answer) {
+      const ul = $('keyFindings');
+      ul.innerHTML = '';
+      const text = (answer || '').trim();
+
+      if (!text) {
+        show($('keyFindingsEmpty'), true);
+        show(ul, false);
+        return;
       }
 
-      // References
-      const sourcesList = document.getElementById("sourcesList");
-      sourcesList.innerHTML = "";
-      if (data.sources?.length) {
-        document.getElementById("sourcesWrap").hidden = false;
-        data.sources.forEach(src => {
-          const li = document.createElement("li");
-          if (src.name && src.link) {
-            const a = document.createElement("a");
-            a.href = src.link;
-            a.textContent = src.name;
-            a.target = "_blank";
-            li.appendChild(a);
-          } else {
-            li.textContent = typeof src === "string" ? src : JSON.stringify(src);
-          }
-          sourcesList.appendChild(li);
-        });
+      const bullets = text
+        .replace(/\n+/g, ' ')
+        .split(/(?<=[.?!])\s+(?=[A-Z0-9])/)
+        .filter(Boolean)
+        .slice(0, 6);
+
+      bullets.forEach(t => {
+        const li = document.createElement('li');
+        li.textContent = t;
+        ul.appendChild(li);
+      });
+
+      show($('keyFindingsEmpty'), false);
+      show(ul, true);
+    }
+
+    function renderSources(sources) {
+      const wrap = $('sourcesWrap');
+      const list = $('sourcesList');
+      const refsEmpty = $('refsEmpty');
+      list.innerHTML = '';
+
+      const items = Array.isArray(sources) ? sources : [];
+      if (items.length === 0) {
+        show(refsEmpty, true);
+        show(wrap, false);
+        return;
+      }
+
+      items.forEach(s => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        const name = s.fileName || 'Untitled';
+        const study = s.study || 'N/A';
+        const date = s.date || 'n/a';
+        a.href = s.fileUrl || '#';
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = `${name} — ${study} (${date})`;
+        li.appendChild(a);
+        list.appendChild(li);
+      });
+
+      show(refsEmpty, false);
+      show(wrap, true);
+    }
+
+    function renderSupporting(cards) {
+      const grid = $('supportingGrid');
+      grid.innerHTML = '';
+      if (!cards || cards.length === 0) {
+        show($('supportingEmpty'), true);
+        show(grid, false);
+        return;
+      }
+
+      cards.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'thumb-card';
+        const a = document.createElement('a');
+        a.href = c.link || '#';
+        a.target = '_blank';
+        a.rel = 'noopener';
+
+        const img = document.createElement('img');
+        img.alt = c.name || 'file';
+        img.src = c.thumb || '/assets/placeholder.png';
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.title = c.name || '';
+        name.textContent = c.name || 'Untitled';
+        const mt = document.createElement('div');
+        mt.className = 'muted';
+        mt.textContent = (c.mimeType || '').replace('application/vnd.openxmlformats-officedocument.', 'MS ').replace('vnd.google-apps.', 'Google ');
+
+        meta.appendChild(name);
+        meta.appendChild(mt);
+        a.appendChild(img);
+        a.appendChild(meta);
+        div.appendChild(a);
+        grid.appendChild(div);
+      });
+
+      show($('supportingEmpty'), false);
+      show(grid, true);
+    }
+
+    // ------- Flow -------
+    async function onAsk() {
+      const q = $('q').value.trim();
+      if (!q) return;
+
+      // Reset state
+      $('keyFindings').innerHTML = '';
+      $('sourcesList').innerHTML = '';
+      $('supportingGrid').innerHTML = '';
+      $('keyFindingsEmpty').textContent = 'Thinking…';
+      show($('keyFindingsEmpty'), true);
+      show($('keyFindings'), false);
+      show($('sourcesWrap'), false);
+      show($('supportingEmpty'), true);
+      show($('supportingGrid'), false);
+
+      try {
+        // Run both in parallel
+        const [answerData, visuals] = await Promise.all([
+          runSearch(q),
+          findVisuals(q, 6)
+        ]);
+
+        renderAnswer(answerData.answer);
+        renderSources(answerData.sources);
+        renderSupporting(visuals);
+      } catch (err) {
+        $('keyFindingsEmpty').textContent = err.message || 'Something went wrong.';
       }
     }
 
-    document.getElementById("askBtn").addEventListener("click", askQuestion);
+    $('askBtn').addEventListener('click', onAsk);
+    $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') onAsk(); });
   </script>
 </body>
 </html>
