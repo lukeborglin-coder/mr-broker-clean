@@ -11,7 +11,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "dependencies": {
+"dependencies": {
   "express": "^4.19.2",
   "cors": "^2.8.5",
   "dotenv": "^16.4.5",
@@ -19,8 +19,10 @@
   "openai": "^4.30.0",
   "@pinecone-database/pinecone": "^2.2.1",
   "pdf-parse": "^1.1.1",
-  "puppeteer": "^22.7.1",
-  "pdf-lib": "^1.17.1"
+
+  "pdfjs-dist": "^4.5.136",
+  "canvas": "^2.11.2"
 }
 }
+
 
