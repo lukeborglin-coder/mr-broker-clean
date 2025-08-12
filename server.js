@@ -1,4 +1,5 @@
 // server.js — auto-creates Pinecone index; Drive filter; PDF ingest; clear debug
+// FIXED: Pinecone v2 usage (index() + namespace().query/upsert); better diagnostics
 
 import fs from "node:fs";
 import path from "node:path";
@@ -50,10 +51,11 @@ const drive = google.drive({ version: "v3", auth: gauth });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 
-// Ensure index exists (serverless)
+// Ensure index exists (serverless) — Pinecone v2
 async function ensurePineconeIndex() {
-  const indexes = await pinecone.listIndexes();
-  const exists = indexes.indexes?.some((i) => i.name === PINECONE_INDEX);
+  if (!PINECONE_API_KEY) throw new Error("PINECONE_API_KEY missing");
+  const list = await pinecone.listIndexes();
+  const exists = list.indexes?.some((i) => i.name === PINECONE_INDEX);
   if (exists) return;
 
   console.log(`[pinecone] creating index "${PINECONE_INDEX}" (dims=${EMBEDDING_DIMS}, region=${PINECONE_REGION})...`);
@@ -66,15 +68,15 @@ async function ensurePineconeIndex() {
 
   // wait until Ready
   for (let i = 0; i < 30; i++) {
-    const d = await pinecone.describeIndex(PINECONE_INDEX);
-    const ready = d.status?.ready;
+    const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
+    const ready = d?.status?.ready;
     console.log(`[pinecone] status: ${ready ? "Ready" : "NotReady"}`);
     if (ready) break;
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
 
-let index; // set after ensurePineconeIndex()
+let index; // v2 handle: pinecone.index(name)
 
 // ---------- Debug (no auth) ----------
 app.get("/debug/drive-env", (req, res) => {
@@ -106,7 +108,7 @@ app.get("/debug/pinecone", async (req, res) => {
     const desc = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
     let stats = null;
     try {
-      const idx = pinecone.Index(PINECONE_INDEX);
+      const idx = pinecone.index(PINECONE_INDEX);
       stats = await idx.describeIndexStats();
     } catch (e) {
       stats = { error: e.message };
@@ -152,6 +154,17 @@ app.get("/health", (req, res) => {
   });
 });
 
+// extra: quick redacted env peek
+app.get("/env", (req, res) => {
+  const redact = (v) => (v ? v.slice(0, 6) + "…" : "");
+  res.json({
+    hasAuthToken: Boolean(AUTH_TOKEN),
+    openaiKey: redact(OPENAI_API_KEY),
+    pineconeKey: redact(PINECONE_API_KEY),
+    pineconeIndex: PINECONE_INDEX
+  });
+});
+
 // ---------- Helpers ----------
 async function embedText(text) {
   const { data } = await openai.embeddings.create({
@@ -192,23 +205,19 @@ ${contextText}`;
 
 // ===== Drive → PDF → text → chunks → embeddings =====
 
-// Download a Drive file as a Buffer (arraybuffer is reliable on Render)
+// Download a Drive file as a Buffer
 async function downloadDriveFileBuffer(fileId) {
   const resp = await drive.files.get(
     { fileId, alt: "media" },
     { responseType: "arraybuffer" }
   );
-  if (!resp || !resp.data) {
-    throw new Error(`Drive returned no data for fileId=${fileId}`);
-  }
+  if (!resp || !resp.data) throw new Error(`Drive returned no data for fileId=${fileId}`);
   return Buffer.from(resp.data);
 }
 
-// PDF → pages array (form feed splits from pdf-parse)
+// PDF → pages
 async function parsePdfPages(buffer) {
-  if (!buffer || !buffer.length) {
-    throw new Error("parsePdfPages called without a PDF buffer");
-  }
+  if (!buffer || !buffer.length) throw new Error("parsePdfPages called without a PDF buffer");
   const pdfParse = (await import("pdf-parse")).default; // dynamic import
   const parsed = await pdfParse(buffer);
   const raw = parsed.text || "";
@@ -228,6 +237,7 @@ function chunkText(str, chunkSize = 2000, overlap = 200) {
 }
 
 // Upsert a set of chunks for one file (stores page + filename)
+// NOTE: Pinecone v2 — use namespace chaining
 async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   const vectors = [];
   for (let i = 0; i < chunks.length; i++) {
@@ -239,7 +249,9 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
       metadata: { clientId, fileId, fileName, page, text }
     });
   }
-  if (vectors.length) await index.upsert({ namespace: clientId, vectors });
+  if (vectors.length) {
+    await index.namespace(clientId).upsert({ vectors });
+  }
 }
 
 // Ingest ONE Drive PDF
@@ -316,19 +328,15 @@ app.post("/search", async (req, res) => {
       }
     }
 
-    let query;
-    try {
-      query = await index.query({
+    // Pinecone v2 query — use namespace chaining, pass only { vector, topK, includeMetadata, filter }
+    const query = await index
+      .namespace(clientId)
+      .query({
         vector,
-        topK,
+        topK: Number(topK) || 6,
         includeMetadata: true,
-        namespace: clientId,
         filter: pineconeFilter
       });
-    } catch (e) {
-      console.error("[/search] pinecone.query failed:", e);
-      return res.status(500).json({ error: "pinecone.query failed", detail: e.message });
-    }
 
     const matches = query.matches || [];
     const answer = await answerWithContext(userQuery, matches);
@@ -353,7 +361,7 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     const { clientId } = req.body || {};
     if (!clientId) return res.status(400).json({ error: "clientId required" });
 
-    await index.delete({ deleteAll: true, namespace: clientId });
+    await index.namespace(clientId).deleteAll();
     res.json({ ok: true, message: "Namespace purged. Re-ingest current Drive files to complete rebuild." });
   } catch (e) {
     console.error("[/admin/rebuild-from-drive] error", e);
@@ -404,7 +412,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
 (async () => {
   try {
     await ensurePineconeIndex();
-    index = pinecone.Index(PINECONE_INDEX);
+    index = pinecone.index(PINECONE_INDEX); // ✅ v2 handle
     console.log(`[pinecone] using index "${PINECONE_INDEX}"`);
   } catch (e) {
     console.error("[pinecone] failed to ensure index:", e);
