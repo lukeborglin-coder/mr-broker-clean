@@ -6,33 +6,36 @@
   <title>Cognitive Consulting — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    .prose p { margin: 0 0 .75rem; }
-    .prose ul { margin: .5rem 0 .75rem 1.25rem; }
-    .prose li { margin: .25rem 0; }
-    .visuals { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-    .visual { border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: #fafafa; }
-    .visual iframe { width: 100%; height: 200px; border: 0; }
-    .visual .cap { font-size: 12px; padding: 6px 8px; color: #555; }
+    /* tiny helpers only; keeps your existing styles.css in charge */
+    .prose p { margin: 0 0 .75rem }
+    .prose ul { margin: .5rem 0 .75rem 1.25rem }
+    .prose li { margin: .25rem 0 }
+    .muted { color:#7a7a7a }
+    .visuals { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px }
+    .visual { border:1px solid #eee; border-radius:8px; overflow:hidden; background:#fafafa }
+    .visual iframe { width:100%; height:200px; border:0 }
+    .visual .cap { font-size:12px; padding:6px 8px; color:#555 }
   </style>
 </head>
 <body>
   <div class="page">
+
     <!-- Header -->
     <header class="header">
       <h1 class="title">Research Q&amp;A</h1>
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
     </header>
 
-    <!-- Search -->
+    <!-- Search (restore original classes so your CSS styles the orange Ask button) -->
     <section class="search">
       <input id="q" class="search-input" placeholder="What is the trending satisfaction for Evrysdi?" />
-      <button id="ask" class="button">Ask</button>
+      <button id="ask" class="button ask" type="button">Ask</button>
     </section>
 
-    <!-- Key findings -->
+    <!-- Key Findings -->
     <section class="card">
       <h2>Key Findings</h2>
-      <div id="answer" class="prose">Ask a question to see findings…</div>
+      <div id="answer" class="prose muted">Ask a question to see findings…</div>
     </section>
 
     <!-- Supporting Details -->
@@ -49,29 +52,36 @@
   </div>
 
   <script>
-    const API = location.origin; // same host
+    // ===== CONFIG =====
+    const API_BASE = location.origin; // same host as server
+    const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw="; // required by your server
 
+    // ===== RENDER HELPERS =====
     function mdBulletsToHtml(text) {
-      // very small "markdown-lite": turn lines starting with "- " into bullets
       if (!text) return "";
-      // Split into paragraphs by blank line
+      // split into blocks by blank lines
       const blocks = text.split(/\n{2,}/);
-      const htmlBlocks = blocks.map(b => {
-        const lines = b.split(/\n/);
-        const bulletLines = lines.filter(l => /^\s*-\s+/.test(l));
-        if (bulletLines.length >= 1 && bulletLines.length === lines.length) {
-          const lis = bulletLines.map(l => `<li>${l.replace(/^\s*-\s+/, "")}</li>`).join("");
+      const htmlBlocks = blocks.map(block => {
+        const lines = block.split(/\n/);
+        const allBullets = lines.every(l => /^\s*-\s+/.test(l));
+        if (allBullets && lines.length) {
+          const lis = lines.map(l => `<li>${l.replace(/^\s*-\s+/, "")}</li>`).join("");
           return `<ul>${lis}</ul>`;
-        } else {
-          return `<p>${b}</p>`;
         }
+        return `<p>${block}</p>`;
       });
       return htmlBlocks.join("");
     }
 
     function renderAnswer(answerText) {
       const el = document.getElementById("answer");
-      el.innerHTML = mdBulletsToHtml(answerText || "No answer.");
+      if (!answerText) {
+        el.classList.add("muted");
+        el.textContent = "No findings.";
+        return;
+      }
+      el.classList.remove("muted");
+      el.innerHTML = mdBulletsToHtml(answerText);
     }
 
     function renderVisuals(visuals) {
@@ -83,7 +93,7 @@
       el.innerHTML = visuals.map(v => `
         <div class="visual">
           <iframe src="${v.previewUrl}" loading="lazy"></iframe>
-          <div class="cap">${v.fileName} (p.${v.page})</div>
+          <div class="cap">${v.fileName} (p.${v.page || "?"})</div>
         </div>
       `).join("");
     }
@@ -97,29 +107,54 @@
       el.innerHTML = refs.map(r => `<li>${r.fileName} (p.${r.page || "?"})</li>`).join("");
     }
 
-    async function ask() {
-      const q = document.getElementById("q").value.trim();
-      if (!q) return;
+    function showThinking() {
+      document.getElementById("answer").classList.add("muted");
       document.getElementById("answer").textContent = "Thinking…";
       document.getElementById("visuals").innerHTML = `<div class="muted">Looking for visuals…</div>`;
       document.getElementById("refs").innerHTML = "";
-
-      const resp = await fetch(\`\${API}/search\`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-auth-token": "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=" // if your server expects it
-        },
-        body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 6 })
-      }).then(r => r.json());
-
-      renderAnswer(resp.answer);
-      renderVisuals(resp.visuals);
-      renderRefs(resp.references);
     }
 
+    function showError(msg) {
+      document.getElementById("answer").classList.add("muted");
+      document.getElementById("answer").textContent = `Error: ${msg}`;
+      document.getElementById("visuals").innerHTML = `<div class="muted">No supporting visuals.</div>`;
+    }
+
+    // ===== SEARCH =====
+    async function ask() {
+      const q = document.getElementById("q").value.trim();
+      if (!q) return;
+      showThinking();
+      try {
+        const resp = await fetch(`${API_BASE}/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-auth-token": AUTH_TOKEN
+          },
+          body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 6 })
+        });
+
+        // surface non-200s
+        if (!resp.ok) {
+          const t = await resp.text().catch(() => "");
+          throw new Error(`${resp.status} ${resp.statusText} ${t}`);
+        }
+        const data = await resp.json();
+        renderAnswer(data.answer);
+        renderVisuals(data.visuals);
+        renderRefs(data.references);
+      } catch (e) {
+        console.error("search error:", e);
+        showError(e.message || e);
+      }
+    }
+
+    // Wire up events
     document.getElementById("ask").addEventListener("click", ask);
-    document.getElementById("q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+    document.getElementById("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") ask();
+    });
   </script>
 </body>
 </html>
