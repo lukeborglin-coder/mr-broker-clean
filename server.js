@@ -360,6 +360,77 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
+// ===== Drive → PDF → text → chunks → embeddings =====
+
+// Download a Drive file to a Buffer (binary)
+async function downloadDriveFileBuffer(fileId) {
+  const { data } = await drive.files.get(
+    { fileId, alt: "media" },
+    { responseType: "stream" }
+  );
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    data.on("data", (d) => chunks.push(d));
+    data.on("end", resolve);
+    data.on("error", reject);
+  });
+  return Buffer.concat(chunks);
+}
+
+// Parse PDF text (page breaks via \f from pdf-parse)
+async function parsePdfPages(buffer) {
+  const pdfParse = (await import("pdf-parse")).default; // dynamic import
+  const parsed = await pdfParse(buffer);
+  const raw = parsed.text || "";
+  const pages = raw.split("\f");
+  return pages.map(p => p.trim()).filter(Boolean);
+}
+
+// Simple text chunker with overlap
+function chunkText(str, chunkSize = 2000, overlap = 200) {
+  const chunks = [];
+  let i = 0;
+  while (i < str.length) {
+    chunks.push(str.slice(i, i + chunkSize));
+    i += Math.max(1, chunkSize - overlap);
+  }
+  return chunks;
+}
+
+// Upsert a set of chunks for one file (stores page + filename)
+async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
+  const vectors = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const text = chunks[i];
+    const values = await embedText(text); // uses text-embedding-3-small in your file
+    vectors.push({
+      id: `${fileId}_${page ?? 0}_${i}_${Date.now()}`,
+      values,
+      metadata: {
+        clientId,
+        fileId,
+        fileName,
+        page,
+        text
+      }
+    });
+  }
+  if (vectors.length) {
+    await index.upsert({ namespace: clientId, vectors });
+  }
+}
+
+// Main: ingest ONE Drive PDF (called by your route)
+async function ingestSingleDrivePdf({ clientId, fileId, fileName }) {
+  const buf = await downloadDriveFileBuffer(fileId);
+  const pages = await parsePdfPages(buf);
+  for (let p = 0; p < pages.length; p++) {
+    const pageText = pages[p];
+    if (!pageText) continue;
+    const chunks = chunkText(pageText, 2000, 200);
+    await upsertChunks({ clientId, fileId, fileName, chunks, page: p + 1 });
+  }
+}
 
 // ---------- Admin (ingest all PDFs from Drive folder) ----------
 app.post("/admin/ingest-drive", async (req, res) => {
@@ -414,3 +485,4 @@ app.post("/admin/ingest-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
+
