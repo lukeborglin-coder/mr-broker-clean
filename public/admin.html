@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin • Ingest PDFs</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 780px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 22px; margin-bottom: 12px; }
+    .card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin:16px 0; }
+    label { display:block; margin:8px 0 4px; font-weight:600; }
+    input { width:100%; padding:10px; border:1px solid #e5e7eb; border-radius:10px; }
+    button { margin-top:12px; padding:10px 14px; border:0; border-radius:10px; background:#ef6c00; color:#fff; font-weight:700; cursor:pointer; }
+    .row { display:flex; gap:10px; align-items:center; }
+    .row > * { flex:1; }
+    .muted { color:#6b7280; }
+    pre { background:#0b1020; color:#e6edf3; padding:12px; border-radius:10px; overflow:auto; max-height:360px; }
+    small { color:#6b7280; }
+  </style>
+</head>
+<body>
+  <h1>Admin • Ingest PDFs into Pinecone</h1>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Client ID (namespace)</label>
+        <input id="clientId" value="genentech" />
+      </div>
+      <div>
+        <label>Auth Token (if required)</label>
+        <input id="token" placeholder="leave blank if AUTH_TOKEN is not set" />
+      </div>
+    </div>
+    <button id="ingest">Ingest PDFs from Google Drive</button>
+    <button id="purge" style="background:#b91c1c">Purge Namespace (danger)</button>
+    <div class="muted"><small>
+      “Ingest” will read all PDFs currently in your configured Drive folder and load them for search.<br>
+      “Purge” will clear all vectors in this clientId (use before re-ingesting for a clean reset).
+    </small></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="listDrive" style="background:#334155">Check Drive Files</button>
+      <button id="pinecone" style="background:#334155">Check Pinecone Stats</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Status / Output</label>
+    <pre id="out">Ready.</pre>
+  </div>
+
+  <script>
+    const base = window.location.origin;
+    const $ = (id) => document.getElementById(id);
+    const out = $("out");
+
+    function headers() {
+      const h = { "Content-Type": "application/json" };
+      const tok = $("token").value.trim();
+      if (tok) h["x-auth-token"] = tok;
+      return h;
+    }
+
+    function log(obj) {
+      try { out.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
+      catch { out.textContent = String(obj); }
+    }
+
+    $("ingest").onclick = async () => {
+      log("Starting ingest…");
+      const clientId = $("clientId").value.trim() || "demo";
+      try {
+        const res = await fetch(`${base}/admin/ingest-drive`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({ clientId })
+        });
+        const json = await res.json();
+        log(json);
+      } catch (e) {
+        log(e?.message || e);
+      }
+    };
+
+    $("purge").onclick = async () => {
+      if (!confirm("This will delete all vectors in this namespace. Continue?")) return;
+      const clientId = $("clientId").value.trim() || "demo";
+      log("Purging…");
+      try {
+        const res = await fetch(`${base}/admin/rebuild-from-drive`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({ clientId })
+        });
+        const json = await res.json();
+        log(json);
+      } catch (e) {
+        log(e?.message || e);
+      }
+    };
+
+    $("listDrive").onclick = async () => {
+      log("Listing Drive folder…");
+      const res = await fetch(`${base}/debug/drive-list`);
+      const json = await res.json();
+      log(json);
+    };
+
+    $("pinecone").onclick = async () => {
+      log("Checking Pinecone…");
+      const res = await fetch(`${base}/debug/pinecone`);
+      const json = await res.json();
+      log(json);
+    };
+  </script>
+</body>
+</html>
