@@ -55,129 +55,50 @@
     </div>
   </div>
 
-  <!-- Inline app script -->
   <script>
-    // ------- CONFIG -------
-    const API_BASE = ''; // same origin on mr-broker.onrender.com
-    const AUTH_TOKEN = 'Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=';
-    const CLIENT_ID = 'demo'; // must match what you used during ingest
-
-    // ------- DOM helpers -------
-    const el = id => document.getElementById(id);
-    const show = (node, on=true) => node.hidden = !on;
-    const setText = (node, text) => node.textContent = text;
-
-    // ------- API -------
-    async function runSearch(userQuery, topK=6) {
-      const resp = await fetch(`${API_BASE}/search`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-auth-token': AUTH_TOKEN
-        },
-        body: JSON.stringify({ clientId: CLIENT_ID, userQuery, topK })
-      });
-      if (!resp.ok) {
-        const t = await resp.text().catch(()=> '');
-        throw new Error(`Search failed (${resp.status}): ${t || resp.statusText}`);
-      }
-      return resp.json();
-    }
-
-    // ------- Renderers -------
-    function renderAnswer(answer) {
-      const ul = el('keyFindings');
-      ul.innerHTML = '';
-
-      const text = (answer || '').trim();
-      if (!text) {
-        show(el('keyFindingsEmpty'), true);
-        show(ul, false);
-        return;
-      }
-
-      // Split into sentences for bullets (basic, but does the job)
-      const points = text
-        .replace(/\n+/g, ' ')
-        .split(/(?<=[.?!])\s+(?=[A-Z0-9])/)
-        .filter(Boolean)
-        .slice(0, 6);
-
-      points.forEach(p => {
-        const li = document.createElement('li');
-        li.textContent = p;
-        ul.appendChild(li);
-      });
-
-      show(el('keyFindingsEmpty'), false);
-      show(ul, true);
-    }
-
-    function renderSources(sources) {
-      const wrap = el('sourcesWrap');
-      const list = el('sourcesList');
-      const refsEmpty = el('refsEmpty');
-
-      list.innerHTML = '';
-
-      const items = Array.isArray(sources) ? sources : [];
-      if (items.length === 0) {
-        show(refsEmpty, true);
-        show(wrap, false);
-        return;
-      }
-
-      items.forEach(s => {
-        const li = document.createElement('li');
-        const a = document.createElement('a');
-        const name = s.fileName || 'Untitled';
-        const study = s.study || 'N/A';
-        const date = s.date || 'n/a';
-        a.href = s.fileUrl || '#';
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.textContent = `${name} — ${study} (${date})`;
-        li.appendChild(a);
-        list.appendChild(li);
-      });
-
-      show(refsEmpty, false);
-      show(wrap, true);
-    }
-
-    function clearSupporting() {
-      // Placeholder (wire up charts/thumbnails later)
-      show(el('supportingEmpty'), true);
-      show(el('supportingGrid'), false);
-      el('supportingGrid').innerHTML = '';
-    }
-
-    // ------- Events -------
-    async function onAsk() {
-      const q = el('q').value.trim();
+    // Basic client-side JS to avoid [object Object] in references
+    async function askQuestion() {
+      const q = document.getElementById("q").value.trim();
       if (!q) return;
-      setText(el('keyFindingsEmpty'), 'Thinking…');
-      show(el('keyFindingsEmpty'), true);
-      show(el('keyFindings'), false);
-      clearSupporting();
-      show(el('sourcesWrap'), false);
 
-      try {
-        const data = await runSearch(q);
-        renderAnswer(data.answer);
-        renderSources(data.sources);
-      } catch (err) {
-        setText(el('keyFindingsEmpty'), err.message || 'Something went wrong.');
-        show(el('keyFindingsEmpty'), true);
-        show(el('keyFindings'), false);
-        show(el('sourcesWrap'), false);
+      const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+
+      // Key findings
+      const keyList = document.getElementById("keyFindings");
+      keyList.innerHTML = "";
+      if (data.keyFindings?.length) {
+        document.getElementById("keyFindingsEmpty").hidden = true;
+        keyList.hidden = false;
+        data.keyFindings.forEach(f => {
+          const li = document.createElement("li");
+          li.textContent = f;
+          keyList.appendChild(li);
+        });
+      }
+
+      // References
+      const sourcesList = document.getElementById("sourcesList");
+      sourcesList.innerHTML = "";
+      if (data.sources?.length) {
+        document.getElementById("sourcesWrap").hidden = false;
+        data.sources.forEach(src => {
+          const li = document.createElement("li");
+          if (src.name && src.link) {
+            const a = document.createElement("a");
+            a.href = src.link;
+            a.textContent = src.name;
+            a.target = "_blank";
+            li.appendChild(a);
+          } else {
+            li.textContent = typeof src === "string" ? src : JSON.stringify(src);
+          }
+          sourcesList.appendChild(li);
+        });
       }
     }
 
-    el('askBtn').addEventListener('click', onAsk);
-    el('q').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') onAsk();
-    });
+    document.getElementById("askBtn").addEventListener("click", askQuestion);
   </script>
 </body>
 </html>
