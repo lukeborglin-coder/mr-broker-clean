@@ -58,133 +58,112 @@
     </section>
   </div>
 
-  <script>
-    const API_BASE = "https://mr-broker.onrender.com";
-    const AUTH     = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
-    const CLIENT   = "genentech";
+ <script>
+  // --- config ---
+  const API_BASE = "https://mr-broker.onrender.com";
+  const AUTH     = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
+  const CLIENT   = "genentech";
 
-    const elQ      = document.getElementById("q");
-    const elAsk    = document.getElementById("ask");
-    const elStatus = document.getElementById("status");
-    const elAns    = document.getElementById("answer");
-    const elVis    = document.getElementById("visuals");
-    const elRefs   = document.getElementById("refs");
-    const elSrcs   = document.getElementById("sources");
+  // --- elements (these IDs must exist in your HTML) ---
+  const elQ    = document.getElementById("q");
+  const elAsk  = document.getElementById("ask");
+  const elAns  = document.getElementById("answer");
+  const elVis  = document.getElementById("visuals");
+  const elRefs = document.getElementById("refs");
 
-    function safeText(s) { return (s ?? "").toString().trim(); }
+  // --- helpers ---
+  const t = (x) => (x ?? "").toString().trim();
 
-    function refDisplay(ref) {
-      // Try common fields coming from the backend
-      const title = ref?.title || ref?.name || ref?.fileName || ref?.docTitle || "Untitled";
-      const url   = ref?.url   || ref?.link || ref?.fileUrl || "#";
-      const where = ref?.page != null ? ` (p.${ref.page})` :
-                   ref?.slide != null ? ` (slide ${ref.slide})` : "";
-      return { title: safeText(title) + where, url };
+  function renderAnswer(answerText) {
+    const txt = t(answerText);
+    elAns.textContent = txt || "No findings.";
+    elAns.classList.toggle("muted", !txt);
+  }
+
+  function renderVisuals(visuals) {
+    elVis.innerHTML = "";
+    if (!Array.isArray(visuals) || visuals.length === 0) {
+      elVis.textContent = "No supporting visuals found.";
+      elVis.classList.add("muted");
+      return;
     }
+    elVis.classList.remove("muted");
+    visuals.forEach(v => {
+      const url = v?.imageUrl || v?.thumbUrl || v?.url;
+      const cap = v?.caption || v?.title || "";
+      const wrap = document.createElement("div");
+      wrap.style.marginBottom = "8px";
+      wrap.innerHTML = url
+        ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="max-width:100%;border-radius:8px"></a>
+           <div class="small">${t(cap)}</div>`
+        : `<div class="small">[image missing]</div>`;
+      elVis.appendChild(wrap);
+    });
+  }
 
-    function showAnswer(text) {
-      const t = safeText(text);
-      elAns.classList.remove("muted");
-      elAns.textContent = t || "No findings.";
-      if (!t) elAns.classList.add("muted");
+  function renderReferences(refs) {
+    elRefs.innerHTML = "";
+    if (!Array.isArray(refs) || refs.length === 0) {
+      elRefs.textContent = "No references detected.";
+      elRefs.classList.add("muted");
+      return;
     }
+    elRefs.classList.remove("muted");
 
-    function showVisuals(visuals) {
-      elVis.innerHTML = "";
-      if (!Array.isArray(visuals) || visuals.length === 0) {
-        elVis.textContent = "No supporting visuals found.";
-        elVis.classList.add("muted");
-        return;
+    refs.forEach(ref => {
+      const title = t(ref?.title || ref?.name || ref?.fileName || "Untitled");
+      const url   = ref?.url || ref?.link || ref?.fileUrl || "#";
+      const page  = ref?.page != null ? ` (p.${ref.page})`
+                 : ref?.slide != null ? ` (slide ${ref.slide})` : "";
+      const row   = document.createElement("div");
+      if (url && url !== "#") {
+        row.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${title}${page}</a>`;
+      } else {
+        row.textContent = `${title}${page}`;
       }
-      elVis.classList.remove("muted");
-      visuals.forEach(v => {
-        const url = v?.imageUrl || v?.thumbUrl || v?.url;
-        const cap = v?.caption || v?.title || "";
-        const div = document.createElement("div");
-        div.className = "visual";
-        if (url) {
-          div.innerHTML = `<a href="${url}" target="_blank" rel="noopener">
-              <img src="${url}" alt="">
-            </a>
-            <div class="small">${cap ? safeText(cap) : ""}</div>`;
-        } else {
-          div.innerHTML = `<div class="small">[image missing]</div>`;
-        }
-        elVis.appendChild(div);
+      elRefs.appendChild(row);
+    });
+  }
+
+  async function askQuestion() {
+    const userQuery = t(elQ.value);
+    if (!userQuery) return;
+
+    // optimistic placeholders
+    elAns.textContent = "Thinking…";
+    elAns.classList.remove("muted");
+    elVis.textContent = "Loading visuals…";
+    elRefs.textContent = "Loading references…";
+
+    try {
+      const res = await fetch(`${API_BASE}/search`, {
+        method: "POST",
+        headers: {
+          "x-auth-token": AUTH,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ clientId: CLIENT, userQuery, topK: 6 })
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      renderAnswer(data?.answer || data?.summary || "");
+      renderVisuals(data?.visuals || data?.charts || []);
+      renderReferences(data?.references || data?.refs || data?.sources || []);
+    } catch (e) {
+      console.error(e);
+      elAns.textContent  = "Something went wrong.";
+      elVis.textContent  = "No supporting visuals found.";
+      elRefs.textContent = "No references detected.";
+      elAns.classList.add("muted");
+      elVis.classList.add("muted");
+      elRefs.classList.add("muted");
     }
+  }
 
-    function showRefs(refs) {
-      elRefs.innerHTML = "";
-      elSrcs.innerHTML = "";
-      if (!Array.isArray(refs) || refs.length === 0) {
-        elRefs.textContent = "No references detected.";
-        elRefs.classList.add("muted");
-        return;
-      }
-      elRefs.classList.remove("muted");
+  elAsk.addEventListener("click", askQuestion);
+  elQ.addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
+</script>
 
-      refs.forEach(ref => {
-        const { title, url } = refDisplay(ref);
-        const p = document.createElement("div");
-        p.className = "ref";
-        if (url && url !== "#") {
-          p.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${title}</a>`;
-        } else {
-          p.textContent = title;
-        }
-        elRefs.appendChild(p);
-      });
-
-      // Optional: show a bullet list of raw source items if provided
-      // e.g., data.sources which may be strings or objects
-    }
-
-    async function askQuestion() {
-      const userQuery = elQ.value.trim();
-      if (!userQuery) return;
-      elStatus.textContent = "Thinking…";
-      elStatus.classList.remove("muted");
-      elAns.textContent = "";
-      elVis.textContent = "Loading visuals…";
-      elRefs.textContent = "Loading references…";
-
-      try {
-        const res = await fetch(`${API_BASE}/search`, {
-          method: "POST",
-          headers: {
-            "x-auth-token": AUTH,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ clientId: CLIENT, userQuery, topK: 6 })
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-
-        // Display
-        showAnswer(data?.answer || data?.summary || "");
-        showVisuals(data?.visuals || data?.charts || []);
-        showRefs(data?.references || data?.refs || data?.sources || []);
-
-        elStatus.textContent = "";
-      } catch (err) {
-        console.error(err);
-        elStatus.textContent = "Error: " + (err.message || err);
-        elAns.textContent = "Something went wrong.";
-        elVis.textContent = "No supporting visuals found.";
-        elRefs.textContent = "No references detected.";
-        elAns.classList.add("muted");
-        elVis.classList.add("muted");
-        elRefs.classList.add("muted");
-      }
-    }
-
-    elAsk.addEventListener("click", askQuestion);
-    elQ.addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
-
-    // Optional: preload a sample question
-    // askQuestion();
-  </script>
 </body>
 </html>
