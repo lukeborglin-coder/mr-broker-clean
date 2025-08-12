@@ -1,5 +1,6 @@
 // server.js — Pinecone v2 + Drive PDF ingest (guarded) + diagnostics
-// Fixes: import pdf-parse from internal path to avoid demo file fallback
+// Adds /drive/debug and /drive/files/flat
+// Accepts GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CREDENTIALS_JSON
 
 import fs from "node:fs";
 import path from "node:path";
@@ -19,7 +20,6 @@ const PORT = process.env.PORT || 3000;
 // 🔧 REQUIRED ENV
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
-const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 
@@ -39,11 +39,19 @@ app.use(cors());
 app.use(express.static("public"));
 
 // ---------- Google Drive ----------
-if (!GOOGLE_APPLICATION_CREDENTIALS || !fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS)) {
-  console.warn("[warn] GOOGLE_APPLICATION_CREDENTIALS missing or not found:", GOOGLE_APPLICATION_CREDENTIALS);
+function getCredsPath() {
+  // Prefer GOOGLE_APPLICATION_CREDENTIALS; fall back to GOOGLE_CREDENTIALS_JSON
+  const p =
+    (process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim() ||
+    (process.env.GOOGLE_CREDENTIALS_JSON || "").trim();
+  return p;
+}
+const CREDS_PATH = getCredsPath();
+if (!CREDS_PATH || !fs.existsSync(CREDS_PATH)) {
+  console.warn("[warn] Google credentials file not found:", CREDS_PATH || "(empty)");
 }
 const gauth = new google.auth.GoogleAuth({
-  keyFile: GOOGLE_APPLICATION_CREDENTIALS,
+  keyFile: CREDS_PATH,
   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
 });
 const drive = google.drive({ version: "v3", auth: gauth });
@@ -82,8 +90,10 @@ let index; // v2 handle: pinecone.index(name)
 app.get("/debug/drive-env", (req, res) => {
   res.json({
     DRIVE_ROOT_FOLDER_ID,
-    GOOGLE_APPLICATION_CREDENTIALS,
-    credsFileExists: !!(GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS)),
+    GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS || null,
+    GOOGLE_CREDENTIALS_JSON: process.env.GOOGLE_CREDENTIALS_JSON || null,
+    credsFilePath: CREDS_PATH || null,
+    credsFileExists: !!(CREDS_PATH && fs.existsSync(CREDS_PATH)),
   });
 });
 
@@ -138,7 +148,7 @@ app.get("/debug/whoami", (req, res) => {
   }
 });
 
-// ---------- Auth middleware ----------
+// ---------- Auth middleware (guards routes below) ----------
 app.use((req, res, next) => {
   const expected = AUTH_TOKEN;
   if (!expected) return next();
@@ -147,14 +157,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- Diagnostics ----------
+// ---------- Diagnostics (guarded) ----------
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
     env: {
       auth: Boolean(AUTH_TOKEN),
       driveRoot: Boolean(DRIVE_ROOT_FOLDER_ID),
-      googleCreds: Boolean(GOOGLE_APPLICATION_CREDENTIALS),
+      googleCreds: Boolean(CREDS_PATH),
       openai: Boolean(OPENAI_API_KEY),
       pinecone: Boolean(PINECONE_API_KEY),
       index: PINECONE_INDEX,
@@ -172,6 +182,67 @@ app.get("/env", (req, res) => {
     pineconeKey: redact(PINECONE_API_KEY),
     pineconeIndex: PINECONE_INDEX,
   });
+});
+
+// ---------- NEW: Drive diagnostics (guarded) ----------
+app.get("/drive/debug", async (req, res) => {
+  try {
+    res.json({
+      driveRootId: DRIVE_ROOT_FOLDER_ID || null,
+      credsPath: CREDS_PATH || null,
+      credsExists: !!(CREDS_PATH && fs.existsSync(CREDS_PATH)),
+      authTokenConfigured: Boolean(AUTH_TOKEN),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+// ---------- NEW: List files (flat) under DRIVE_ROOT_FOLDER_ID (guarded) ----------
+app.get("/drive/files/flat", async (req, res) => {
+  try {
+    const folderId = DRIVE_ROOT_FOLDER_ID;
+    if (!folderId) {
+      return res.status(400).json({ error: "DRIVE_ROOT_FOLDER_ID is not set in the environment." });
+    }
+
+    const files = [];
+    const q = `'${folderId}' in parents and trashed = false`;
+    let pageToken = undefined;
+
+    do {
+      const resp = await drive.files.list({
+        q,
+        fields: "nextPageToken, files(id,name,mimeType,size,modifiedTime,webViewLink,iconLink)",
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: "allDrives",
+        pageSize: 1000,
+        pageToken,
+      });
+
+      (resp.data.files || []).forEach((f) =>
+        files.push({
+          id: f.id,
+          name: f.name,
+          mimeType: f.mimeType,
+          size: f.size ? Number(f.size) : null,
+          modifiedTime: f.modifiedTime,
+          webViewLink: f.webViewLink,
+          iconLink: f.iconLink,
+        })
+      );
+
+      pageToken = resp.data.nextPageToken || undefined;
+    } while (pageToken);
+
+    res.json({ folderId, count: files.length, files });
+  } catch (e) {
+    res.status(500).json({
+      error: "Failed to list Drive files (flat)",
+      detail: e?.response?.data || e?.message || String(e),
+    });
+  }
 });
 
 // ---------- Helpers ----------
@@ -216,10 +287,7 @@ ${contextText}`;
 
 // Download a Drive file as a Buffer (STRICT: throw if empty)
 async function downloadDriveFileBuffer(fileId) {
-  const resp = await drive.files.get(
-    { fileId, alt: "media" },
-    { responseType: "arraybuffer" }
-  );
+  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
   if (!resp || !resp.data) {
     throw new Error(`Drive returned no data for fileId=${fileId}`);
   }
@@ -235,11 +303,9 @@ async function parsePdfPages(buffer) {
   if (!buffer || !buffer.length) {
     throw new Error("parsePdfPages called without a PDF buffer");
   }
-
   // IMPORTANT: load the actual parser function, not the package entry
   const mod = await import("pdf-parse/lib/pdf-parse.js");
-  const pdfParse = mod.default || mod; // support both ESM/CJS default shapes
-
+  const pdfParse = mod.default || mod; // support both ESM/CJS shapes
   const parsed = await pdfParse(buffer);
   const raw = parsed.text || "";
   const pages = raw.split("\f");
@@ -322,7 +388,7 @@ async function listDriveFileIds() {
   return ids;
 }
 
-// ---------- SEARCH ----------
+// ---------- SEARCH (guarded) ----------
 app.post("/search", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
@@ -351,7 +417,7 @@ app.post("/search", async (req, res) => {
       }
     }
 
-    // Pinecone v2 query — namespace chaining; only { vector, topK, includeMetadata, filter }
+    // Pinecone v2 query — namespace chaining
     const query = await index.namespace(clientId).query({
       vector,
       topK: Number(topK) || 6,
@@ -440,7 +506,9 @@ app.post("/admin/diagnose-drive", async (req, res) => {
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
     });
-    const pdfs = (r.data.files || []).filter(f => (f.mimeType || "").toLowerCase().includes("pdf")).slice(0, 5);
+    const pdfs = (r.data.files || [])
+      .filter((f) => (f.mimeType || "").toLowerCase().includes("pdf"))
+      .slice(0, 5);
 
     const sizes = [];
     for (const f of pdfs) {
@@ -467,4 +535,3 @@ app.post("/admin/diagnose-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
-
