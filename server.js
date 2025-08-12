@@ -534,11 +534,27 @@ app.post("/admin/ingest-one", async (req, res) => {
   }
 });
 
-// ---------- Admin: ingest ALL PDFs (unchanged, but relies on safer parser) ----------
+// ---------- Admin: ingest ALL PDFs with live progress (SSE, no page limit) ----------
 app.post("/admin/ingest-drive", async (req, res) => {
+  // SSE headers so you see progress as it happens
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering (helpful on some hosts)
+  res.flushHeaders?.();
+
+  const write = (obj) => {
+    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
+  };
+
   try {
-    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-    const { clientId = "demo", maxPages } = req.body || {};
+    if (!index) {
+      write({ level: "error", msg: "Pinecone index not ready yet" });
+      return res.end();
+    }
+
+    write({ level: "info", msg: "Listing PDFs in Drive folder…" });
+
     const files = [];
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
     let pageToken = null;
@@ -559,22 +575,37 @@ app.post("/admin/ingest-drive", async (req, res) => {
       pageToken = r.data.nextPageToken || null;
     } while (pageToken);
 
-    let ingested = 0;
-    for (const f of files) {
-      await ingestSingleDrivePdf({
-        clientId,
-        fileId: f.id,
-        fileName: f.name,
-        maxPages: Number(maxPages) || Infinity,
-      });
-      ingested++;
-      console.log(`[ingest] ${ingested}/${files.length} ${f.name}`);
+    if (!files.length) {
+      write({ level: "warn", msg: "No PDFs found in the Drive folder." });
+      return res.end();
     }
 
-    res.json({ ok: true, clientId, files: files.length, message: "Ingest complete." });
+    write({ level: "info", msg: `Found ${files.length} PDF(s). Starting ingest…` });
+
+    let done = 0;
+    for (const f of files) {
+      try {
+        write({ level: "info", fileId: f.id, fileName: f.name, msg: "Downloading…" });
+        const meta = await downloadDriveFileMeta(f.id);
+        const size = meta.size ? Number(meta.size) : null;
+
+        write({ level: "info", fileId: f.id, fileName: f.name, size, msg: "Parsing + embedding…" });
+        // Ingest ALL pages (no page limit)
+        await ingestSingleDrivePdf({ clientId: (req.body?.clientId || "demo"), fileId: f.id, fileName: f.name });
+
+        done++;
+        write({ level: "success", fileId: f.id, fileName: f.name, done, total: files.length, msg: "Ingested" });
+      } catch (e) {
+        write({ level: "error", fileId: f.id, fileName: f.name, msg: e?.message || String(e) });
+      }
+    }
+
+    write({ level: "info", msg: "All files processed." });
   } catch (e) {
-    console.error("[/admin/ingest-drive] error", e);
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+    write({ level: "error", msg: e?.message || String(e) });
+  } finally {
+    // small delay to flush tail and then close
+    setTimeout(() => { try { res.end(); } catch {} }, 250);
   }
 });
 
@@ -592,3 +623,4 @@ app.post("/admin/ingest-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
+
