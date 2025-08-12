@@ -26,6 +26,31 @@ app.use(express.json({ limit: "15mb" }));
 app.use(cors());
 app.use(express.static("public"));
 
+// Place BEFORE the auth middleware
+app.get("/debug/drive-env", (req, res) => {
+  res.json({
+    DRIVE_ROOT_FOLDER_ID: process.env.DRIVE_ROOT_FOLDER_ID,
+    GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+    credsFileExists: !!(process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS))
+  });
+});
+
+app.get("/debug/drive-list", async (req, res) => {
+  try {
+    const q = `'${process.env.DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+    const r = await drive.files.list({
+      q,
+      fields: "files(id,name,mimeType),nextPageToken",
+      pageSize: 10,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true
+    });
+    res.json({ count: (r.data.files || []).length, sample: r.data.files || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // 🔹 Auth middleware — place right here
 app.use((req, res, next) => {
   const expected = (process.env.AUTH_TOKEN || "").trim();
@@ -155,37 +180,42 @@ app.post("/search", async (req, res) => {
     if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
-    const liveIds = await listDriveFileIds();
-    const allowList = [...liveIds]; // Pinecone filter wants an array
+
+    let allowList = [];
+    try {
+      const liveIds = await listDriveFileIds();
+      allowList = [...liveIds];
+    } catch (e) {
+      console.error("[search] listDriveFileIds failed:", e);
+      // Option A (strict): return a clear error
+      return res.status(503).json({ error: "Drive check failed. Verify credentials and folder ID.", detail: e.message });
+      // Option B (temp): comment the line above and fall back with no filter while you fix Drive.
+      // allowList = []; // and omit the filter below to keep the query working for now
+    }
 
     const query = await index.query({
       vector,
       topK,
       includeMetadata: true,
       namespace: clientId,
-      filter: allowList.length ? { fileId: { $in: allowList } } : undefined
+      filter: allowList.length ? { fileId: { $in: allowList } } : { fileId: { $in: ["__none__"] } } // return nothing if no live ids
     });
 
     const matches = query.matches || [];
-
     const answer = await answerWithContext(userQuery, matches);
-
-    // plain-text references (no links)
     const references = matches.map(m => ({
       fileId: m.metadata?.fileId,
       fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
       page: m.metadata?.page ?? m.metadata?.slide
     }));
 
-    // If you emit charts/images, populate this array with { imageUrl, caption }
-    const visuals = [];
-
-    res.json({ answer, references, visuals });
+    res.json({ answer, references, visuals: [] });
   } catch (e) {
     console.error("[/search] error", e);
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
+
 
 // ---------- (Optional) purge + rebuild from Drive ----------
 // This is a safe placeholder that only purges. Wire your ingest pipeline if/when you want.
@@ -207,5 +237,6 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`mr-broker running on :${PORT}`);
 });
+
 
 
