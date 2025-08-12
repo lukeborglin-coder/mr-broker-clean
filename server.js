@@ -1,5 +1,5 @@
 // server.js — auto-creates Pinecone index; Drive filter; PDF ingest; clear debug
-// FIXED: Pinecone v2 usage (index() + namespace().query/upsert); better diagnostics
+// Pinecone v2 usage (index() + namespace().query/upsert)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 // 🔧 REQUIRED ENV
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID; // Google folder ID
-const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // path to service acct JSON
+const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // service acct JSON path
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 // Index config
@@ -66,7 +66,6 @@ async function ensurePineconeIndex() {
     spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } }
   });
 
-  // wait until Ready
   for (let i = 0; i < 30; i++) {
     const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
     const ready = d?.status?.ready;
@@ -128,6 +127,17 @@ app.get("/debug/embed-dim", async (req, res) => {
   }
 });
 
+// NEW: prove which code/dir is live
+app.get("/debug/whoami", async (req, res) => {
+  try {
+    const cwd = process.cwd();
+    const files = fs.readdirSync(cwd).slice(0, 50);
+    res.json({ cwd, files });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // ---------- Auth middleware ----------
 app.use((req, res, next) => {
   const expected = AUTH_TOKEN;
@@ -154,7 +164,6 @@ app.get("/health", (req, res) => {
   });
 });
 
-// extra: quick redacted env peek
 app.get("/env", (req, res) => {
   const redact = (v) => (v ? v.slice(0, 6) + "…" : "");
   res.json({
@@ -168,7 +177,7 @@ app.get("/env", (req, res) => {
 // ---------- Helpers ----------
 async function embedText(text) {
   const { data } = await openai.embeddings.create({
-    model: EMBEDDING_MODEL, // 1536 dims
+    model: EMBEDDING_MODEL,
     input: text
   });
   return data[0].embedding;
@@ -204,8 +213,6 @@ ${contextText}`;
 }
 
 // ===== Drive → PDF → text → chunks → embeddings =====
-
-// Download a Drive file as a Buffer
 async function downloadDriveFileBuffer(fileId) {
   const resp = await drive.files.get(
     { fileId, alt: "media" },
@@ -215,17 +222,15 @@ async function downloadDriveFileBuffer(fileId) {
   return Buffer.from(resp.data);
 }
 
-// PDF → pages
 async function parsePdfPages(buffer) {
   if (!buffer || !buffer.length) throw new Error("parsePdfPages called without a PDF buffer");
-  const pdfParse = (await import("pdf-parse")).default; // dynamic import
+  const pdfParse = (await import("pdf-parse")).default;
   const parsed = await pdfParse(buffer);
   const raw = parsed.text || "";
   const pages = raw.split("\f");
   return pages.map((p) => p.trim()).filter(Boolean);
 }
 
-// Simple text chunker with overlap
 function chunkText(str, chunkSize = 2000, overlap = 200) {
   const out = [];
   let i = 0;
@@ -236,8 +241,7 @@ function chunkText(str, chunkSize = 2000, overlap = 200) {
   return out;
 }
 
-// Upsert a set of chunks for one file (stores page + filename)
-// NOTE: Pinecone v2 — use namespace chaining
+// Pinecone v2 — use namespace chaining
 async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   const vectors = [];
   for (let i = 0; i < chunks.length; i++) {
@@ -254,7 +258,6 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   }
 }
 
-// Ingest ONE Drive PDF
 async function ingestSingleDrivePdf({ clientId, fileId, fileName }) {
   console.log(`[ingest] downloading "${fileName}" (${fileId})`);
   const buf = await downloadDriveFileBuffer(fileId);
@@ -310,7 +313,6 @@ app.post("/search", async (req, res) => {
 
     const vector = await embedText(userQuery);
 
-    // live Drive filter
     let pineconeFilter = undefined;
     if (LIVE_DRIVE_FILTER) {
       try {
@@ -323,12 +325,12 @@ app.post("/search", async (req, res) => {
         console.error("[search] listDriveFileIds failed:", e);
         return res.status(503).json({
           error: "Drive check failed. Verify credentials and folder ID.",
-          detail: e.message
+          detail: e.message,
+          stack: e.stack
         });
       }
     }
 
-    // Pinecone v2 query — use namespace chaining, pass only { vector, topK, includeMetadata, filter }
     const query = await index
       .namespace(clientId)
       .query({
@@ -350,7 +352,7 @@ app.post("/search", async (req, res) => {
     res.json({ answer, references, visuals: [] });
   } catch (e) {
     console.error("[/search] error", e);
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
   }
 });
 
@@ -365,7 +367,7 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     res.json({ ok: true, message: "Namespace purged. Re-ingest current Drive files to complete rebuild." });
   } catch (e) {
     console.error("[/admin/rebuild-from-drive] error", e);
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
   }
 });
 
@@ -404,7 +406,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
     res.json({ ok: true, clientId, files: files.length, message: "Ingest complete." });
   } catch (e) {
     console.error("[/admin/ingest-drive] error", e);
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
   }
 });
 
@@ -412,7 +414,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
 (async () => {
   try {
     await ensurePineconeIndex();
-    index = pinecone.index(PINECONE_INDEX); // ✅ v2 handle
+    index = pinecone.index(PINECONE_INDEX); // v2 handle
     console.log(`[pinecone] using index "${PINECONE_INDEX}"`);
   } catch (e) {
     console.error("[pinecone] failed to ensure index:", e);
