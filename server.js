@@ -1,6 +1,4 @@
-// server.js — Pinecone v2 + Google Drive + safer ingest (single-file + list) + diagnostics
-// Adds: /drive/debug, /drive/files/flat, /admin/ingest-list, /admin/ingest-one
-// Safer pdf parsing with fallback + optional maxPages
+// server.js — Pinecone v2 + Google Drive + SSE ingest + search + visuals + diagnostics
 
 import fs from "node:fs";
 import path from "node:path";
@@ -12,24 +10,22 @@ import OpenAI from "openai";
 import { Pinecone } from "@pinecone-database/pinecone";
 
 // ---------- Env + App ----------
-const envPath = path.resolve(process.cwd(), ".env");
-dotenv.config({ path: envPath, override: true });
-
+dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 const PORT = process.env.PORT || 3000;
 
-// 🔧 REQUIRED ENV
+// Core env
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 
-// Index config
+// Pinecone config
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
 const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";
 const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1";
 const LIVE_DRIVE_FILTER = String(process.env.LIVE_DRIVE_FILTER || "true").toLowerCase() === "true";
 
-// Embedding model (1536 dims)
+// Embeddings (1536 dims)
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const EMBEDDING_DIMS = 1536;
 
@@ -59,7 +55,6 @@ const drive = google.drive({ version: "v3", auth: gauth });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 
-// Ensure index exists (serverless) — Pinecone v2
 async function ensurePineconeIndex() {
   if (!PINECONE_API_KEY) throw new Error("PINECONE_API_KEY missing");
   const list = await pinecone.listIndexes();
@@ -73,19 +68,30 @@ async function ensurePineconeIndex() {
     metric: "cosine",
     spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } },
   });
-
   for (let i = 0; i < 30; i++) {
     const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
-    const ready = d?.status?.ready;
-    console.log(`[pinecone] status: ${ready ? "Ready" : "NotReady"}`);
-    if (ready) break;
+    if (d?.status?.ready) break;
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
+let index;
 
-let index; // v2 handle
+// ---------- Public debug ----------
+app.get("/debug/pinecone", async (req, res) => {
+  try {
+    const desc = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
+    let stats = null;
+    try {
+      stats = await pinecone.index(PINECONE_INDEX).describeIndexStats();
+    } catch (e) {
+      stats = { error: e.message };
+    }
+    res.json({ ok: true, index: PINECONE_INDEX, desc, stats });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
-// ---------- Debug (no auth) ----------
 app.get("/debug/drive-env", (req, res) => {
   res.json({
     DRIVE_ROOT_FOLDER_ID,
@@ -96,67 +102,16 @@ app.get("/debug/drive-env", (req, res) => {
   });
 });
 
-app.get("/debug/drive-list", async (req, res) => {
-  try {
-    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
-    const r = await drive.files.list({
-      q,
-      fields: "files(id,name,mimeType),nextPageToken",
-      pageSize: 10,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-    });
-    res.json({ count: (r.data.files || []).length, sample: r.data.files || [] });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
-app.get("/debug/pinecone", async (req, res) => {
-  try {
-    const desc = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
-    let stats = null;
-    try {
-      const idx = pinecone.index(PINECONE_INDEX);
-      stats = await idx.describeIndexStats();
-    } catch (e) {
-      stats = { error: e.message };
-    }
-    res.json({ ok: true, index: PINECONE_INDEX, desc, stats });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message, stack: e.stack });
-  }
-});
-
-app.get("/debug/embed-dim", async (req, res) => {
-  try {
-    const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: "hello" });
-    res.json({ ok: true, model: EMBEDDING_MODEL, dim: r.data[0].embedding.length });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message, stack: e.stack });
-  }
-});
-
-app.get("/debug/whoami", (req, res) => {
-  try {
-    const cwd = process.cwd();
-    const files = fs.readdirSync(cwd).slice(0, 50);
-    res.json({ cwd, files });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
-// ---------- Auth middleware (guards routes below) ----------
+// ---------- Auth guard (below routes require x-auth-token) ----------
 app.use((req, res, next) => {
-  const expected = AUTH_TOKEN;
-  if (!expected) return next();
-  const got = (req.get("x-auth-token") || "").trim();
-  if (got !== expected) return res.status(401).json({ error: "Unauthorized" });
+  if (!AUTH_TOKEN) return next();
+  if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
   next();
 });
 
-// ---------- Diagnostics (guarded) ----------
+// ---------- Health ----------
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
@@ -173,43 +128,25 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.get("/env", (req, res) => {
-  const redact = (v) => (v ? v.slice(0, 6) + "…" : "");
+// ---------- Drive diagnostics ----------
+app.get("/drive/debug", (req, res) => {
   res.json({
-    hasAuthToken: Boolean(AUTH_TOKEN),
-    openaiKey: redact(OPENAI_API_KEY),
-    pineconeKey: redact(PINECONE_API_KEY),
-    pineconeIndex: PINECONE_INDEX,
+    driveRootId: DRIVE_ROOT_FOLDER_ID || null,
+    credsPath: CREDS_PATH || null,
+    credsExists: !!(CREDS_PATH && fs.existsSync(CREDS_PATH)),
+    authTokenConfigured: Boolean(AUTH_TOKEN),
   });
-});
-
-// ---------- Drive diagnostics (guarded) ----------
-app.get("/drive/debug", async (req, res) => {
-  try {
-    res.json({
-      driveRootId: DRIVE_ROOT_FOLDER_ID || null,
-      credsPath: CREDS_PATH || null,
-      credsExists: !!(CREDS_PATH && fs.existsSync(CREDS_PATH)),
-      authTokenConfigured: Boolean(AUTH_TOKEN),
-    });
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
-  }
 });
 
 app.get("/drive/files/flat", async (req, res) => {
   try {
     const folderId = DRIVE_ROOT_FOLDER_ID;
-    if (!folderId) {
-      return res.status(400).json({ error: "DRIVE_ROOT_FOLDER_ID is not set in the environment." });
-    }
-
+    if (!folderId) return res.status(400).json({ error: "DRIVE_ROOT_FOLDER_ID not set" });
     const files = [];
     const q = `'${folderId}' in parents and trashed = false`;
-    let pageToken = undefined;
-
+    let pageToken;
     do {
-      const resp = await drive.files.list({
+      const r = await drive.files.list({
         q,
         fields: "nextPageToken, files(id,name,mimeType,size,modifiedTime,webViewLink,iconLink)",
         supportsAllDrives: true,
@@ -218,8 +155,7 @@ app.get("/drive/files/flat", async (req, res) => {
         pageSize: 1000,
         pageToken,
       });
-
-      (resp.data.files || []).forEach((f) =>
+      (r.data.files || []).forEach((f) =>
         files.push({
           id: f.id,
           name: f.name,
@@ -230,25 +166,17 @@ app.get("/drive/files/flat", async (req, res) => {
           iconLink: f.iconLink,
         })
       );
-
-      pageToken = resp.data.nextPageToken || undefined;
+      pageToken = r.data.nextPageToken || undefined;
     } while (pageToken);
-
     res.json({ folderId, count: files.length, files });
   } catch (e) {
-    res.status(500).json({
-      error: "Failed to list Drive files (flat)",
-      detail: e?.response?.data || e?.message || String(e),
-    });
+    res.status(500).json({ error: "Failed to list Drive files", detail: e?.response?.data || e?.message });
   }
 });
 
 // ---------- Helpers ----------
 async function embedText(text) {
-  const { data } = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: text,
-  });
+  const { data } = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return data[0].embedding;
 }
 
@@ -265,24 +193,22 @@ ${m?.metadata?.text || m?.metadata?.chunk || m?.metadata?.content || m?.values?.
 
   const prompt = `You are a market research analyst. Answer the user's question using ONLY the context below.
 If the context doesn't contain the answer, say you don't have enough information.
-Be concise and factual. Return a short paragraph followed by a few bullets if helpful.
+Be concise and factual. Use short bullet points where helpful.
 
 Question: ${question}
 
 Context:
 ${contextText}`;
 
-  const resp = await openai.chat.completions.create({
+  const r = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
   });
-
-  return resp.choices?.[0]?.message?.content?.trim() || "";
+  return r.choices?.[0]?.message?.content?.trim() || "";
 }
 
-// ===== Drive → PDF → text → chunks → embeddings =====
-
+// --- Drive helpers
 async function downloadDriveFileMeta(fileId) {
   const { data } = await drive.files.get({
     fileId,
@@ -291,53 +217,29 @@ async function downloadDriveFileMeta(fileId) {
   });
   return data;
 }
-
-// Download a Drive file as Buffer (STRICT)
 async function downloadDriveFileBuffer(fileId) {
-  const resp = await drive.files.get(
-    { fileId, alt: "media" },
-    { responseType: "arraybuffer" }
-  );
-  if (!resp || !resp.data) throw new Error(`Drive returned no data for fileId=${fileId}`);
+  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+  if (!resp || !resp.data) throw new Error(`No data for fileId=${fileId}`);
   const buf = Buffer.from(resp.data);
-  if (!buf.length) throw new Error(`Downloaded empty buffer for fileId=${fileId}`);
+  if (!buf.length) throw new Error(`Empty buffer for fileId=${fileId}`);
   return buf;
 }
-
-// PDF → pages with fallback parser
 async function parsePdfPages(buffer) {
-  if (!buffer || !buffer.length) throw new Error("parsePdfPages called without a PDF buffer");
-
-  let pdfParseFn = null;
-  let tried = [];
-
+  if (!buffer?.length) throw new Error("parsePdfPages: missing buffer");
+  let fn = null;
   try {
-    const mod = await import("pdf-parse/lib/pdf-parse.js");
-    pdfParseFn = mod.default || mod;
-    tried.push("pdf-parse/lib/pdf-parse.js");
-  } catch {
-    tried.push("pdf-parse/lib/pdf-parse.js (failed)");
+    const m = await import("pdf-parse/lib/pdf-parse.js");
+    fn = m.default || m;
+  } catch {}
+  if (!fn) {
+    const m2 = await import("pdf-parse");
+    fn = m2.default || m2;
   }
-  if (!pdfParseFn) {
-    try {
-      const mod2 = await import("pdf-parse"); // fallback
-      pdfParseFn = (mod2.default || mod2);
-      tried.push("pdf-parse (fallback ok)");
-    } catch {
-      tried.push("pdf-parse (failed)");
-    }
-  }
-  if (!pdfParseFn) {
-    throw new Error("Unable to load pdf-parse. Tried: " + tried.join(" | "));
-  }
-
-  const parsed = await pdfParseFn(buffer);
-  const raw = parsed.text || "";
-  const pages = raw.split("\f");
-  return pages.map((p) => p.trim()).filter(Boolean);
+  if (!fn) throw new Error("Unable to load pdf-parse");
+  const parsed = await fn(buffer);
+  const pages = (parsed.text || "").split("\f").map((p) => p.trim()).filter(Boolean);
+  return pages;
 }
-
-// Simple text chunker with overlap
 function chunkText(str, chunkSize = 2000, overlap = 200) {
   const out = [];
   let i = 0;
@@ -347,8 +249,6 @@ function chunkText(str, chunkSize = 2000, overlap = 200) {
   }
   return out;
 }
-
-// Upsert chunks for one file (stores page + filename)
 async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   const vectors = [];
   for (let i = 0; i < chunks.length; i++) {
@@ -360,20 +260,11 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
       metadata: { clientId, fileId, fileName, page, text },
     });
   }
-  if (vectors.length) {
-    await index.namespace(clientId).upsert(vectors);
-  }
+  if (vectors.length) await index.namespace(clientId).upsert(vectors);
 }
-
-// Ingest ONE Drive PDF (strict + logs) with optional page cap
 async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Infinity }) {
-  console.log(`[ingest] downloading "${fileName}" (${fileId})`);
   const buf = await downloadDriveFileBuffer(fileId);
-  console.log(`[ingest] ${fileName}: downloaded ${buf.length.toLocaleString()} bytes`);
-
   const pages = await parsePdfPages(buf);
-  console.log(`[ingest] parsed ${pages.length} pages from "${fileName}"`);
-
   const limit = Math.min(pages.length, Number.isFinite(maxPages) ? maxPages : pages.length);
   for (let p = 0; p < limit; p++) {
     const pageText = pages[p];
@@ -383,55 +274,52 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Inf
   }
 }
 
-// ---------- Live Drive filter (cache 60s) ----------
+// ---------- Live Drive allowlist for search ----------
 let _driveCache = { ids: new Set(), ts: 0 };
 async function listDriveFileIds() {
   const now = Date.now();
   if (now - _driveCache.ts < 60_000 && _driveCache.ids.size > 0) return _driveCache.ids;
-
-  if (!DRIVE_ROOT_FOLDER_ID) return new Set();
-  const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
-  const fields = "files(id,name,mimeType),nextPageToken";
-  let pageToken = null;
   const ids = new Set();
-
+  if (!DRIVE_ROOT_FOLDER_ID) return ids;
+  const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+  let pageToken = null;
   do {
-    const resp = await drive.files.list({
+    const r = await drive.files.list({
       q,
-      fields,
+      fields: "files(id,name,mimeType),nextPageToken",
       pageSize: 1000,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
       pageToken,
     });
-    (resp.data.files || []).forEach((f) => {
+    (r.data.files || []).forEach((f) => {
       const mt = (f.mimeType || "").toLowerCase();
       if (mt.includes("pdf")) ids.add(f.id);
     });
-    pageToken = resp.data.nextPageToken || null;
+    pageToken = r.data.nextPageToken || null;
   } while (pageToken);
-
   _driveCache = { ids, ts: now };
   return ids;
 }
 
-// ---------- SEARCH ----------
+// ---------- SEARCH (returns visuals) ----------
 function drivePreviewUrl(fileId, page) {
-  // Google Drive preview supports #page=
   const p = page ? `#page=${page}` : "";
   return `https://drive.google.com/file/d/${fileId}/preview${p}`;
 }
 
 app.post("/search", async (req, res) => {
   try {
-    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-
+    if (!index) {
+      return res.status(503).json({ error: "Pinecone index not ready yet" });
+    }
     const { clientId = "demo", userQuery, topK = 6 } = req.body || {};
-    if (!userQuery) return res.status(400).json({ error: "userQuery required" });
+    if (!userQuery) {
+      return res.status(400).json({ error: "userQuery required" });
+    }
 
     const vector = await embedText(userQuery);
 
-    // live Drive filter
     let pineconeFilter = undefined;
     if (LIVE_DRIVE_FILTER) {
       try {
@@ -443,27 +331,22 @@ app.post("/search", async (req, res) => {
       }
     }
 
-    // Pinecone v2 query
-    const query = await index.namespace(clientId).query({
+    const q = await index.namespace(clientId).query({
       vector,
       topK: Number(topK) || 6,
       includeMetadata: true,
       filter: pineconeFilter,
     });
 
-    const matches = query.matches || [];
-
-    // Ask for the answer (bullets allowed; we'll render them as real <li> on the client)
+    const matches = q.matches || [];
     const answer = await answerWithContext(userQuery, matches);
 
-    // Build references list
     const references = matches.map((m) => ({
       fileId: m.metadata?.fileId,
       fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
       page: m.metadata?.page ?? m.metadata?.slide,
     }));
 
-    // Build visuals (unique fileId+page), up to 4 previews
     const seen = new Set();
     const visuals = [];
     for (const m of matches) {
@@ -482,53 +365,10 @@ app.post("/search", async (req, res) => {
       if (visuals.length >= 4) break;
     }
 
-    res.json({ answer, references, visuals });
+    return res.json({ answer, references, visuals });
   } catch (e) {
     console.error("[/search] error", e);
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
-  }
-});
-
-    // live Drive filter
-    let pineconeFilter = undefined;
-    if (LIVE_DRIVE_FILTER) {
-      try {
-        const liveIds = await listDriveFileIds();
-        const allowList = [...liveIds];
-        pineconeFilter = allowList.length
-          ? { fileId: { $in: allowList } }
-          : { fileId: { $in: ["__none__"] } };
-      } catch (e) {
-        console.error("[search] listDriveFileIds failed:", e);
-        return res.status(503).json({
-          error: "Drive check failed. Verify credentials and folder ID.",
-          detail: e.message,
-          stack: e.stack,
-        });
-      }
-    }
-
-    // Pinecone v2 query — namespace chaining
-    const query = await index.namespace(clientId).query({
-      vector,
-      topK: Number(topK) || 6,
-      includeMetadata: true,
-      filter: pineconeFilter,
-    });
-
-    const matches = query.matches || [];
-    const answer = await answerWithContext(userQuery, matches);
-
-    const references = matches.map((m) => ({
-      fileId: m.metadata?.fileId,
-      fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
-      page: m.metadata?.page ?? m.metadata?.slide,
-    }));
-
-    res.json({ answer, references, visuals: [] });
-  } catch (e) {
-    console.error("[/search] error", e);
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
@@ -538,22 +378,19 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
     const { clientId } = req.body || {};
     if (!clientId) return res.status(400).json({ error: "clientId required" });
-
     await index.namespace(clientId).deleteAll();
-    res.json({ ok: true, message: "Namespace purged. Re-ingest current Drive files to complete rebuild." });
+    return res.json({ ok: true, message: "Namespace purged. Re-ingest to rebuild." });
   } catch (e) {
-    console.error("[/admin/rebuild-from-drive] error", e);
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
-// ---------- Admin: list PDFs with sizes (safer preview) ----------
+// ---------- Admin: list PDFs ----------
 app.post("/admin/ingest-list", async (req, res) => {
   try {
     const files = [];
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
     let pageToken = null;
-
     do {
       const r = await drive.files.list({
         q,
@@ -569,42 +406,38 @@ app.post("/admin/ingest-list", async (req, res) => {
       });
       pageToken = r.data.nextPageToken || null;
     } while (pageToken);
-
-    res.json({ ok: true, count: files.length, files });
+    return res.json({ ok: true, count: files.length, files });
   } catch (e) {
-    console.error("[/admin/ingest-list] error", e);
-    res.status(500).json({ ok: false, error: e?.message || String(e), stack: e?.stack });
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
-// ---------- Admin: ingest ONE PDF (with optional maxPages) ----------
+// ---------- Admin: ingest ONE PDF ----------
 app.post("/admin/ingest-one", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
     const { clientId = "demo", fileId, maxPages } = req.body || {};
     if (!fileId) return res.status(400).json({ error: "fileId required" });
-
     const meta = await downloadDriveFileMeta(fileId);
-    const name = meta.name || "Untitled";
-    const size = meta.size ? Number(meta.size) : null;
-    console.log(`[ingest-one] ${name} (${fileId}) size=${size?.toLocaleString?.() || "?"} bytes`);
-
-    await ingestSingleDrivePdf({ clientId, fileId, fileName: name, maxPages: Number(maxPages) || Infinity });
-
-    res.json({ ok: true, clientId, fileId, fileName: name, maxPages: Number(maxPages) || null });
+    await ingestSingleDrivePdf({
+      clientId,
+      fileId,
+      fileName: meta.name || "Untitled",
+      maxPages: Number(maxPages) || Infinity,
+    });
+    return res.json({ ok: true, clientId, fileId, fileName: meta.name || "Untitled" });
   } catch (e) {
-    console.error("[/admin/ingest-one] error", e);
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
-// ---------- Admin: ingest ALL PDFs with live progress (SSE, no page limit) ----------
+// ---------- Admin: ingest ALL PDFs with live progress (SSE) ----------
 app.post("/admin/ingest-drive", async (req, res) => {
-  // SSE headers so you see progress as it happens
+  // Server-Sent Events headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering (helpful on some hosts)
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   const write = (obj) => {
@@ -612,17 +445,12 @@ app.post("/admin/ingest-drive", async (req, res) => {
   };
 
   try {
-    if (!index) {
-      write({ level: "error", msg: "Pinecone index not ready yet" });
-      return res.end();
-    }
+    if (!index) { write({ level: "error", msg: "Pinecone index not ready yet" }); res.end(); return; }
 
     write({ level: "info", msg: "Listing PDFs in Drive folder…" });
-
     const files = [];
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
     let pageToken = null;
-
     do {
       const r = await drive.files.list({
         q,
@@ -639,41 +467,39 @@ app.post("/admin/ingest-drive", async (req, res) => {
       pageToken = r.data.nextPageToken || null;
     } while (pageToken);
 
-    if (!files.length) {
-      write({ level: "warn", msg: "No PDFs found in the Drive folder." });
-      return res.end();
-    }
+    if (!files.length) { write({ level: "warn", msg: "No PDFs found." }); res.end(); return; }
 
     write({ level: "info", msg: `Found ${files.length} PDF(s). Starting ingest…` });
 
     let done = 0;
+    const clientId = req.body?.clientId || "demo";
     for (const f of files) {
       try {
         write({ level: "info", fileId: f.id, fileName: f.name, msg: "Downloading…" });
         const meta = await downloadDriveFileMeta(f.id);
-        const size = meta.size ? Number(meta.size) : null;
-
-        write({ level: "info", fileId: f.id, fileName: f.name, size, msg: "Parsing + embedding…" });
-        // Ingest ALL pages (no page limit)
-        await ingestSingleDrivePdf({ clientId: (req.body?.clientId || "demo"), fileId: f.id, fileName: f.name });
-
+        write({
+          level: "info",
+          fileId: f.id,
+          fileName: f.name,
+          size: meta.size ? Number(meta.size) : null,
+          msg: "Parsing + embedding…",
+        });
+        await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name }); // ALL pages
         done++;
         write({ level: "success", fileId: f.id, fileName: f.name, done, total: files.length, msg: "Ingested" });
       } catch (e) {
         write({ level: "error", fileId: f.id, fileName: f.name, msg: e?.message || String(e) });
       }
     }
-
     write({ level: "info", msg: "All files processed." });
   } catch (e) {
     write({ level: "error", msg: e?.message || String(e) });
   } finally {
-    // small delay to flush tail and then close
     setTimeout(() => { try { res.end(); } catch {} }, 250);
   }
 });
 
-// ---------- Bootstrapping Pinecone then start server ----------
+// ---------- Boot ----------
 (async () => {
   try {
     await ensurePineconeIndex();
@@ -682,10 +508,5 @@ app.post("/admin/ingest-drive", async (req, res) => {
   } catch (e) {
     console.error("[pinecone] failed to ensure index:", e);
   }
-
-  app.listen(PORT, () => {
-    console.log(`mr-broker running on :${PORT}`);
-  });
+  app.listen(PORT, () => console.log(`mr-broker running on :${PORT}`));
 })();
-
-
