@@ -271,7 +271,7 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
     });
   }
   if (vectors.length) {
-    await index.namespace(clientId).upsert({ vectors });
+    await index.namespace(clientId).upsert(vectors);
   }
 }
 
@@ -467,3 +467,4 @@ app.post("/admin/diagnose-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
+
