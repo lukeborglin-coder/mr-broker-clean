@@ -6,15 +6,20 @@
   <title>Cognitive Consulting — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    /* tiny helpers only; keeps your existing styles.css in charge */
+    /* minimal helpers only; your styles.css still drives the look */
     .prose p { margin: 0 0 .75rem }
     .prose ul { margin: .5rem 0 .75rem 1.25rem }
     .prose li { margin: .25rem 0 }
     .muted { color:#7a7a7a }
     .visuals { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px }
-    .visual { border:1px solid #eee; border-radius:8px; overflow:hidden; background:#fafafa }
-    .visual iframe { width:100%; height:200px; border:0 }
-    .visual .cap { font-size:12px; padding:6px 8px; color:#555 }
+    .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff }
+    .visual img { width:100%; height:180px; object-fit:cover; display:block }
+    .visual .cap { font-size:12px; padding:6px 8px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    /* make search bar full width and orange Ask like before */
+    .search { display:flex; gap:8px; align-items:center }
+    .search-input { flex:1 }
+    .button.ask { background:#ff7a00; color:white; border:none; padding:10px 16px; border-radius:8px; cursor:pointer }
+    .button.ask:hover { filter:brightness(.95) }
   </style>
 </head>
 <body>
@@ -26,9 +31,9 @@
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
     </header>
 
-    <!-- Search (restore original classes so your CSS styles the orange Ask button) -->
+    <!-- Search -->
     <section class="search">
-      <input id="q" class="search-input" placeholder="What is the trending satisfaction for Evrysdi?" />
+      <input id="q" class="search-input" placeholder="Ask about satisfaction, NPS, drivers, trends..." />
       <button id="ask" class="button ask" type="button">Ask</button>
     </section>
 
@@ -52,16 +57,13 @@
   </div>
 
   <script>
-    // ===== CONFIG =====
-    const API_BASE = location.origin; // same host as server
-    const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw="; // required by your server
+    const API_BASE = location.origin;
+    const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
 
-    // ===== RENDER HELPERS =====
     function mdBulletsToHtml(text) {
       if (!text) return "";
-      // split into blocks by blank lines
       const blocks = text.split(/\n{2,}/);
-      const htmlBlocks = blocks.map(block => {
+      return blocks.map(block => {
         const lines = block.split(/\n/);
         const allBullets = lines.every(l => /^\s*-\s+/.test(l));
         if (allBullets && lines.length) {
@@ -69,17 +71,12 @@
           return `<ul>${lis}</ul>`;
         }
         return `<p>${block}</p>`;
-      });
-      return htmlBlocks.join("");
+      }).join("");
     }
 
     function renderAnswer(answerText) {
       const el = document.getElementById("answer");
-      if (!answerText) {
-        el.classList.add("muted");
-        el.textContent = "No findings.";
-        return;
-      }
+      if (!answerText) { el.classList.add("muted"); el.textContent = "No findings."; return; }
       el.classList.remove("muted");
       el.innerHTML = mdBulletsToHtml(answerText);
     }
@@ -91,10 +88,10 @@
         return;
       }
       el.innerHTML = visuals.map(v => `
-        <div class="visual">
-          <iframe src="${v.previewUrl}" loading="lazy"></iframe>
+        <a class="visual" href="${v.imageUrl}" target="_blank" rel="noopener">
+          <img src="${v.imageUrl}" alt="${v.fileName} p.${v.page}" />
           <div class="cap">${v.fileName} (p.${v.page || "?"})</div>
-        </div>
+        </a>
       `).join("");
     }
 
@@ -104,7 +101,16 @@
         el.innerHTML = `<li class="muted">No references.</li>`;
         return;
       }
-      el.innerHTML = refs.map(r => `<li>${r.fileName} (p.${r.page || "?"})</li>`).join("");
+      // Dedup just in case & strip ".pdf" already handled by server
+      const seen = new Set();
+      const items = [];
+      for (const r of refs) {
+        const key = r.fileId;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push(`<li>${r.fileName}</li>`);
+      }
+      el.innerHTML = items.join("");
     }
 
     function showThinking() {
@@ -120,7 +126,6 @@
       document.getElementById("visuals").innerHTML = `<div class="muted">No supporting visuals.</div>`;
     }
 
-    // ===== SEARCH =====
     async function ask() {
       const q = document.getElementById("q").value.trim();
       if (!q) return;
@@ -128,14 +133,9 @@
       try {
         const resp = await fetch(`${API_BASE}/search`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-auth-token": AUTH_TOKEN
-          },
+          headers: { "Content-Type": "application/json", "x-auth-token": AUTH_TOKEN },
           body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 6 })
         });
-
-        // surface non-200s
         if (!resp.ok) {
           const t = await resp.text().catch(() => "");
           throw new Error(`${resp.status} ${resp.statusText} ${t}`);
@@ -150,11 +150,8 @@
       }
     }
 
-    // Wire up events
     document.getElementById("ask").addEventListener("click", ask);
-    document.getElementById("q").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") ask();
-    });
+    document.getElementById("q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
   </script>
 </body>
 </html>
