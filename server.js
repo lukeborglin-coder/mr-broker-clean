@@ -1,4 +1,4 @@
-// server.js — auto-creates Pinecone index; live Drive filter; clear debug
+// server.js — auto-creates Pinecone index; Drive filter; PDF ingest; clear debug
 
 import fs from "node:fs";
 import path from "node:path";
@@ -52,7 +52,6 @@ const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 
 // Ensure index exists (serverless)
 async function ensurePineconeIndex() {
-  // list indexes
   const indexes = await pinecone.listIndexes();
   const exists = indexes.indexes?.some(i => i.name === PINECONE_INDEX);
   if (exists) return;
@@ -62,22 +61,20 @@ async function ensurePineconeIndex() {
     name: PINECONE_INDEX,
     dimension: EMBEDDING_DIMS,
     metric: "cosine",
-    spec: {
-      serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION }
-    }
+    spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } }
   });
 
   // wait until Ready
   for (let i = 0; i < 30; i++) {
     const d = await pinecone.describeIndex(PINECONE_INDEX);
-    const status = d.status?.ready ? "Ready" : "NotReady";
-    console.log(`[pinecone] status: ${status}`);
-    if (d.status?.ready) break;
+    const ready = d.status?.ready;
+    console.log(`[pinecone] status: ${ready ? "Ready" : "NotReady"}`);
+    if (ready) break;
     await new Promise(r => setTimeout(r, 2000));
   }
 }
 
-let index; // will be set after ensurePineconeIndex()
+let index; // set after ensurePineconeIndex()
 
 // ---------- Debug (no auth) ----------
 app.get("/debug/drive-env", (req, res) => {
@@ -110,16 +107,11 @@ app.get("/debug/pinecone", async (req, res) => {
     let stats = null;
     try {
       const idx = pinecone.Index(PINECONE_INDEX);
-      stats = await idx.describeIndexStats(); // <-- correct place for describeIndexStats
+      stats = await idx.describeIndexStats();
     } catch (e) {
       stats = { error: e.message };
     }
-    res.json({
-      ok: true,
-      index: PINECONE_INDEX,
-      desc,                       // desc?.status?.ready === true means it's usable
-      stats                       // high-level index stats or error if not created yet
-    });
+    res.json({ ok: true, index: PINECONE_INDEX, desc, stats });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message, stack: e.stack });
   }
@@ -197,7 +189,43 @@ ${contextText}`;
   return resp.choices?.[0]?.message?.content?.trim() || "";
 }
 
-// Drive file allowlist (cache 60s)
+// Download a Drive file as Buffer
+async function downloadDriveFileBuffer(fileId) {
+  const { data } = await drive.files.get(
+    { fileId, alt: "media" },
+    { responseType: "stream" }
+  );
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    data.on("data", (d) => chunks.push(d));
+    data.on("end", resolve);
+    data.on("error", reject);
+  });
+  return Buffer.concat(chunks);
+}
+
+// Basic chunker with overlap
+function chunkText(str, chunkSize = 2000, overlap = 200) {
+  const out = [];
+  let i = 0;
+  while (i < str.length) {
+    const chunk = str.slice(i, i + chunkSize);
+    out.push(chunk);
+    i += chunkSize - overlap;
+  }
+  return out;
+}
+
+// PDF → pages array (best-effort using form feed)
+async function parsePdfPages(buffer) {
+  const pdfParse = (await import("pdf-parse")).default;
+  const parsed = await pdfParse(buffer);
+  const raw = parsed.text || "";
+  const pages = raw.split("\f"); // pdf-parse inserts \f between pages
+  return pages.map(p => p.trim()).filter(Boolean);
+}
+
+// ---------- Live Drive filter (cache 60s) ----------
 let _driveCache = { ids: new Set(), ts: 0 };
 async function listDriveFileIds() {
   const now = Date.now();
@@ -218,7 +246,7 @@ async function listDriveFileIds() {
     });
     (resp.data.files || []).forEach(f => {
       const mt = (f.mimeType || "").toLowerCase();
-      if (mt.includes("pdf") || mt.includes("presentation") || mt.includes("powerpoint")) {
+      if (mt.includes("pdf")) {
         ids.add(f.id);
       }
     });
@@ -227,6 +255,40 @@ async function listDriveFileIds() {
 
   _driveCache = { ids, ts: now };
   return ids;
+}
+
+// ---------- Pinecone upsert ----------
+async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
+  const vectors = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const text = chunks[i];
+    const values = await embedText(text);
+    vectors.push({
+      id: `${fileId}_${page ?? 0}_${i}_${Date.now()}`,
+      values,
+      metadata: {
+        clientId,
+        fileId,
+        fileName,
+        page,
+        text
+      }
+    });
+  }
+  await index.upsert({ namespace: clientId, vectors });
+}
+
+// ---------- Ingest one Drive PDF ----------
+async function ingestSingleDrivePdf({ clientId, fileId, fileName }) {
+  const buf = await downloadDriveFileBuffer(fileId);
+  const pages = await parsePdfPages(buf); // array of page strings
+  for (let p = 0; p < pages.length; p++) {
+    const pageText = pages[p];
+    const chunks = chunkText(pageText, 2000, 200);
+    if (chunks.length) {
+      await upsertChunks({ clientId, fileId, fileName, chunks, page: p + 1 });
+    }
+  }
 }
 
 // ---------- SEARCH ----------
@@ -239,6 +301,7 @@ app.post("/search", async (req, res) => {
 
     const vector = await embedText(userQuery);
 
+    // live Drive filter
     let pineconeFilter = undefined;
     if (LIVE_DRIVE_FILTER) {
       try {
@@ -298,6 +361,45 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
   }
 });
 
+// ---------- Admin (ingest all PDFs from Drive folder) ----------
+app.post("/admin/ingest-drive", async (req, res) => {
+  try {
+    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
+    const { clientId = "demo" } = req.body || {};
+    const files = [];
+    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+    let pageToken = null;
+
+    do {
+      const r = await drive.files.list({
+        q,
+        fields: "files(id,name,mimeType),nextPageToken",
+        pageSize: 1000,
+        includeItemsFromAllDrives: true,
+        supportsAllDrives: true,
+        pageToken
+      });
+      (r.data.files || []).forEach(f => {
+        const mt = (f.mimeType || "").toLowerCase();
+        if (mt.includes("pdf")) files.push({ id: f.id, name: f.name });
+      });
+      pageToken = r.data.nextPageToken || null;
+    } while (pageToken);
+
+    let ingested = 0;
+    for (const f of files) {
+      await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name });
+      ingested++;
+      console.log(`[ingest] ${ingested}/${files.length} ${f.name}`);
+    }
+
+    res.json({ ok: true, clientId, files: files.length, message: "Ingest complete." });
+  } catch (e) {
+    console.error("[/admin/ingest-drive] error", e);
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 // ---------- Bootstrapping Pinecone then start server ----------
 (async () => {
   try {
@@ -312,4 +414,3 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
-
