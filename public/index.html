@@ -7,19 +7,17 @@
   <link rel="stylesheet" href="/styles.css" />
   <style>
     :root { --brand:#ef6c00; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
     .page { max-width: 1100px; margin: 32px auto; padding: 0 16px; }
     .header { display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px; }
     .title { font-size: 28px; font-weight: 700; }
     .logo-small { height: 28px; opacity:.9 }
-    .search { display:flex; gap:8px; align-items:center; }
-    .search input { flex:1; padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; outline:none; }
-    .search button { background:var(--brand); color:#fff; border:none; border-radius:10px; padding:10px 16px; cursor:pointer; font-weight:600; }
     .card { border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-top:14px; }
     .card h3 { margin:0 0 6px 0; font-size:18px; }
     .muted { color:#6b7280; }
-    .refs { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
-    .ref a { text-decoration:none; }
-    .bullets { margin:8px 0 0 18px; }
+    .search { display:flex; gap:8px; align-items:center; }
+    .search input { flex:1; padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; outline:none; }
+    .search button { background:var(--brand); color:#fff; border:none; border-radius:10px; padding:10px 16px; cursor:pointer; font-weight:600; }
     .visuals { display:grid; gap:10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin-top:8px; }
     .visual { border:1px solid #e5e7eb; border-radius:10px; padding:8px; }
     .visual img { width:100%; height:auto; border-radius:8px; display:block; }
@@ -53,117 +51,97 @@
 
     <section class="card">
       <h3>References</h3>
-      <div id="refs" class="refs muted">No references detected.</div>
-      <div id="sources" class="bullets small"></div>
+      <div id="refs" class="muted">No references detected.</div>
     </section>
   </div>
 
- <script>
-  // --- config ---
-  const API_BASE = "https://mr-broker.onrender.com";
-  const AUTH     = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
-  const CLIENT   = "genentech";
+  <script>
+    const API_BASE = window.location.origin; // same host (Render)
+    const CLIENT   = "genentech";            // namespace to search
 
-  // --- elements (these IDs must exist in your HTML) ---
-  const elQ    = document.getElementById("q");
-  const elAsk  = document.getElementById("ask");
-  const elAns  = document.getElementById("answer");
-  const elVis  = document.getElementById("visuals");
-  const elRefs = document.getElementById("refs");
+    const elQ      = document.getElementById("q");
+    const elAsk    = document.getElementById("ask");
+    const elStatus = document.getElementById("status");
+    const elAns    = document.getElementById("answer");
+    const elVis    = document.getElementById("visuals");
+    const elRefs   = document.getElementById("refs");
 
-  // --- helpers ---
-  const t = (x) => (x ?? "").toString().trim();
+    function t(x){ return (x ?? "").toString().trim(); }
 
-  function renderAnswer(answerText) {
-    const txt = t(answerText);
-    elAns.textContent = txt || "No findings.";
-    elAns.classList.toggle("muted", !txt);
-  }
-
-  function renderVisuals(visuals) {
-    elVis.innerHTML = "";
-    if (!Array.isArray(visuals) || visuals.length === 0) {
-      elVis.textContent = "No supporting visuals found.";
-      elVis.classList.add("muted");
-      return;
+    function renderAnswer(s){
+      const txt = t(s);
+      elAns.textContent = txt || "No findings.";
+      elAns.classList.toggle("muted", !txt);
     }
-    elVis.classList.remove("muted");
-    visuals.forEach(v => {
-      const url = v?.imageUrl || v?.thumbUrl || v?.url;
-      const cap = v?.caption || v?.title || "";
-      const wrap = document.createElement("div");
-      wrap.style.marginBottom = "8px";
-      wrap.innerHTML = url
-        ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="max-width:100%;border-radius:8px"></a>
-           <div class="small">${t(cap)}</div>`
-        : `<div class="small">[image missing]</div>`;
-      elVis.appendChild(wrap);
-    });
-  }
 
-  function renderReferences(refs) {
-    elRefs.innerHTML = "";
-    if (!Array.isArray(refs) || refs.length === 0) {
-      elRefs.textContent = "No references detected.";
-      elRefs.classList.add("muted");
-      return;
-    }
-    elRefs.classList.remove("muted");
-
-    refs.forEach(ref => {
-      const title = t(ref?.title || ref?.name || ref?.fileName || "Untitled");
-      const url   = ref?.url || ref?.link || ref?.fileUrl || "#";
-      const page  = ref?.page != null ? ` (p.${ref.page})`
-                 : ref?.slide != null ? ` (slide ${ref.slide})` : "";
-      const row   = document.createElement("div");
-      if (url && url !== "#") {
-        row.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${title}${page}</a>`;
-      } else {
-        row.textContent = `${title}${page}`;
+    function renderVisuals(arr){
+      elVis.innerHTML = "";
+      if (!Array.isArray(arr) || arr.length === 0){
+        elVis.textContent = "No supporting visuals found.";
+        elVis.classList.add("muted");
+        return;
       }
-      elRefs.appendChild(row);
-    });
-  }
-
-  async function askQuestion() {
-    const userQuery = t(elQ.value);
-    if (!userQuery) return;
-
-    // optimistic placeholders
-    elAns.textContent = "Thinking…";
-    elAns.classList.remove("muted");
-    elVis.textContent = "Loading visuals…";
-    elRefs.textContent = "Loading references…";
-
-    try {
-      const res = await fetch(`${API_BASE}/search`, {
-        method: "POST",
-        headers: {
-          "x-auth-token": AUTH,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ clientId: CLIENT, userQuery, topK: 6 })
+      elVis.classList.remove("muted");
+      arr.forEach(v => {
+        const url = v?.imageUrl || v?.thumbUrl || v?.url;
+        const cap = v?.caption || v?.title || "";
+        const d = document.createElement("div");
+        d.className = "visual";
+        d.innerHTML = url
+          ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}"></a><div class="small">${t(cap)}</div>`
+          : `<div class="small">[image missing]</div>`;
+        elVis.appendChild(d);
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-
-      renderAnswer(data?.answer || data?.summary || "");
-      renderVisuals(data?.visuals || data?.charts || []);
-      renderReferences(data?.references || data?.refs || data?.sources || []);
-    } catch (e) {
-      console.error(e);
-      elAns.textContent  = "Something went wrong.";
-      elVis.textContent  = "No supporting visuals found.";
-      elRefs.textContent = "No references detected.";
-      elAns.classList.add("muted");
-      elVis.classList.add("muted");
-      elRefs.classList.add("muted");
     }
-  }
 
-  elAsk.addEventListener("click", askQuestion);
-  elQ.addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
-</script>
+    function renderReferences(refs){
+      elRefs.innerHTML = "";
+      if (!Array.isArray(refs) || refs.length === 0){
+        elRefs.textContent = "No references detected.";
+        elRefs.classList.add("muted");
+        return;
+      }
+      elRefs.classList.remove("muted");
+      refs.forEach(r => {
+        const name = r?.fileName || r?.title || r?.name || "Untitled";
+        const page = (r?.page != null) ? ` (p.${r.page})` : "";
+        const div = document.createElement("div");
+        div.textContent = `${name}${page}`;
+        elRefs.appendChild(div);
+      });
+    }
 
+    async function ask(){
+      const userQuery = t(elQ.value);
+      if (!userQuery) return;
+      elStatus.textContent = "Thinking…";
+      elAns.textContent = "";
+      elRefs.textContent = "Loading references…";
+      elVis.textContent = "Loading visuals…";
+
+      try {
+        const res = await fetch(`${API_BASE}/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-auth-token": "" }, // token is checked on server; if set, add here
+          body: JSON.stringify({ clientId: CLIENT, userQuery, topK: 6 })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderAnswer(data?.answer || "");
+        renderVisuals(data?.visuals || []);
+        renderReferences(data?.references || []);
+        elStatus.textContent = "";
+      } catch (e) {
+        console.error(e);
+        elStatus.textContent = "Error: " + (e.message || e);
+        renderAnswer("");
+        renderVisuals([]);
+        renderReferences([]);
+      }
+    }
+
+    elAsk.addEventListener("click", ask);
+    elQ.addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+  </script>
 </body>
 </html>
