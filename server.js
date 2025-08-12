@@ -1,5 +1,7 @@
-// server.js — auto-creates Pinecone index; Drive filter; PDF ingest; clear debug
-// Pinecone v2 usage (index() + namespace().query/upsert)
+// server.js — Pinecone v2 + Drive PDF ingest + strict buffer checks + clear diagnostics
+// - Fixes: never call pdf-parse without a buffer (prevents ./test/data/... ENOENT)
+// - Uses pinecone.index(...).namespace(...).query/upsert (v2 API)
+// - Adds /debug endpoints to verify what’s running
 
 import fs from "node:fs";
 import path from "node:path";
@@ -19,9 +21,10 @@ const PORT = process.env.PORT || 3000;
 // 🔧 REQUIRED ENV
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID; // Google folder ID
-const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // service acct JSON path
+const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // path to service acct JSON
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
+
 // Index config
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
 const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";        // "aws" or "gcp"
@@ -66,6 +69,7 @@ async function ensurePineconeIndex() {
     spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } }
   });
 
+  // wait until Ready
   for (let i = 0; i < 30; i++) {
     const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
     const ready = d?.status?.ready;
@@ -127,8 +131,7 @@ app.get("/debug/embed-dim", async (req, res) => {
   }
 });
 
-// NEW: prove which code/dir is live
-app.get("/debug/whoami", async (req, res) => {
+app.get("/debug/whoami", (req, res) => {
   try {
     const cwd = process.cwd();
     const files = fs.readdirSync(cwd).slice(0, 50);
@@ -213,24 +216,38 @@ ${contextText}`;
 }
 
 // ===== Drive → PDF → text → chunks → embeddings =====
+
+// Download a Drive file as a Buffer (STRICT: throw if empty)
 async function downloadDriveFileBuffer(fileId) {
   const resp = await drive.files.get(
     { fileId, alt: "media" },
     { responseType: "arraybuffer" }
   );
-  if (!resp || !resp.data) throw new Error(`Drive returned no data for fileId=${fileId}`);
-  return Buffer.from(resp.data);
+  // Some Drive files (esp. Google Docs/Slides) are not binary PDFs.
+  // We only call this for files we already filtered as PDFs.
+  if (!resp || !resp.data) {
+    throw new Error(`Drive returned no data for fileId=${fileId}`);
+  }
+  const buf = Buffer.from(resp.data);
+  if (!buf.length) {
+    throw new Error(`Downloaded empty buffer from Drive for fileId=${fileId}`);
+  }
+  return buf;
 }
 
+// PDF → pages (STRICT: throw if no buffer)
 async function parsePdfPages(buffer) {
-  if (!buffer || !buffer.length) throw new Error("parsePdfPages called without a PDF buffer");
-  const pdfParse = (await import("pdf-parse")).default;
+  if (!buffer || !buffer.length) {
+    throw new Error("parsePdfPages called without a PDF buffer");
+  }
+  const pdfParse = (await import("pdf-parse")).default; // dynamic import
   const parsed = await pdfParse(buffer);
   const raw = parsed.text || "";
   const pages = raw.split("\f");
   return pages.map((p) => p.trim()).filter(Boolean);
 }
 
+// Simple text chunker with overlap
 function chunkText(str, chunkSize = 2000, overlap = 200) {
   const out = [];
   let i = 0;
@@ -241,6 +258,7 @@ function chunkText(str, chunkSize = 2000, overlap = 200) {
   return out;
 }
 
+// Upsert a set of chunks for one file (stores page + filename)
 // Pinecone v2 — use namespace chaining
 async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   const vectors = [];
@@ -258,9 +276,11 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   }
 }
 
+// Ingest ONE Drive PDF (with strict checks + logs)
 async function ingestSingleDrivePdf({ clientId, fileId, fileName }) {
   console.log(`[ingest] downloading "${fileName}" (${fileId})`);
   const buf = await downloadDriveFileBuffer(fileId);
+  console.log(`[ingest] ${fileName}: downloaded ${buf.length.toLocaleString()} bytes`);
   const pages = await parsePdfPages(buf);
   console.log(`[ingest] parsed ${pages.length} pages from "${fileName}"`);
   for (let p = 0; p < pages.length; p++) {
@@ -313,6 +333,7 @@ app.post("/search", async (req, res) => {
 
     const vector = await embedText(userQuery);
 
+    // live Drive filter
     let pineconeFilter = undefined;
     if (LIVE_DRIVE_FILTER) {
       try {
@@ -331,6 +352,7 @@ app.post("/search", async (req, res) => {
       }
     }
 
+    // Pinecone v2 query — namespace chaining; only { vector, topK, includeMetadata, filter }
     const query = await index
       .namespace(clientId)
       .query({
@@ -414,7 +436,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
 (async () => {
   try {
     await ensurePineconeIndex();
-    index = pinecone.index(PINECONE_INDEX); // v2 handle
+    index = pinecone.index(PINECONE_INDEX); // ✅ v2 handle
     console.log(`[pinecone] using index "${PINECONE_INDEX}"`);
   } catch (e) {
     console.error("[pinecone] failed to ensure index:", e);
