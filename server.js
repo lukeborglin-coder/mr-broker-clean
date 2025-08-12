@@ -106,13 +106,20 @@ app.get("/debug/drive-list", async (req, res) => {
 
 app.get("/debug/pinecone", async (req, res) => {
   try {
-    const stats = await pinecone.describeIndexStats({ indexName: PINECONE_INDEX }).catch(async () => {
-      // if index missing, reflect that
-      const list = await pinecone.listIndexes();
-      return { missing: true, indexes: list.indexes || [] };
-    });
     const desc = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
-    res.json({ ok: true, index: PINECONE_INDEX, desc, stats });
+    let stats = null;
+    try {
+      const idx = pinecone.Index(PINECONE_INDEX);
+      stats = await idx.describeIndexStats(); // <-- correct place for describeIndexStats
+    } catch (e) {
+      stats = { error: e.message };
+    }
+    res.json({
+      ok: true,
+      index: PINECONE_INDEX,
+      desc,                       // desc?.status?.ready === true means it's usable
+      stats                       // high-level index stats or error if not created yet
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message, stack: e.stack });
   }
@@ -305,3 +312,4 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     console.log(`mr-broker running on :${PORT}`);
   });
 })();
+
