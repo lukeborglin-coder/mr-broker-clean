@@ -1,7 +1,5 @@
-// server.js — Pinecone v2 + Drive PDF ingest + strict buffer checks + clear diagnostics
-// - Fixes: never call pdf-parse without a buffer (prevents ./test/data/... ENOENT)
-// - Uses pinecone.index(...).namespace(...).query/upsert (v2 API)
-// - Adds /debug endpoints to verify what’s running
+// server.js — Pinecone v2 + Drive PDF ingest (guarded) + diagnostics
+// Fixes: import pdf-parse from internal path to avoid demo file fallback
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,15 +18,15 @@ const PORT = process.env.PORT || 3000;
 
 // 🔧 REQUIRED ENV
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
-const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID; // Google folder ID
-const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // path to service acct JSON
+const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
+const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 
 // Index config
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
-const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";        // "aws" or "gcp"
-const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1"; // e.g., "us-east-1"
+const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";
+const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1";
 const LIVE_DRIVE_FILTER = String(process.env.LIVE_DRIVE_FILTER || "true").toLowerCase() === "true";
 
 // Embedding model (1536 dims)
@@ -46,7 +44,7 @@ if (!GOOGLE_APPLICATION_CREDENTIALS || !fs.existsSync(GOOGLE_APPLICATION_CREDENT
 }
 const gauth = new google.auth.GoogleAuth({
   keyFile: GOOGLE_APPLICATION_CREDENTIALS,
-  scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"],
 });
 const drive = google.drive({ version: "v3", auth: gauth });
 
@@ -66,10 +64,9 @@ async function ensurePineconeIndex() {
     name: PINECONE_INDEX,
     dimension: EMBEDDING_DIMS,
     metric: "cosine",
-    spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } }
+    spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } },
   });
 
-  // wait until Ready
   for (let i = 0; i < 30; i++) {
     const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
     const ready = d?.status?.ready;
@@ -86,7 +83,7 @@ app.get("/debug/drive-env", (req, res) => {
   res.json({
     DRIVE_ROOT_FOLDER_ID,
     GOOGLE_APPLICATION_CREDENTIALS,
-    credsFileExists: !!(GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS))
+    credsFileExists: !!(GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(GOOGLE_APPLICATION_CREDENTIALS)),
   });
 });
 
@@ -98,7 +95,7 @@ app.get("/debug/drive-list", async (req, res) => {
       fields: "files(id,name,mimeType),nextPageToken",
       pageSize: 10,
       includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      supportsAllDrives: true,
     });
     res.json({ count: (r.data.files || []).length, sample: r.data.files || [] });
   } catch (e) {
@@ -162,8 +159,8 @@ app.get("/health", (req, res) => {
       pinecone: Boolean(PINECONE_API_KEY),
       index: PINECONE_INDEX,
       cloud: PINECONE_CLOUD,
-      region: PINECONE_REGION
-    }
+      region: PINECONE_REGION,
+    },
   });
 });
 
@@ -173,7 +170,7 @@ app.get("/env", (req, res) => {
     hasAuthToken: Boolean(AUTH_TOKEN),
     openaiKey: redact(OPENAI_API_KEY),
     pineconeKey: redact(PINECONE_API_KEY),
-    pineconeIndex: PINECONE_INDEX
+    pineconeIndex: PINECONE_INDEX,
   });
 });
 
@@ -181,7 +178,7 @@ app.get("/env", (req, res) => {
 async function embedText(text) {
   const { data } = await openai.embeddings.create({
     model: EMBEDDING_MODEL,
-    input: text
+    input: text,
   });
   return data[0].embedding;
 }
@@ -209,7 +206,7 @@ ${contextText}`;
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role: "user", content: prompt }],
-    temperature: 0.2
+    temperature: 0.2,
   });
 
   return resp.choices?.[0]?.message?.content?.trim() || "";
@@ -223,8 +220,6 @@ async function downloadDriveFileBuffer(fileId) {
     { fileId, alt: "media" },
     { responseType: "arraybuffer" }
   );
-  // Some Drive files (esp. Google Docs/Slides) are not binary PDFs.
-  // We only call this for files we already filtered as PDFs.
   if (!resp || !resp.data) {
     throw new Error(`Drive returned no data for fileId=${fileId}`);
   }
@@ -235,12 +230,16 @@ async function downloadDriveFileBuffer(fileId) {
   return buf;
 }
 
-// PDF → pages (STRICT: throw if no buffer)
+// PDF → pages using internal pdf-parse path to avoid demo fallback
 async function parsePdfPages(buffer) {
   if (!buffer || !buffer.length) {
     throw new Error("parsePdfPages called without a PDF buffer");
   }
-  const pdfParse = (await import("pdf-parse")).default; // dynamic import
+
+  // IMPORTANT: load the actual parser function, not the package entry
+  const mod = await import("pdf-parse/lib/pdf-parse.js");
+  const pdfParse = mod.default || mod; // support both ESM/CJS default shapes
+
   const parsed = await pdfParse(buffer);
   const raw = parsed.text || "";
   const pages = raw.split("\f");
@@ -268,7 +267,7 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
     vectors.push({
       id: `${fileId}_${page ?? 0}_${i}_${Date.now()}`,
       values,
-      metadata: { clientId, fileId, fileName, page, text }
+      metadata: { clientId, fileId, fileName, page, text },
     });
   }
   if (vectors.length) {
@@ -310,7 +309,7 @@ async function listDriveFileIds() {
       pageSize: 1000,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
-      pageToken
+      pageToken,
     });
     (resp.data.files || []).forEach((f) => {
       const mt = (f.mimeType || "").toLowerCase();
@@ -347,20 +346,18 @@ app.post("/search", async (req, res) => {
         return res.status(503).json({
           error: "Drive check failed. Verify credentials and folder ID.",
           detail: e.message,
-          stack: e.stack
+          stack: e.stack,
         });
       }
     }
 
     // Pinecone v2 query — namespace chaining; only { vector, topK, includeMetadata, filter }
-    const query = await index
-      .namespace(clientId)
-      .query({
-        vector,
-        topK: Number(topK) || 6,
-        includeMetadata: true,
-        filter: pineconeFilter
-      });
+    const query = await index.namespace(clientId).query({
+      vector,
+      topK: Number(topK) || 6,
+      includeMetadata: true,
+      filter: pineconeFilter,
+    });
 
     const matches = query.matches || [];
     const answer = await answerWithContext(userQuery, matches);
@@ -368,7 +365,7 @@ app.post("/search", async (req, res) => {
     const references = matches.map((m) => ({
       fileId: m.metadata?.fileId,
       fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
-      page: m.metadata?.page ?? m.metadata?.slide
+      page: m.metadata?.page ?? m.metadata?.slide,
     }));
 
     res.json({ answer, references, visuals: [] });
@@ -409,7 +406,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
         pageSize: 1000,
         includeItemsFromAllDrives: true,
         supportsAllDrives: true,
-        pageToken
+        pageToken,
       });
       (r.data.files || []).forEach((f) => {
         const mt = (f.mimeType || "").toLowerCase();
@@ -428,6 +425,30 @@ app.post("/admin/ingest-drive", async (req, res) => {
     res.json({ ok: true, clientId, files: files.length, message: "Ingest complete." });
   } catch (e) {
     console.error("[/admin/ingest-drive] error", e);
+    res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
+  }
+});
+
+// ---------- Extra: diagnose Drive quickly ----------
+app.post("/admin/diagnose-drive", async (req, res) => {
+  try {
+    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+    const r = await drive.files.list({
+      q,
+      fields: "files(id,name,mimeType)",
+      pageSize: 5,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+    });
+    const pdfs = (r.data.files || []).filter(f => (f.mimeType || "").toLowerCase().includes("pdf")).slice(0, 5);
+
+    const sizes = [];
+    for (const f of pdfs) {
+      const buf = await downloadDriveFileBuffer(f.id);
+      sizes.push({ id: f.id, name: f.name, bytes: buf.length });
+    }
+    res.json({ ok: true, sample: sizes });
+  } catch (e) {
     res.status(500).json({ error: e?.message || String(e), stack: e?.stack });
   }
 });
