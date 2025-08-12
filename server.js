@@ -18,13 +18,13 @@ const PORT = process.env.PORT || 3000;
 // 🔧 REQUIRED ENV
 const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID; // Google folder ID
-const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // path to JSON
+const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS; // path to service acct JSON
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 // Index config
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
 const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";        // "aws" or "gcp"
-const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1"; // ex: "us-east-1"
+const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1"; // e.g., "us-east-1"
 const LIVE_DRIVE_FILTER = String(process.env.LIVE_DRIVE_FILTER || "true").toLowerCase() === "true";
 
 // Embedding model (1536 dims)
@@ -53,7 +53,7 @@ const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 // Ensure index exists (serverless)
 async function ensurePineconeIndex() {
   const indexes = await pinecone.listIndexes();
-  const exists = indexes.indexes?.some(i => i.name === PINECONE_INDEX);
+  const exists = indexes.indexes?.some((i) => i.name === PINECONE_INDEX);
   if (exists) return;
 
   console.log(`[pinecone] creating index "${PINECONE_INDEX}" (dims=${EMBEDDING_DIMS}, region=${PINECONE_REGION})...`);
@@ -70,7 +70,7 @@ async function ensurePineconeIndex() {
     const ready = d.status?.ready;
     console.log(`[pinecone] status: ${ready ? "Ready" : "NotReady"}`);
     if (ready) break;
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
 }
 
@@ -163,12 +163,13 @@ async function embedText(text) {
 
 async function answerWithContext(question, contexts) {
   const contextText = contexts
-    .map((m, i) => `# Source ${i + 1}
+    .map(
+      (m, i) => `# Source ${i + 1}
 File: ${m?.metadata?.fileName || m?.metadata?.title || "Untitled"}
 Page: ${m?.metadata?.page ?? m?.metadata?.slide ?? "?"}
 ---
-${m?.metadata?.text || m?.metadata?.chunk || m?.metadata?.content || m?.values?.text || ""}
-`)
+${m?.metadata?.text || m?.metadata?.chunk || m?.metadata?.content || m?.values?.text || ""}`
+    )
     .join("\n\n");
 
   const prompt = `You are a market research analyst. Answer the user's question using ONLY the context below.
@@ -191,28 +192,28 @@ ${contextText}`;
 
 // ===== Drive → PDF → text → chunks → embeddings =====
 
-// Download a Drive file to a Buffer (binary)
+// Download a Drive file as a Buffer (arraybuffer is reliable on Render)
 async function downloadDriveFileBuffer(fileId) {
-  const { data } = await drive.files.get(
+  const resp = await drive.files.get(
     { fileId, alt: "media" },
-    { responseType: "stream" }
+    { responseType: "arraybuffer" }
   );
-  const chunks = [];
-  await new Promise((resolve, reject) => {
-    data.on("data", (d) => chunks.push(d));
-    data.on("end", resolve);
-    data.on("error", reject);
-  });
-  return Buffer.concat(chunks);
+  if (!resp || !resp.data) {
+    throw new Error(`Drive returned no data for fileId=${fileId}`);
+  }
+  return Buffer.from(resp.data);
 }
 
-// PDF → pages array (best-effort using form feed)
+// PDF → pages array (form feed splits from pdf-parse)
 async function parsePdfPages(buffer) {
+  if (!buffer || !buffer.length) {
+    throw new Error("parsePdfPages called without a PDF buffer");
+  }
   const pdfParse = (await import("pdf-parse")).default; // dynamic import
   const parsed = await pdfParse(buffer);
   const raw = parsed.text || "";
-  const pages = raw.split("\f"); // pdf-parse inserts \f between pages
-  return pages.map(p => p.trim()).filter(Boolean);
+  const pages = raw.split("\f");
+  return pages.map((p) => p.trim()).filter(Boolean);
 }
 
 // Simple text chunker with overlap
@@ -220,14 +221,13 @@ function chunkText(str, chunkSize = 2000, overlap = 200) {
   const out = [];
   let i = 0;
   while (i < str.length) {
-    const chunk = str.slice(i, i + chunkSize);
-    out.push(chunk);
+    out.push(str.slice(i, i + chunkSize));
     i += Math.max(1, chunkSize - overlap);
   }
   return out;
 }
 
-// Pinecone upsert for a set of chunks
+// Upsert a set of chunks for one file (stores page + filename)
 async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   const vectors = [];
   for (let i = 0; i < chunks.length; i++) {
@@ -244,8 +244,10 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
 
 // Ingest ONE Drive PDF
 async function ingestSingleDrivePdf({ clientId, fileId, fileName }) {
+  console.log(`[ingest] downloading "${fileName}" (${fileId})`);
   const buf = await downloadDriveFileBuffer(fileId);
-  const pages = await parsePdfPages(buf); // array of page strings
+  const pages = await parsePdfPages(buf);
+  console.log(`[ingest] parsed ${pages.length} pages from "${fileName}"`);
   for (let p = 0; p < pages.length; p++) {
     const pageText = pages[p];
     if (!pageText) continue;
@@ -268,12 +270,14 @@ async function listDriveFileIds() {
 
   do {
     const resp = await drive.files.list({
-      q, fields, pageToken,
+      q,
+      fields,
       pageSize: 1000,
       includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      supportsAllDrives: true,
+      pageToken
     });
-    (resp.data.files || []).forEach(f => {
+    (resp.data.files || []).forEach((f) => {
       const mt = (f.mimeType || "").toLowerCase();
       if (mt.includes("pdf")) ids.add(f.id);
     });
@@ -305,7 +309,10 @@ app.post("/search", async (req, res) => {
           : { fileId: { $in: ["__none__"] } };
       } catch (e) {
         console.error("[search] listDriveFileIds failed:", e);
-        return res.status(503).json({ error: "Drive check failed. Verify credentials and folder ID.", detail: e.message });
+        return res.status(503).json({
+          error: "Drive check failed. Verify credentials and folder ID.",
+          detail: e.message
+        });
       }
     }
 
@@ -326,7 +333,7 @@ app.post("/search", async (req, res) => {
     const matches = query.matches || [];
     const answer = await answerWithContext(userQuery, matches);
 
-    const references = matches.map(m => ({
+    const references = matches.map((m) => ({
       fileId: m.metadata?.fileId,
       fileName: m.metadata?.fileName || m.metadata?.title || "Untitled",
       page: m.metadata?.page ?? m.metadata?.slide
@@ -372,7 +379,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
         supportsAllDrives: true,
         pageToken
       });
-      (r.data.files || []).forEach(f => {
+      (r.data.files || []).forEach((f) => {
         const mt = (f.mimeType || "").toLowerCase();
         if (mt.includes("pdf")) files.push({ id: f.id, name: f.name });
       });
