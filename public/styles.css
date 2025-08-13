@@ -106,8 +106,8 @@ li { margin: 6px 0; }
 .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
 
 /* Table fallback */
-.table-wrap { overflow-x:auto; }
-.data-table { width:100%; border-collapse: collapse; font-size: 14px; }
+.table-wrap { overflow-x:auto; margin-top: 8px; }
+.data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
 .data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
 .data-table thead th { background:#f4f6fa; font-weight:700; }
 
