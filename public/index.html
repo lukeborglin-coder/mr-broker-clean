@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>COG GPT</title>
+  <title>COG gpt</title>
   <link rel="stylesheet" href="/styles.css" />
+  <!-- pdf.js for client-side fallback slide rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" integrity="sha512-4M1bQtm8Hq3mE/z39agaYp7k7iH7mG1Zr1wV9wRjQqFZsT4p1c9lN6dT1f9H7jv5t2q9nVJLLwJX5qXU6a1hAw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     :root { --brand:#ff7a00; --grey:#4b4b4b; }
     body { background:#f7f7f7; }
@@ -17,13 +19,13 @@
     .cards { display:grid; gap:16px }
     .visuals { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px }
     .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff }
-    .visual img { width:100%; height:180px; object-fit:cover; display:block; background:#fafafa }
+    .visual img, .visual canvas { width:100%; height:180px; object-fit:cover; display:block; background:#fafafa }
     .visual .cap { font-size:12px; padding:6px 8px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-    /* Modernized title to match logo feel */
-    .brandline { display:flex; align-items:center; gap:14px }
-    .brandtitle { font-weight:900; letter-spacing:.6px; font-size:28px; }
+    /* Header */
+    .brandline { display:flex; align-items:center; justify-content:space-between; }
+    .brandtitle { font-weight:900; letter-spacing:.6px; font-size:56px; line-height:1; } /* doubled size */
     .brandtitle .cog { color:var(--grey) }
-    .brandtitle .gpt { color:var(--brand); font-size:.55em; font-weight:900; margin-left:2px }
+    .brandtitle .gpt { color:var(--brand); font-weight:600; } /* not bold as COG */
     /* Hero finding card */
     .hero { background:#fff8ef; border:1px solid #ffd9b3; border-left:8px solid var(--brand); border-radius:12px; padding:18px 20px; }
     .hero .headline { font-size:18px; line-height:1.45; margin:0 0 .6rem 0 }
@@ -41,8 +43,8 @@
 <body>
   <div class="page">
     <header class="header brandline">
-      <div class="brandtitle"><span class="cog">COG</span><span class="gpt">GPT</span></div>
-      <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
+      <div class="brandtitle"><span class="cog">COG</span><span class="gpt">gpt</span></div>
+      <!-- removed logo on the right -->
     </header>
 
     <section class="search">
@@ -65,7 +67,7 @@
         <button id="showMoreBtn" class="button link" style="display:none;background:none;border:0;color:#0a58ca;cursor:pointer;padding:0">Show more</button>
       </section>
 
-      <!-- Report Slides (static images) -->
+      <!-- Report Slides (static images with pdf.js fallback) -->
       <section class="card">
         <h2>Report Slides</h2>
         <div id="visuals" class="visuals"><div class="muted">No slides yet.</div></div>
@@ -86,12 +88,8 @@
     // Normalize any model tags to superscripts with NO space before them.
     function toSuperscripts(text) {
       if (!text) return "";
-      // normalize "[n]" -> "^n^"
-      text = text.replace(/\[(\d+)\]/g, "^$1^");
-      // remove spaces before and after ^n^
-      text = text.replace(/\s*\^(\d+)\^\s*/g, (_, n) => `<sup>${n}</sup>`);
-      // if model output " ... 12" try to catch ^1^2 already converted; nothing else to do
-      return text;
+      text = text.replace(/\[(\d+)\]/g, "^$1^"); // normalize
+      return text.replace(/\s*\^(\d+)\^\s*/g, (_, n) => `<sup>${n}</sup>`);
     }
 
     function renderHeadline(obj) {
@@ -123,17 +121,38 @@
       btn.onclick = () => { el.innerHTML = toHtml(_allSupport); btn.style.display = "none"; };
     }
 
-    // robust <img> error fallback (adds cache-buster then placeholder)
-    function imgOnError(img, placeholderLabel) {
-      const url = new URL(img.src, location.origin);
-      if (!url.searchParams.get("_retry")) {
-        url.searchParams.set("_retry", Date.now().toString());
-        img.src = url.toString();
-      } else {
-        img.onerror = null;
-        img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAABmJLR0QA/wD/AP+gvaeTAAAAPklEQVR4nO3BMQEAAADCoPdPbQ8HFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwG6kAAAUl7mNwAAAAASUVORK5CYII=";
-        img.alt = placeholderLabel;
+    // --- slides rendering with robust fallbacks ---
+    async function renderPdfToCanvas(container, fileId, page) {
+      try {
+        const resp = await fetch(`${API_BASE}/file/pdf?fileId=${encodeURIComponent(fileId)}`, { headers: { "x-auth-token": AUTH_TOKEN } });
+        if (!resp.ok) throw new Error(`pdf ${resp.status}`);
+        const buf = await resp.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: buf, useWorker: false }).promise;
+        const pg = await pdf.getPage(Math.max(1, Number(page)||1));
+        const viewport = pg.getViewport({ scale: 1.2 });
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        await pg.render({ canvasContext: ctx, viewport }).promise;
+        // size-crop to fit card height
+        canvas.style.width = "100%"; canvas.style.height = "180px"; canvas.style.objectFit = "cover";
+        container.innerHTML = ""; container.appendChild(canvas);
+      } catch (e) {
+        // last-resort placeholder
+        container.innerHTML = `<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAABmJLR0QA/wD/AP+gvaeTAAAAPklEQVR4nO3BMQEAAADCoPdPbQ8HFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwG6kAAAUl7mNwAAAAASUVORK5CYII=" alt="slide" />`;
       }
+    }
+
+    function attachImgFallbacks(el, items) {
+      [...el.querySelectorAll("img[data-fileid]")].forEach((img, i) => {
+        img.onerror = async () => {
+          // replace the whole <img> with client-side rendered canvas
+          const wrap = img.parentElement;
+          const fileId = img.getAttribute("data-fileid");
+          const page = img.getAttribute("data-page") || "1";
+          await renderPdfToCanvas(wrap, fileId, page);
+        };
+      });
     }
 
     function renderVisuals(visuals) {
@@ -142,17 +161,14 @@
         el.innerHTML = `<div class="muted">No slides found.</div>`;
         return;
       }
-      const list = visuals.slice(0, 5);
+      const list = visuals.slice(0, 6); // show up to 6
       el.innerHTML = list.map(v => `
         <div class="visual">
-          <img src="${v.imageUrl}" alt="${v.fileName} p.${v.page}" />
+          <img data-fileid="${v.fileId}" data-page="${v.page || 1}" src="${v.imageUrl}" alt="${v.fileName} p.${v.page}" />
           <div class="cap">${v.fileName} (p.${v.page || "?"})</div>
         </div>
       `).join("");
-      // attach onerror fallback
-      [...el.querySelectorAll("img")].forEach((img, i) => {
-        img.onerror = () => imgOnError(img, list[i].fileName);
-      });
+      attachImgFallbacks(el, list);
     }
 
     function renderRefs(refs) {
