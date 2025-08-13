@@ -26,9 +26,12 @@
     <!-- Search -->
     <section class="search">
       <form id="qform" autocomplete="off">
-        <input id="q" type="text"
-               placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”" />
-        <button id="ask" type="submit">Ask</button>
+        <textarea id="q" rows="3"
+          placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”"></textarea>
+        <div class="search-actions">
+          <button id="ask" type="submit" title="Submit (Ctrl+Enter)">Ask</button>
+          <div class="hint muted">Press <b>Ctrl+Enter</b> to submit</div>
+        </div>
       </form>
     </section>
 
@@ -68,8 +71,8 @@
   <script>
     // ================= helpers =================
     const qs = (s, r=document) => r.querySelector(s);
-    const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
+    const safeArray = v => Array.isArray(v) ? v : [];
 
     function el(tag, attrs = {}, children = []) {
       const node = document.createElement(tag);
@@ -118,14 +121,16 @@
     }
     function renderBullets(items = []) {
       const ul = qs("#bullets"); ul.innerHTML = "";
-      if (!items.length) return ul.appendChild(el("div",{class:"muted"},"No supporting detail returned."));
-      items.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
+      const arr = safeArray(items);
+      if (!arr.length) return ul.appendChild(el("div",{class:"muted"},"No supporting detail returned."));
+      arr.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
     }
     function renderQuotes(items = []) {
       const root = qs("#quotes"); root.innerHTML = "";
-      if (!items.length) { root.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
+      const arr = safeArray(items);
+      if (!arr.length) { root.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
 
-      items.forEach(item => {
+      arr.forEach(item => {
         let text="", tag="";
         if (item && typeof item === "object") { text = item.text || item.quote || ""; tag = item.tag || item.respondent || ""; }
         else { text = String(item || ""); }
@@ -142,9 +147,10 @@
     function renderCharts(visuals = [], maxCharts = 4) {
       const grid = qs("#charts"); const note = qs("#chartNote");
       grid.innerHTML = "";
+      const arr = safeArray(visuals);
       let drawn = 0;
 
-      visuals.slice(0, maxCharts).forEach(series => {
+      arr.slice(0, maxCharts).forEach(series => {
         if (!series || !Array.isArray(series.points) || series.points.length < 2) return;
         const labels = series.points.map(p => p.x);
         const values = series.points.map(p => Number(p.y));
@@ -173,9 +179,10 @@
     }
     function renderRefs(refs = []) {
       const list = qs("#refs"); list.innerHTML = "";
-      if (!refs.length) { list.appendChild(el("div",{class:"muted"},"No sources returned.")); return; }
+      const arr = safeArray(refs);
+      if (!arr.length) { list.appendChild(el("div",{class:"muted"},"No sources returned.")); return; }
 
-      refs.forEach(r => {
+      arr.forEach(r => {
         const title = niceTitle(r.fileName || "Report");
         const label = humanSlideLabel(r);
         const url = slideLink(r.fileUrl, r.slideIndex);
@@ -200,14 +207,20 @@
       });
 
       if (!res.ok) {
-        // Better console detail to debug quickly
         let bodyText = "";
         try { bodyText = await res.text(); } catch {}
         console.error("Search failed:", res.status, res.statusText, "Body:", bodyText);
         throw new Error("Search failed: " + res.status);
       }
 
-      const data = await res.json();
+      // Some backends return text/plain; guard JSON parse
+      let data = {};
+      const text = await res.text();
+      try { data = text ? JSON.parse(text) : {}; }
+      catch (e) {
+        console.warn("Non‑JSON response from /search:", text);
+        data = {};
+      }
 
       // tolerate slight key differences
       const answer  = has(data,"answer")  ? data.answer  : (data.summary ?? data.result ?? "");
@@ -226,12 +239,21 @@
       show(qs("#results"));
     }
 
+    // Submit
     document.getElementById("qform").addEventListener("submit", async (e) => {
       e.preventDefault();
       const q = document.getElementById("q").value.trim();
       if (!q) return;
       try { await runQuery(q); }
       catch (err) { alert("Search error. See console for details."); }
+    });
+
+    // Ctrl+Enter to submit from textarea
+    document.getElementById("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        document.getElementById("qform").dispatchEvent(new Event("submit"));
+      }
     });
 
     // No auto-run. Panels stay hidden until a question is asked.
