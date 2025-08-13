@@ -76,7 +76,11 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+      // IMPORTANT: skip null/undefined children to avoid appendChild(null) errors
+      [].concat(children).forEach(c => {
+        if (c === null || c === undefined) return;
+        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+      });
       return node;
     }
 
@@ -120,7 +124,10 @@
     function renderBullets(items = []) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const arr = Array.isArray(items) ? items : [];
-      if (!arr.length) { ul.appendChild(el("div",{class:"muted"},"No supporting detail returned.")); return; }
+      if (!arr.length) {
+        ul.appendChild(el("li",{class:"muted"},"No supporting detail returned."));
+        return;
+      }
       arr.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
     }
 
@@ -236,18 +243,16 @@
       }
 
       try {
-        // ---- NEW: map your 'structured' schema ----
+        // Map your 'structured' schema
         const s = data.structured || {};
         const headline = s.headline || {};
         const supportingObjs = Array.isArray(s.supporting) ? s.supporting : [];
 
         const answer  = headline.paragraph || data.answer || data.summary || data.result || "";
-        // Merge headline bullets + supporting.text into one list
         const bullets = []
           .concat(Array.isArray(headline.bullets) ? headline.bullets : [])
           .concat(supportingObjs.map(o => o?.text).filter(Boolean));
 
-        // Quotes come as strings with ^n^ markers and extra quotes
         const quotes  = Array.isArray(s.quotes) ? s.quotes : (data.quotes || []);
         const visuals = data.visuals || data.charts || [];
         const refs    = data.references || data.refs || [];
