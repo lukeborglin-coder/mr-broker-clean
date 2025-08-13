@@ -5,17 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
-  <!-- Charts for auto-generated visuals -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-    /* helpers so you don't need to touch styles.css */
-    .header { position: relative; }
-    .beta-badge {
-      position: absolute; right: 0; top: 0;
-      font-weight: 700; letter-spacing: .08em;
-      color: #b9b9b9; font-size: 14px; padding: 4px 0;
-      user-select: none;
-    }
+    /* keep your existing styles.css; these are tiny helpers only */
+    .header { position: relative; align-items: center; display:flex; justify-content: space-between; }
+    .beta-badge { position:absolute; right:0; top:0; color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:14px; }
     .charts-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
     .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
     .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
@@ -35,8 +29,8 @@
     <!-- Header -->
     <header class="header">
       <h1 class="title">COG<span style="color:#ff7a00;">gpt</span></h1>
-      <div class="beta-badge">BETA</div> <!-- Top-right light grey -->
-      <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
+      <!-- Removed company logo on the right; keeping a subtle BETA badge -->
+      <div class="beta-badge">BETA</div>
     </header>
 
     <!-- Search -->
@@ -51,28 +45,26 @@
     <!-- Answer -->
     <section id="answer" class="callout" style="display:none;"></section>
 
-    <!-- Supporting Detail (bullets: no periods at end) -->
+    <!-- Supporting Detail (bullets; no trailing periods) -->
     <section class="panel">
       <h3>Supporting Detail</h3>
       <ul id="bullets"></ul>
     </section>
 
-    <!-- Supporting Quotes (no bullets, no extra quotes; italic text + respondent tag below) -->
+    <!-- Supporting Quotes (no bullets; italic quotes + respondent tag under) -->
     <section class="panel">
       <h3>Supporting Quotes</h3>
       <div id="quotes" class="quote-wrap"></div>
     </section>
 
-    <!-- Visuals (charts only; we no longer try to render PDF/slide thumbnails) -->
+    <!-- Visuals (charts only) -->
     <section class="panel">
       <h3>Visuals</h3>
       <div id="charts" class="charts-grid"></div>
-      <p id="chartNote" class="muted" style="display:none;">
-        Auto‑generated visuals from extracted numbers.
-      </p>
+      <p id="chartNote" class="muted" style="display:none;">Auto‑generated visuals from extracted numbers.</p>
     </section>
 
-    <!-- Report References (underscores → spaces; hide p.1 unless a specific slide/page is provided) -->
+    <!-- Report References -->
     <section class="panel">
       <h3>Report References</h3>
       <div id="refs" class="ref-list"></div>
@@ -80,7 +72,9 @@
   </div>
 
   <script>
-    // ---------- Helpers ----------
+    // ---------- helpers ----------
+    const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
+
     function cleanOuterQuotes(s) {
       if (!s) return "";
       return String(s).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
@@ -88,12 +82,7 @@
     function stripFinalPeriodForBullets(s) {
       return String(s || "").trim().replace(/[.。]\s*$/, "");
     }
-    function humanSlideLabel(ref) {
-      // Prefer explicit slideIndex; otherwise show page if >1; else nothing.
-      if (typeof ref.slideIndex === "number") return `Slide ${ref.slideIndex + 1}`;
-      if (typeof ref.page === "number" && ref.page > 1) return `p.${ref.page}`;
-      return "";
-    }
+    function niceTitle(s) { return (s || "").replace(/_/g, " "); }
     function slideLink(url, slideIndex) {
       if (!url) return "#";
       if (typeof slideIndex === "number") {
@@ -102,16 +91,15 @@
       }
       return url;
     }
-    function niceTitle(s) {
-      return (s || "").replace(/_/g, " ");
+    function humanSlideLabel(ref) {
+      if (typeof ref.slideIndex === "number") return `Slide ${ref.slideIndex + 1}`;
+      if (typeof ref.page === "number" && ref.page > 1) return `p.${ref.page}`;
+      return "";
     }
-    // Extract optional respondent tag at the end like: ...." - Evrysdi Patient
     function splitQuoteAndTag(s) {
       const txt = cleanOuterQuotes(s);
-      const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/); // capture trailing dash + tag
-      const quote = m ? m[1].trim() : txt;
-      const tag = m && m[2] ? m[2].trim() : "";
-      return { quote, tag };
+      const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
+      return { quote: (m ? m[1] : txt).trim(), tag: (m && m[2] ? m[2] : "").trim() };
     }
     function el(tag, attrs = {}, children = []) {
       const node = document.createElement(tag);
@@ -120,56 +108,37 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      for (const c of [].concat(children)) {
-        if (typeof c === "string") node.appendChild(document.createTextNode(c));
-        else if (c) node.appendChild(c);
-      }
+      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
       return node;
     }
 
-    // ---------- Renderers ----------
+    // ---------- renderers ----------
     function renderAnswer(text) {
       const box = document.getElementById("answer");
       box.textContent = text || "No answer.";
       box.style.display = "block";
     }
-
     function renderBullets(items = []) {
-      const ul = document.getElementById("bullets");
-      ul.innerHTML = "";
-      items.forEach(x => {
-        ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x)));
-      });
+      const ul = document.getElementById("bullets"); ul.innerHTML = "";
+      if (!items.length) return;
+      items.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
     }
-
-    // No bullets for quotes; each quote is a block with italic line + smaller respondent tag
     function renderQuotes(items = []) {
-      const container = document.getElementById("quotes");
-      container.innerHTML = "";
-      if (!items.length) {
-        container.appendChild(el("div", { class: "muted" }, "No quotes returned."));
-        return;
-      }
+      const wrap = document.getElementById("quotes"); wrap.innerHTML = "";
+      if (!items.length) { wrap.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
       items.forEach(item => {
-        // Accept either a string or an object { text, tag }
-        let text = "", tag = "";
-        if (item && typeof item === "object") {
-          text = item.text || item.quote || "";
-          tag = item.tag || item.respondent || "";
-        } else {
-          text = String(item || "");
-        }
-        const { quote, tag: parsedTag } = splitQuoteAndTag(text);
-        if (!tag) tag = parsedTag; // prefer explicit tag, else parsed
+        let text="", tag="";
+        if (item && typeof item === "object") { text = item.text || item.quote || ""; tag = item.tag || item.respondent || ""; }
+        else { text = String(item || ""); }
+        const parsed = splitQuoteAndTag(text);
+        if (!tag) tag = parsed.tag;
 
         const block = el("div", { class: "quote-item" });
-        block.appendChild(el("p", { class: "quote-text" }, quote));
+        block.appendChild(el("p", { class: "quote-text" }, parsed.quote));
         if (tag) block.appendChild(el("div", { class: "quote-tag" }, "— " + tag));
-        container.appendChild(block);
+        wrap.appendChild(block);
       });
     }
-
-    // Strictly render CHARTS from numeric series (no thumbnails)
     function renderCharts(visuals = [], maxCharts = 4) {
       const grid = document.getElementById("charts");
       const note = document.getElementById("chartNote");
@@ -178,15 +147,13 @@
 
       visuals.slice(0, maxCharts).forEach(series => {
         if (!series || !Array.isArray(series.points) || series.points.length < 2) return;
+        const labels = series.points.map(p => p.x);
+        const values = series.points.map(p => Number(p.y));
 
         const card = el("div", { class: "chart-card" });
         card.appendChild(el("h4", {}, series.title || "Chart"));
-        const canvas = el("canvas");
-        card.appendChild(canvas);
+        const canvas = el("canvas"); card.appendChild(canvas);
         grid.appendChild(card);
-
-        const labels = series.points.map(p => p.x);
-        const values = series.points.map(p => Number(p.y));
 
         new Chart(canvas.getContext("2d"), {
           type: (series.type === "bar" ? "bar" : "line"),
@@ -201,22 +168,16 @@
       });
 
       note.style.display = drawn ? "block" : "none";
-      if (!drawn) grid.appendChild(el("div", { class: "muted" }, "No chartable data found."));
+      if (!drawn) grid.appendChild(el("div",{class:"muted"},"No chartable data found."));
     }
-
     function renderRefs(refs = []) {
-      const list = document.getElementById("refs");
-      list.innerHTML = "";
-      if (!refs.length) {
-        list.appendChild(el("div", { class: "muted" }, "No sources returned."));
-        return;
-      }
+      const list = document.getElementById("refs"); list.innerHTML = "";
+      if (!refs.length) { list.appendChild(el("div",{class:"muted"},"No sources returned.")); return; }
 
       refs.forEach(r => {
         const title = niceTitle(r.fileName || "Report");
         const label = humanSlideLabel(r);
         const url = slideLink(r.fileUrl, r.slideIndex);
-
         const item = el("div", { class: "ref-item" }, [
           el("a", { href: url, target: "_blank", rel: "noopener" }, title),
           label ? el("div", { class: "muted" }, label) : null,
@@ -226,29 +187,34 @@
       });
     }
 
-    // ---------- Fetch/search glue ----------
+    // ---------- fetch/search ----------
     async function runQuery(userQuery) {
       const res = await fetch("/search", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-auth-token": (window.AUTH_TOKEN || "")
-        },
-        body: JSON.stringify({
-          clientId: "genentech",
-          userQuery,
-          topK: 6
-        })
+        headers: { "Content-Type": "application/json" },
+        // DO NOT send x-auth-token from browser; server protects API itself
+        body: JSON.stringify({ clientId: "genentech", userQuery, topK: 6 })
       });
       if (!res.ok) throw new Error("Search failed: " + res.status);
       const data = await res.json();
 
-      // Expected payload keys (tolerant to variants)
-      renderAnswer(data.answer || "");
-      renderBullets(data.bullets || data.supporting || []);
-      renderQuotes(data.quotes || data.supportingQuotes || []);
-      renderCharts(data.visuals || []);                 // charts only
-      renderRefs(data.references || data.refs || []);
+      // tolerant field picks (your backend sometimes varies):
+      const answer =
+        data.answer ?? data.summary ?? data.result ?? "";
+      const bullets =
+        data.bullets ?? data.supporting ?? data.keyFindings ?? [];
+      const quotes =
+        data.quotes ?? data.supportingQuotes ?? [];
+      const visuals =
+        data.visuals ?? data.charts ?? [];
+      const refs =
+        data.references ?? data.refs ?? [];
+
+      renderAnswer(answer);
+      renderBullets(bullets);
+      renderQuotes(quotes);
+      renderCharts(visuals);
+      renderRefs(refs);
     }
 
     document.getElementById("qform").addEventListener("submit", async (e) => {
@@ -259,7 +225,7 @@
       catch (err) { console.error(err); alert("Search error. See console for details."); }
     });
 
-    // auto-run once for demo
+    // auto-run once for the default value
     window.addEventListener("DOMContentLoaded", () => {
       const q = document.getElementById("q").value.trim();
       if (q) document.getElementById("qform").dispatchEvent(new Event("submit"));
