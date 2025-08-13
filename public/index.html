@@ -6,7 +6,6 @@
   <title>Cognitive Consulting — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    /* minimal helpers only; your styles.css still drives the look */
     .prose p { margin: 0 0 .75rem }
     .prose ul { margin: .5rem 0 .75rem 1.25rem }
     .prose li { margin: .25rem 0 }
@@ -15,7 +14,6 @@
     .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff }
     .visual img { width:100%; height:180px; object-fit:cover; display:block }
     .visual .cap { font-size:12px; padding:6px 8px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-    /* make search bar full width and orange Ask like before */
     .search { display:flex; gap:8px; align-items:center }
     .search-input { flex:1 }
     .button.ask { background:#ff7a00; color:white; border:none; padding:10px 16px; border-radius:8px; cursor:pointer }
@@ -25,31 +23,26 @@
 <body>
   <div class="page">
 
-    <!-- Header -->
     <header class="header">
       <h1 class="title">Research Q&amp;A</h1>
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
     </header>
 
-    <!-- Search -->
     <section class="search">
       <input id="q" class="search-input" placeholder="Ask about satisfaction, NPS, drivers, trends..." />
       <button id="ask" class="button ask" type="button">Ask</button>
     </section>
 
-    <!-- Key Findings -->
     <section class="card">
       <h2>Key Findings</h2>
       <div id="answer" class="prose muted">Ask a question to see findings…</div>
     </section>
 
-    <!-- Supporting Details -->
     <section class="card">
       <h2>Supporting Details</h2>
       <div id="visuals" class="visuals"><div class="muted">No supporting visuals yet.</div></div>
     </section>
 
-    <!-- References -->
     <section class="card">
       <h2>References</h2>
       <ul id="refs"></ul>
@@ -97,17 +90,12 @@
 
     function renderRefs(refs) {
       const el = document.getElementById("refs");
-      if (!refs || refs.length === 0) {
-        el.innerHTML = `<li class="muted">No references.</li>`;
-        return;
-      }
-      // Dedup just in case & strip ".pdf" already handled by server
-      const seen = new Set();
+      if (!refs || refs.length === 0) { el.innerHTML = `<li class="muted">No references.</li>`; return; }
       const items = [];
+      const seen = new Set();
       for (const r of refs) {
-        const key = r.fileId;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        if (seen.has(r.fileId)) continue;
+        seen.add(r.fileId);
         items.push(`<li>${r.fileName}</li>`);
       }
       el.innerHTML = items.join("");
@@ -136,10 +124,7 @@
           headers: { "Content-Type": "application/json", "x-auth-token": AUTH_TOKEN },
           body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 6 })
         });
-        if (!resp.ok) {
-          const t = await resp.text().catch(() => "");
-          throw new Error(`${resp.status} ${resp.statusText} ${t}`);
-        }
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         const data = await resp.json();
         renderAnswer(data.answer);
         renderVisuals(data.visuals);
