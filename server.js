@@ -1,4 +1,4 @@
-// server.js — Pinecone v2 + Google Drive + exact-slide PNG previews + narrative answers + SSE ingest
+// server.js — Pinecone v2 + Google Drive + exact-slide PNG previews (public) + structured/narrative answers + SSE ingest
 
 import fs from "node:fs";
 import path from "node:path";
@@ -100,7 +100,71 @@ app.get("/debug/drive-env", (req, res) => {
   });
 });
 
-// ---------- Auth guard ----------
+// ---------- Helpers (general) ----------
+function cleanReportName(name) {
+  if (!name) return "Untitled";
+  let n = String(name).replace(/\.pdf$/i, "");
+  // remove trailing date-like or wave tokens: _111324, _20250115, -W6, _v2, etc.
+  n = n.replace(/[\s_-]*(\d{6,8}|w\d+|W\d+|v\d+|V\d+)$/i, "");
+  return n.trim();
+}
+
+// ---------- Page PNG preview (exact slide) — PUBLIC (no auth header needed) ----------
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { createCanvas } from "canvas";
+
+const PREVIEW_DIR = "/tmp/previews";
+if (!fs.existsSync(PREVIEW_DIR)) fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+
+async function downloadDriveFileBuffer(fileId) {
+  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+  if (!resp || !resp.data) throw new Error(`No data for fileId=${fileId}`);
+  const buf = Buffer.from(resp.data);
+  if (!buf.length) throw new Error(`Empty buffer for fileId=${fileId}`);
+  return buf;
+}
+
+async function renderPdfPagePng(fileId, pageNumber) {
+  const safeId = String(fileId).replace(/[^a-zA-Z0-9_-]/g, "");
+  const pageNum = Math.max(1, Number(pageNumber) || 1);
+  const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
+  if (fs.existsSync(pngPath)) return pngPath;
+
+  const data = await downloadDriveFileBuffer(fileId);
+  const pdf = await getDocument({ data, useWorker: false }).promise;
+  const page = await pdf.getPage(pageNum);
+
+  const scale = 1.5; // image quality
+  const viewport = page.getViewport({ scale });
+  const canvas = createCanvas(viewport.width, viewport.height);
+  const ctx = canvas.getContext("2d");
+
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  await new Promise((resolve, reject) => {
+    const out = fs.createWriteStream(pngPath);
+    canvas.createPNGStream().pipe(out);
+    out.on("finish", resolve);
+    out.on("error", reject);
+  });
+
+  return pngPath;
+}
+
+app.get("/preview/page.png", async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "");
+    const page = Number(req.query.page || 1);
+    if (!fileId) return res.status(400).send("fileId required");
+    const pngPath = await renderPdfPagePng(fileId, page);
+    res.type("image/png");
+    fs.createReadStream(pngPath).pipe(res);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+// ---------- Auth guard (everything below requires x-auth-token) ----------
 app.use((req, res, next) => {
   if (!AUTH_TOKEN) return next();
   if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN) {
@@ -172,66 +236,12 @@ app.get("/drive/files/flat", async (req, res) => {
   }
 });
 
-// ---------- Helpers ----------
+// ---------- Embedding + Ingest helpers ----------
 async function embedText(text) {
   const { data } = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return data[0].embedding;
 }
 
-// Conversational answer template
-async function answerWithContext(question, contexts) {
-  const contextText = contexts
-    .map((m, i) => `# Source ${i + 1}
-File: ${m?.metadata?.fileName || "Untitled"}  |  Page: ${m?.metadata?.page ?? "?"}
----
-${m?.metadata?.text || ""}`)
-    .join("\n\n");
-
-  const prompt = `You are a pharma market-research analyst writing client-ready insights.
-Answer the question USING ONLY the context. Be conversational and concise.
-
-Write in this structure:
-1) One-sentence headline answer (narrative), e.g., "Evrysdi's latest NPS is 43% (2024 SMA Evrysdi HCP Patient ATU W6 Report)."
-2) Then bullets for trend and supporting insight, e.g.:
-   - Prior NPS readings in order (with % and source file names)
-   - Notable directional changes (e.g., "up from 20% to 43%")
-   - Any relevant comparator
-
-Rules:
-- Do NOT invent numbers or sources—only use the context.
-- If the latest value or sources aren’t present, say you don’t have enough information.
-- Keep to 3–5 bullets maximum.
-
-Question:
-${question}
-
-Context:
-${contextText}`;
-
-  const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.2,
-  });
-  return r.choices?.[0]?.message?.content?.trim() || "";
-}
-
-// --- Drive helpers
-async function downloadDriveFileMeta(fileId) {
-  const { data } = await drive.files.get({
-    fileId,
-    fields: "id,name,mimeType,size",
-    supportsAllDrives: true,
-  });
-  return data;
-}
-async function downloadDriveFileBuffer(fileId) {
-  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
-  if (!resp || !resp.data) throw new Error(`No data for fileId=${fileId}`);
-  const buf = Buffer.from(resp.data);
-  if (!buf.length) throw new Error(`Empty buffer for fileId=${fileId}`);
-  return buf;
-}
 async function parsePdfPages(buffer) {
   if (!buffer?.length) throw new Error("parsePdfPages: missing buffer");
   let fn = null;
@@ -282,52 +292,59 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Inf
   }
 }
 
-// ---------- Page PNG preview (exact slide) ----------
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { createCanvas } from "canvas";
+// ---------- Answering (structured JSON for UI) ----------
+async function answerWithContextStructured(question, contexts) {
+  const contextText = contexts
+    .map((m, i) => `# Source ${i + 1}
+File: ${m?.metadata?.fileName || "Untitled"}  |  Page: ${m?.metadata?.page ?? "?"}
+---
+${m?.metadata?.text || ""}`)
+    .join("\n\n");
 
-const PREVIEW_DIR = "/tmp/previews";
-if (!fs.existsSync(PREVIEW_DIR)) fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+  const prompt = `You are a pharma market-research analyst writing client-ready insights.
+Answer USING ONLY the context. Output STRICT JSON with this shape:
 
-async function renderPdfPagePng(fileId, pageNumber) {
-  const safeId = String(fileId).replace(/[^a-zA-Z0-9_-]/g, "");
-  const pageNum = Math.max(1, Number(pageNumber) || 1);
-  const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
-  if (fs.existsSync(pngPath)) return pngPath;
-
-  const data = await downloadDriveFileBuffer(fileId);
-  const pdf = await getDocument({ data, useWorker: false }).promise;
-  const page = await pdf.getPage(pageNum);
-
-  const scale = 1.5; // image quality
-  const viewport = page.getViewport({ scale });
-  const canvas = createCanvas(viewport.width, viewport.height);
-  const ctx = canvas.getContext("2d");
-
-  await page.render({ canvasContext: ctx, viewport }).promise;
-
-  await new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(pngPath);
-    canvas.createPNGStream().pipe(out);
-    out.on("finish", resolve);
-    out.on("error", reject);
-  });
-
-  return pngPath;
+{
+  "headline": "One-sentence (or two) narrative answer to the user's question.",
+  "bullets": [
+    { "text": "supporting point concisely stated with numbers if present", "sourceFile": "Exact file name as shown in the context", "page": 12 },
+    ...
+  ]
 }
 
-app.get("/preview/page.png", async (req, res) => {
+Rules:
+- "headline" is narrative (not a bullet), client-ready.
+- 1 to 5 bullets MAX. If more exist, choose the most decision-relevant.
+- Each bullet MUST include sourceFile (from the Context 'File:' line) and page number if available.
+- Do NOT invent numbers or sources; if unknown, omit the bullet.
+
+Question:
+${question}
+
+Context:
+${contextText}`;
+
+  const r = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.2,
+    response_format: { type: "json_object" }
+  });
+
+  let obj = {};
   try {
-    const fileId = String(req.query.fileId || "");
-    const page = Number(req.query.page || 1);
-    if (!fileId) return res.status(400).send("fileId required");
-    const pngPath = await renderPdfPagePng(fileId, page);
-    res.type("image/png");
-    fs.createReadStream(pngPath).pipe(res);
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
+    obj = JSON.parse(r.choices?.[0]?.message?.content || "{}");
+  } catch {
+    obj = { headline: "", bullets: [] };
   }
-});
+  // sanitize bullets 1..5
+  const bullets = Array.isArray(obj.bullets) ? obj.bullets.slice(0, 5).map(b => ({
+    text: String(b?.text || "").trim(),
+    sourceFile: cleanReportName(String(b?.sourceFile || "")),
+    page: (b?.page && Number(b.page)) || undefined
+  })).filter(b => b.text) : [];
+  return { headline: String(obj.headline || "").trim(), bullets };
+}
 
 // ---------- Live Drive allowlist for search ----------
 let _driveCache = { ids: new Set(), ts: 0 };
@@ -357,11 +374,11 @@ async function listDriveFileIds() {
   return ids;
 }
 
-// ---------- SEARCH (returns page images + deduped refs + narrative) ----------
+// ---------- SEARCH (structured answer + page images + deduped clean refs) ----------
 app.post("/search", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-    const { clientId = "demo", userQuery, topK = 6 } = req.body || {};
+    const { clientId = "demo", userQuery, topK = 10 } = req.body || {};
     if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
@@ -374,22 +391,23 @@ app.post("/search", async (req, res) => {
 
     const q = await index.namespace(clientId).query({
       vector,
-      topK: Number(topK) || 6,
+      topK: Number(topK) || 10,
       includeMetadata: true,
       filter: pineconeFilter,
     });
 
     const matches = q.matches || [];
-    const answer = await answerWithContext(userQuery, matches);
 
-    // Dedup references by fileId; strip ".pdf" from names
+    const structured = await answerWithContextStructured(userQuery, matches);
+
+    // Dedup references by fileId; strip ".pdf" and trailing date-like tokens
     const seenRef = new Set();
     const references = [];
     for (const m of matches) {
       const fid = m.metadata?.fileId;
       if (!fid || seenRef.has(fid)) continue;
       seenRef.add(fid);
-      const cleanName = (m.metadata?.fileName || "Untitled").replace(/\.pdf$/i, "");
+      const cleanName = cleanReportName(m.metadata?.fileName || "Untitled");
       references.push({
         fileId: fid,
         fileName: cleanName,
@@ -397,7 +415,7 @@ app.post("/search", async (req, res) => {
       });
     }
 
-    // Visuals: concrete page PNGs (limit 4)
+    // Visuals: exact page PNGs (up to 5 unique fileId+page)
     const seenVis = new Set();
     const visuals = [];
     for (const m of matches) {
@@ -408,12 +426,12 @@ app.post("/search", async (req, res) => {
       if (seenVis.has(key)) continue;
       seenVis.add(key);
       const imageUrl = `/preview/page.png?fileId=${encodeURIComponent(fid)}&page=${encodeURIComponent(page)}`;
-      const cleanName = (m.metadata?.fileName || "Untitled").replace(/\.pdf$/i, "");
+      const cleanName = cleanReportName(m.metadata?.fileName || "Untitled");
       visuals.push({ fileId: fid, fileName: cleanName, page, imageUrl });
-      if (visuals.length >= 4) break;
+      if (visuals.length >= 5) break;
     }
 
-    res.json({ answer, references, visuals });
+    res.json({ structured, references, visuals });
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
   }
@@ -465,7 +483,7 @@ app.post("/admin/ingest-one", async (req, res) => {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
     const { clientId = "demo", fileId, maxPages } = req.body || {};
     if (!fileId) return res.status(400).json({ error: "fileId required" });
-    const meta = await downloadDriveFileMeta(fileId);
+    const meta = await drive.files.get({ fileId, fields: "id,name", supportsAllDrives: true }).then(r => r.data);
     await ingestSingleDrivePdf({
       clientId,
       fileId,
@@ -515,7 +533,7 @@ app.post("/admin/ingest-drive", async (req, res) => {
     for (const f of files) {
       try {
         write({ level: "info", fileId: f.id, fileName: f.name, msg: "Downloading…" });
-        const meta = await downloadDriveFileMeta(f.id);
+        const meta = await drive.files.get({ fileId: f.id, fields: "id,name,size", supportsAllDrives: true }).then(r => r.data);
         write({ level: "info", fileId: f.id, fileName: f.name, size: meta.size ? Number(meta.size) : null, msg: "Parsing + embedding…" });
         await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name });
         done++;
