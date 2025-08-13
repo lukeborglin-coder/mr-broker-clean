@@ -78,10 +78,7 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      [].concat(children).forEach(c => {
-        if (c === null || c === undefined) return;
-        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-      });
+      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
       return node;
     }
 
@@ -125,53 +122,51 @@
     const sortRefsAsc = refs => [...(refs||[])].sort((a,b)=>parseTimeFromTitle(a.fileName).score - parseTimeFromTitle(b.fileName).score);
     const sortRefsDesc = refs => sortRefsAsc(refs).reverse();
 
-    // ---------- gather sourced text ----------
-    function getSourcedTextBlocks(data) {
+    // ---------- gather lines (we also accept unsourced) ----------
+    function gatherLines(data) {
       const s = data.structured || {};
       const arr = [];
-      if (s.headline?.paragraph) arr.push(s.headline.paragraph);
       if (Array.isArray(s.headline?.bullets)) arr.push(...s.headline.bullets);
       if (Array.isArray(s.supporting)) arr.push(...s.supporting.map(x=>x.text).filter(Boolean));
-      return arr.filter(t => /\^\d+\^/.test(String(t))); // only sourced
+      if (s.headline?.paragraph) arr.push(s.headline.paragraph);
+      return arr;
     }
 
-    // ---------- intent routing ----------
-    function isTrendMetric(blocks) {
-      const txt = (blocks||[]).join(" ").toLowerCase();
+    // detect trend intent (Evrysdi + Satisfaction/NPS)
+    function isTrendIntent(userQuery, data) {
+      const txt = (userQuery + " " + gatherLines(data).join(" ")).toLowerCase();
       return /\bevrysdi\b/.test(txt) && (/\bsatisfaction\b/.test(txt) || /\bnps\b/.test(txt) || /net\s*promoter/.test(txt));
     }
 
     // ---------- map multiple % on one line to waves by time ----------
     function mapPercentsToRefs(percents, refsSortedDesc, lineText) {
       const out = [];
-      const hintsPrev = /\bprev(ious)?\s+wave\b/i.test(lineText);
+      const hintsPrev = /\bprev(ious)?\s+wave\b/i.test(lineText) || /\bprevious\b/i.test(lineText);
       const hintsNow  = /\bnow\b|\bcurrent\b/i.test(lineText);
-
       for (let i=0; i<percents.length; i++) {
-        const v = percents[i];
+        const v = +percents[i];
         let refObj = refsSortedDesc[i] || refsSortedDesc[0]; // 1st → latest; 2nd → prev; …
-        // tiny nudge: if only one % and the line says "previous wave", pick previous ref if available
         if (percents.length === 1 && hintsPrev && refsSortedDesc[1]) refObj = refsSortedDesc[1];
         if (percents.length === 1 && hintsNow) refObj = refsSortedDesc[0];
-        out.push({ value: +v, ref: refObj.ref });
+        out.push({ value: v, ref: refObj.ref });
       }
       return out;
     }
 
-    // ---------- collect trend points (robust) ----------
+    // ---------- collect trend points (robust: supporting, bullets, paragraph; caret optional) ----------
     function collectTrendPoints(data) {
       const refMap = buildRefMap(data.references || []);
       const refsAsc = sortRefsAsc(data.references || []);
       const refsDesc = refsAsc.slice().reverse();
-      const blocks = getSourcedTextBlocks(data);
+      const lines = gatherLines(data);
 
       const points = [];
-      blocks.forEach(line => {
-        const text = String(line);
+      lines.forEach(text => {
         if (!/evrysdi/i.test(text)) return;
         if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
 
-        const pcts = Array.from(text.matchAll(/(\d{1,3})%\b/g)).map(m => +m[1]);
+        // pull all % on this line
+        const pcts = Array.from(String(text).matchAll(/(\d{1,3})%\b/g)).map(m => +m[1]);
         if (!pcts.length) return;
 
         const mapped = mapPercentsToRefs(pcts, refsDesc, text);
@@ -189,15 +184,14 @@
         });
       });
 
-      // de-dupe: keep the latest value for each ref
+      // de‑dupe by ref (keep one value per report, prefer the last mention)
       const byRef = new Map();
       points.forEach(p => byRef.set(p.ref, p));
-      const unique = Array.from(byRef.values()).sort((a,b)=>a.score - b.score);
-      return unique;
+      return Array.from(byRef.values()).sort((a,b)=>a.score - b.score);
     }
 
     // ---------- headline + key numbers ----------
-    function headlineFromTrend(points, refMap) {
+    function headlineFromTrend(points) {
       const latest = points[points.length - 1];
       const prev1  = points[points.length - 2];
       const prev2  = points[points.length - 3];
@@ -209,43 +203,50 @@
       return parts.join(", ") + ".";
     }
 
-    function renderHeadlineAndKeys_Trend(points) {
+    function renderHeadlineAndKeys(points) {
       const answer = qs("#answer");
       const keyUl = qs("#keynums"); keyUl.innerHTML = "";
 
-      const line = headlineFromTrend(points);
-      answer.innerHTML = line;
+      if (points.length) {
+        const line = headlineFromTrend(points);
+        answer.innerHTML = line;
 
-      // Key numbers: one per wave (latest back to two priors)
-      [points[points.length-1], points[points.length-2], points[points.length-3]]
-        .filter(Boolean)
-        .forEach(p => keyUl.appendChild(el("li", { html: `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>` })));
-      show(keyUl);
-      // raw lines used, to dedup from Additional Support
-      return [points[points.length-1]?.raw, points[points.length-2]?.raw, points[points.length-3]?.raw].filter(Boolean);
+        [points[points.length-1], points[points.length-2], points[points.length-3]]
+          .filter(Boolean)
+          .forEach(p => keyUl.appendChild(el("li", { html: `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>` })));
+        show(keyUl);
+        return [points[points.length-1]?.raw, points[points.length-2]?.raw, points[points.length-3]?.raw].filter(Boolean);
+      }
+
+      // if no points, show paragraph as-is (sourced if possible)
+      const s = (window.__DATA__?.structured) || {};
+      const p = s.headline?.paragraph || window.__DATA__?.answer || window.__DATA__?.summary || window.__DATA__?.result || "";
+      answer.innerHTML = caretsToSup(p);
+      hide(keyUl);
+      return [];
     }
 
-    // ---------- Additional Support (chronological, top 5 + Show more, de‑dup) ----------
-    function renderAdditionalSupport(data, usedRaw, pointsForNiceBullets=[]) {
+    // ---------- Additional Support (top 5 + Show more, with generated per‑wave bullets) ----------
+    function renderAdditionalSupport(data, usedRaw, pointsForBullets) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
 
-      // Start with one generated bullet per wave (clean + sourced)
-      const gen = pointsForNiceBullets.map(p => `${p.x}: ${p.y}% ^${p.ref}^`);
-      // Then add model bullets that weren’t used in headline
+      const gen = (pointsForBullets || []).map(p => `${p.x}: ${p.y}% ^${p.ref}^`);
+
       const s = data.structured || {};
       const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
       const modelLines = headBul.concat(supp)
-        .filter(t => /\^\d+\^/.test(String(t)))
+        .filter(t => /\^?\d+\^?/.test(String(t))) // keep even if caret-less (we’ll still show it)
         .filter(t => !usedRaw.some(raw => String(raw).trim() === String(t).trim()));
 
       const all = gen.concat(modelLines);
 
       const refMap = buildRefMap(data.references || []);
       const withTime = all.map(t => {
+        // use first caret if present; otherwise assume latest
         const m = String(t).match(/\^(\d+)\^/);
-        const ref = m ? +m[1] : null;
+        let ref = m ? +m[1] : (sortRefsDesc(data.references || [])[0]?.ref);
         const time = refMap.get(ref)?.time || {score:0};
         return { t, ref, score: time.score };
       }).sort((a,b)=>a.score - b.score);
@@ -307,7 +308,7 @@
 
       if (!points.length) { hide(panel); return; }
 
-      // Table
+      // Table (always)
       const table = document.createElement("table");
       table.className = "data-table";
       table.innerHTML = `
@@ -322,7 +323,7 @@
       });
       tbl.appendChild(table);
 
-      // Chart if ≥2
+      // Line chart if ≥2 points
       if (points.length >= 2) {
         const labels = points.map(p => p.x);
         const values = points.map(p => p.y);
@@ -380,39 +381,30 @@
 
       let data = {};
       try { data = dataText ? JSON.parse(dataText) : {}; } catch { data = {}; }
+      window.__DATA__ = data; // for paragraph fallback in renderHeadlineAndKeys
 
       try {
-        const blocks = getSourcedTextBlocks(data);
-        const isTrend = isTrendMetric(blocks);
-
+        const trendIntent = isTrendIntent(userQuery, data);
         let usedRaw = [];
-        if (isTrend) {
-          const points = collectTrendPoints(data);           // <-- robust, multi-% + wave mapping
+        let points = [];
+
+        if (trendIntent) {
+          points = collectTrendPoints(data);
           renderTrendVisual(points);
-          if (points.length) {
-            usedRaw = renderHeadlineAndKeys_Trend(points);
-            renderAdditionalSupport(data, usedRaw, points);  // generated per‑wave bullets + extras (no dupes)
-          } else {
-            // fallback to original paragraph
-            const s = data.structured || {};
-            const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
-            qs("#answer").innerHTML = caretsToSup(p);
-            hide(qs("#keynums"));
-            renderAdditionalSupport(data, usedRaw, []);
-          }
+          usedRaw = renderHeadlineAndKeys(points);
+          renderAdditionalSupport(data, usedRaw, points);
         } else {
           // generic fallback
           const s = data.structured || {};
           const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
           qs("#answer").innerHTML = caretsToSup(p);
           hide(qs("#keynums"));
-          renderAdditionalSupport(data, usedRaw, []);
+          renderAdditionalSupport(data, [], []);
         }
 
         renderQuotes(data);
         renderRefs(data.references || data.refs || []);
         show(qs("#results"));
-
       } catch (err) {
         console.error("Render error:", err);
         qs("#inlineErr").textContent = "There was an error rendering results. See console for details.";
