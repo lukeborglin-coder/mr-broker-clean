@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COG gpt</title>
 
-  <!-- pdf.js for client-side slide rendering -->
+  <!-- Chart.js for data-driven mini-charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" integrity="sha256-fnY0B8ULQwREH6o9C3sJqC1Kp6kUmk7i6m8m7mQ7nMU=" crossorigin="anonymous"></script>
+
+  <!-- pdf.js for last-resort PDF rendering -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" integrity="sha512-4M1bQtm8Hq3mE/z39agaYp7k7iH7mG1Zr1wV9wRjQqFZsT4p1c9lN6dT1f9H7jv5t2q9nVJLLwJX5qXU6a1hAw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
   <style>
@@ -15,7 +18,7 @@
     .page { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
 
     /* Header */
-    .brandline { display:flex; align-items:center; justify-content:flex-start; margin-bottom:28px; } /* extra spacing */
+    .brandline { display:flex; align-items:center; justify-content:flex-start; margin-bottom:28px; }
     .brandtitle { font-weight:900; letter-spacing:.6px; font-size:56px; line-height:1; }
     .brandtitle .cog { color:var(--grey) }
     .brandtitle .gpt { color:var(--brand); font-weight:600; font-size:.46em; margin-left:2px; } /* smaller “gpt” */
@@ -25,7 +28,7 @@
     .search-textarea {
       flex:1; resize:vertical; min-height:86px; max-height:220px;
       padding:12px 14px; font-size:16px; line-height:1.3; border-radius:10px; border:1px solid #ddd; background:#fff;
-      font-family: inherit;
+      font-family: inherit; /* match site font */
     }
     .button.ask {
       width:100px; border-radius:10px; border:1px solid #ff9e40;
@@ -34,7 +37,7 @@
     }
     .button.ask:hover { filter:brightness(.96) }
 
-    /* Consistent spacing between sections */
+    /* Sections spacing */
     .sections { display:grid; gap:18px; margin-top:10px; }
 
     /* Hero (orange) */
@@ -48,19 +51,15 @@
 
     .muted { color:#7a7a7a }
     sup { font-size:.6em; line-height:0; vertical-align: super; }
+
     .support-item { margin:.35rem 0 }
     .support-item sup { margin-left:1px }
 
-    /* visual slides */
+    /* visuals */
     .visuals { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px }
-    .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff }
+    .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff; display:flex; flex-direction:column; }
     .visual canvas, .visual img { width:100%; height:180px; object-fit:cover; display:block; background:#fafafa }
     .visual .cap { font-size:12px; padding:6px 8px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-
-    /* References lighter look */
-    .refs-wrap h2 { margin:0 0 8px 0 }
-    .refs-wrap ol { margin:0 0 8px 1.1rem; padding:0 }
-    .refs-wrap li { font-style: italic; }
   </style>
 </head>
 <body>
@@ -97,9 +96,9 @@
         <div id="visuals" class="visuals"></div>
       </section>
 
-      <section id="refsCard" class="refs-wrap" style="display:none;">
+      <section id="refsCard" class="card" style="display:none; border-left-color: transparent;">
         <h2>Report References</h2>
-        <ol id="refs"></ol>
+        <ol id="refs" style="font-style: italic;"></ol>
       </section>
     </div>
   </div>
@@ -108,6 +107,7 @@
     const API_BASE = location.origin;
     const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
 
+    // --- Helpers: superscripts and punctuation rules ---
     function toSuperscripts(text) {
       if (!text) return "";
       text = text.replace(/\[(\d+)\]/g, "^$1^");
@@ -115,6 +115,64 @@
     }
     function stripPeriod(s) { return s ? s.replace(/\s*\.\s*$/,'') : s; }
 
+    // Move superscripts outside of closing quotes for quotes list
+    function moveCiteOutsideQuotes(html) {
+      // grab <sup>…</sup> and move outside the closing quote
+      const sups = [];
+      let body = html.replace(/<sup>(\d+)<\/sup>/g, (_,n)=>{ sups.push(n); return "";});
+      const tail = sups.length ? " " + sups.map(n=>`<sup>${n}</sup>`).join("") : "";
+      return `“${body}”${tail}`;
+    }
+
+    // --- Build metrics from text (headline + supporting) ---
+    // Parses percentages tied to years/waves and product names; then keeps the most recent value,
+    // and constructs a trend (delta) if an older reference exists.
+    function extractMetrics(structured) {
+      const texts = [];
+      if (structured?.headline?.paragraph) texts.push(structured.headline.paragraph);
+      (structured?.headline?.bullets || []).forEach(b => texts.push(b));
+      (structured?.supporting || []).forEach(b => texts.push(b.text || ""));
+      const all = texts.join("\n");
+
+      // Basic entity capture (expand as needed)
+      const entities = ['Evrysdi','Spinraza','Zolgensma','Risdiplam','Nusinersen','Onasemnogene'];
+      const entRe = new RegExp(`\\b(${entities.join('|')})\\b`, 'i');
+
+      // Capture patterns like "2025 ... 60%" or "W6 2025 ... 60%" or "Q4 2024 ... 55%"
+      const pat = /(?:(20\d{2})|(?:Q[1-4]\s*20\d{2})|(?:W\d{1,2}\s*20\d{2})|(?:Q[1-4])|(?:W\d{1,2}))[^%]{0,60}?(\d{1,3})%/gi;
+
+      // If a product is nearby, associate; otherwise attach to "Overall"
+      const windowPad = 40;
+
+      const seriesMap = {}; // key: label (e.g., Evrysdi Satisfaction) -> { points: [{t,label,year,val}], latest, prev }
+      let m;
+      while ((m = pat.exec(all)) !== null) {
+        const around = all.slice(Math.max(0, m.index - windowPad), Math.min(all.length, m.index + windowPad));
+        const ent = (around.match(entRe) || [,'Overall'])[1];
+        const yearMatch = (m[1] && Number(m[1])) || null;
+        const val = Number(m[2]);
+        const label = `${ent} satisfaction`; // simple default; you can refine by looking for 'NPS','share',etc.
+        if (!seriesMap[label]) seriesMap[label] = { points: [] };
+        seriesMap[label].points.push({ label, ent, year: yearMatch, val });
+      }
+
+      // Consolidate: pick latest year as "current", find an earlier one for delta
+      for (const k of Object.keys(seriesMap)) {
+        const pts = seriesMap[k].points.filter(p => p.year).sort((a,b)=> (b.year||0)-(a.year||0));
+        if (pts.length) {
+          seriesMap[k].latest = pts[0];
+          seriesMap[k].prev   = pts.find(p => p.year !== seriesMap[k].latest.year) || null;
+        } else {
+          // if no year captured, keep the largest value as current
+          const any = seriesMap[k].points.sort((a,b)=> b.val-a.val);
+          seriesMap[k].latest = any[0] || null;
+          seriesMap[k].prev = any[1] || null;
+        }
+      }
+      return seriesMap;
+    }
+
+    // --- HEADLINE RENDER ---
     function renderHeadline(obj) {
       const el = document.getElementById("headline");
       const bl = document.getElementById("headlineBullets");
@@ -127,6 +185,7 @@
       bl.innerHTML = bullets.slice(0,3).map(b => `<li>${toSuperscripts(stripPeriod(b))}</li>`).join("");
     }
 
+    // --- SUPPORT DETAIL ---
     let _allSupport = [];
     function renderSupport(bullets) {
       _allSupport = Array.isArray(bullets) ? bullets : [];
@@ -142,25 +201,68 @@
       btn.onclick = () => { el.innerHTML = toHtml(_allSupport); btn.style.display = "none"; };
     }
 
-    // Quotes: ensure superscripts appear AFTER the closing quote
+    // --- QUOTES ---
     function renderQuotes(quotes) {
       const card = document.getElementById("quotesCard");
       const list = document.getElementById("quotesList");
       const arr = Array.isArray(quotes) ? quotes.filter(Boolean) : [];
       if (!arr.length) { card.style.display = "none"; list.innerHTML=""; return; }
       card.style.display = "";
-      list.innerHTML = arr.map(q => {
-        // convert to superscripts, extract any sup tags
-        let html = toSuperscripts(stripPeriod(q));
-        const sups = [];
-        html = html.replace(/<sup>(\d+)<\/sup>/g, (_,n)=>{ sups.push(n); return "";});
-        const tail = sups.length ? " " + sups.map(n=>`<sup>${n}</sup>`).join("") : "";
-        return `<li>“${html}”${tail}</li>`;
-      }).join("");
+      list.innerHTML = arr.map(q => moveCiteOutsideQuotes(toSuperscripts(stripPeriod(q)))).map(s => `<li>${s}</li>`).join("");
     }
 
-    async function renderSlideCanvas(fileId, page) {
-      const tryPdf = async () => {
+    // --- CHARTS ---
+    function createChartCanvas() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 800; canvas.height = 400; // Chart.js will resize to parent
+      canvas.style.width = "100%"; canvas.style.height = "180px"; canvas.style.objectFit = "cover";
+      return canvas;
+    }
+
+    function chartConfigForSeries(label, points) {
+      // If we have >=2 years, do a line chart by year; otherwise bar of current
+      const yrs = points.filter(p=>p.year).map(p=>p.year);
+      if (new Set(yrs).size >= 2) {
+        const sorted = points.filter(p=>p.year).sort((a,b)=>a.year-b.year);
+        return {
+          type: 'line',
+          data: {
+            labels: sorted.map(p=>String(p.year)),
+            datasets: [{
+              label, data: sorted.map(p=>p.val),
+              tension: 0.2,
+            }]
+          },
+          options: {
+            plugins: { legend: { display:false }, tooltip:{ enabled:true } },
+            scales: {
+              y: { beginAtZero:true, ticks:{ callback:v=>v+'%' } },
+              x: { grid: { display:false } }
+            }
+          }
+        };
+      } else {
+        const latest = points[0];
+        return {
+          type: 'bar',
+          data: {
+            labels: [latest.year ? String(latest.year) : 'Current'],
+            datasets: [{ label, data: [latest.val] }]
+          },
+          options: {
+            plugins: { legend: { display:false }, tooltip:{ enabled:true } },
+            scales: {
+              y: { beginAtZero:true, ticks:{ callback:v=>v+'%' } },
+              x: { grid: { display:false } }
+            }
+          }
+        };
+      }
+    }
+
+    async function renderPdfThumb(fileId, page) {
+      try {
+        // try client-side render first
         const resp = await fetch(`${API_BASE}/file/pdf?fileId=${encodeURIComponent(fileId)}`, { headers: { "x-auth-token": AUTH_TOKEN } });
         if (!resp.ok) throw new Error(`pdf ${resp.status}`);
         const buf = await resp.arrayBuffer();
@@ -173,43 +275,94 @@
         await pg.render({ canvasContext: ctx, viewport }).promise;
         canvas.style.width = "100%"; canvas.style.height = "180px"; canvas.style.objectFit = "cover";
         return canvas;
-      };
-      try { return await tryPdf(); }
-      catch {
-        // Fallback to server PNG
+      } catch {
+        // fallback to server PNG
         const img = document.createElement("img");
         img.src = `${API_BASE}/preview/page.png?fileId=${encodeURIComponent(fileId)}&page=${encodeURIComponent(page||1)}`;
+        img.alt = "Slide preview";
         return img;
       }
     }
 
-    async function renderVisuals(visuals) {
+    // Build visuals: prefer CHARTS from parsed metrics, then fill remaining with up to-6 thumbnails
+    async function renderVisuals(structured, visualsMeta) {
       const card = document.getElementById("slidesCard");
       const el = document.getElementById("visuals");
-      if (!visuals || visuals.length === 0) { card.style.display="none"; el.innerHTML=""; return; }
-      card.style.display = "";
-      const list = visuals.slice(0, 6); // enforce cap 6
       el.innerHTML = "";
-      for (const v of list) {
+      card.style.display = "none";
+
+      // 1) Extract metric series from text
+      const seriesMap = extractMetrics(structured);
+
+      // 2) Build up to 6 visuals using charts first
+      const items = [];
+      const labels = Object.keys(seriesMap);
+      for (const label of labels) {
+        if (items.length >= 6) break;
+        const s = seriesMap[label];
+        if (!s.latest) continue;
+        const pts = [];
+        if (s.prev) pts.push(s.prev);
+        pts.push(s.latest);
         const cell = document.createElement("div");
         cell.className = "visual";
-        const holder = document.createElement("div");
-        holder.style.width="100%"; holder.style.height="180px"; holder.style.background="#fafafa";
-        cell.appendChild(holder);
+        const canvas = createChartCanvas();
+        cell.appendChild(canvas);
+
+        // Caption with trend if available
+        let capText = `${label}: ${s.latest.val}%`;
+        if (s.latest.year) capText += ` (${s.latest.year})`;
+        if (s.prev) {
+          const delta = (s.latest.val - s.prev.val);
+          const sign = delta > 0 ? "+" : "";
+          capText += ` (${sign}${delta}% vs ${s.prev.year || 'prior'})`;
+        }
         const cap = document.createElement("div");
         cap.className = "cap";
-        cap.textContent = `${v.fileName} (p.${v.page || "?"})`;
+        cap.textContent = capText;
         cell.appendChild(cap);
         el.appendChild(cell);
-        try {
-          const canvasOrImg = await renderSlideCanvas(v.fileId, v.page || 1);
-          holder.replaceWith(canvasOrImg);
-        } catch (e) {
-          console.error("slide render failed", e);
+
+        const cfg = chartConfigForSeries(label, pts);
+        // Use neutral colors; Chart.js picks defaults; we keep it simple per your style note
+        new Chart(canvas.getContext('2d'), cfg);
+        items.push(cell);
+      }
+
+      // 3) If still fewer than 6 visuals, try to add PDF thumbnails from server meta
+      if (items.length < 6 && Array.isArray(visualsMeta)) {
+        for (const v of visualsMeta) {
+          if (items.length >= 6) break;
+          const cell = document.createElement("div");
+          cell.className = "visual";
+          const holder = document.createElement("div");
+          holder.style.width = "100%"; holder.style.height = "180px"; holder.style.background = "#fafafa";
+          cell.appendChild(holder);
+          const cap = document.createElement("div");
+          cap.className = "cap";
+          cap.textContent = `${v.fileName} (p.${v.page || "?"})`;
+          cell.appendChild(cap);
+          el.appendChild(cell);
+
+          try {
+            const thumb = await renderPdfThumb(v.fileId, v.page || 1);
+            holder.replaceWith(thumb);
+          } catch (e) {
+            console.error("thumb render failed", e);
+          }
+          items.push(cell);
         }
+      }
+
+      if (items.length > 0) {
+        card.style.display = "";
+      } else {
+        // nothing renderable
+        card.style.display = "none";
       }
     }
 
+    // --- References ---
     function renderRefs(refs) {
       const card = document.getElementById("refsCard");
       const el = document.getElementById("refs");
@@ -218,12 +371,12 @@
       el.innerHTML = refs.slice().sort((a,b)=>a.ref-b.ref).map(r => `<li value="${r.ref}">${r.fileName}</li>`).join("");
     }
 
+    // --- Page state helpers ---
     function showThinking() {
       document.getElementById("headline").classList.add("muted");
       document.getElementById("headline").textContent = "Thinking…";
       document.getElementById("headlineBullets").innerHTML = "";
 
-      // hide sub-cards until results
       ["detailCard","quotesCard","slidesCard","refsCard"].forEach(id => document.getElementById(id).style.display="none");
       document.getElementById("support").innerHTML = "";
       document.getElementById("quotesList").innerHTML = "";
@@ -239,6 +392,7 @@
       ["detailCard","quotesCard","slidesCard","refsCard"].forEach(id => document.getElementById(id).style.display="none");
     }
 
+    // --- Ask flow ---
     async function ask() {
       const q = document.getElementById("q").value.trim();
       if (!q) return;
@@ -252,10 +406,16 @@
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         const data = await resp.json();
 
+        // Headline + supporting + quotes
         renderHeadline(data.structured?.headline || {});
         renderSupport(data.structured?.supporting || []);
-        renderQuotes(data.structured?.quotes || []);
-        await renderVisuals(data.visuals || []);
+        const quotesArr = Array.isArray(data.structured?.quotes) ? data.structured.quotes : [];
+        renderQuotes(quotesArr);
+
+        // Visuals (charts first, then up to 6 pdf thumbs)
+        await renderVisuals(data.structured || {}, data.visuals || []);
+
+        // Refs
         renderRefs(data.references || []);
       } catch (e) {
         console.error("search error:", e);
