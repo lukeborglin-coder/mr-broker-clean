@@ -1,4 +1,4 @@
-// server.js — Pinecone v2 + Google Drive + page PNG previews + narrative answers + SSE ingest
+// server.js — Pinecone v2 + Google Drive + exact-slide PNG previews + narrative answers + SSE ingest
 
 import fs from "node:fs";
 import path from "node:path";
@@ -180,7 +180,6 @@ async function embedText(text) {
 
 // Conversational answer template
 async function answerWithContext(question, contexts) {
-  // Provide file + page for model to cite
   const contextText = contexts
     .map((m, i) => `# Source ${i + 1}
 File: ${m?.metadata?.fileName || "Untitled"}  |  Page: ${m?.metadata?.page ?? "?"}
@@ -195,11 +194,11 @@ Write in this structure:
 1) One-sentence headline answer (narrative), e.g., "Evrysdi's latest NPS is 43% (2024 SMA Evrysdi HCP Patient ATU W6 Report)."
 2) Then bullets for trend and supporting insight, e.g.:
    - Prior NPS readings in order (with % and source file names)
-   - Notable directional changes or context (e.g., "up from 20% to 43%")
-   - Any relevant comparator (e.g., Spinraza)
+   - Notable directional changes (e.g., "up from 20% to 43%")
+   - Any relevant comparator
 
 Rules:
-- Do NOT invent numbers or sources—only use what is in the context.
+- Do NOT invent numbers or sources—only use the context.
 - If the latest value or sources aren’t present, say you don’t have enough information.
 - Keep to 3–5 bullets maximum.
 
@@ -296,10 +295,7 @@ async function renderPdfPagePng(fileId, pageNumber) {
   const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
   if (fs.existsSync(pngPath)) return pngPath;
 
-  // Get the raw PDF bytes from Drive
   const data = await downloadDriveFileBuffer(fileId);
-
-  // Use pdfjs in Node with no worker
   const pdf = await getDocument({ data, useWorker: false }).promise;
   const page = await pdf.getPage(pageNum);
 
@@ -310,7 +306,6 @@ async function renderPdfPagePng(fileId, pageNumber) {
 
   await page.render({ canvasContext: ctx, viewport }).promise;
 
-  // Write PNG to disk (cached)
   await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(pngPath);
     canvas.createPNGStream().pipe(out);
@@ -548,5 +543,3 @@ app.post("/admin/ingest-drive", async (req, res) => {
   }
   app.listen(PORT, () => console.log(`mr-broker running on :${PORT}`));
 })();
-
-
