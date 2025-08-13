@@ -22,8 +22,9 @@ body {
 
 /* Header */
 .header { display:flex; align-items:center; position:relative; min-height: 40px; }
-.title { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: .2px; }
-.brand-accent { color: #ff7a00; }
+.title { margin: 0; display:flex; align-items: baseline; gap: 4px; }
+.title-cog { font-size: 36px; font-weight: 800; letter-spacing: .2px; }
+.title-gpt { font-size: 36px; font-weight: 400; color: #ff7a00; } /* un-bold gpt, orange */
 .beta-badge {
   position: absolute; top: 0; right: 0;
   color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px;
@@ -43,6 +44,7 @@ body {
   border: 1px solid #d6dae0;
   background: #fff;
   font-size: 15px;
+  font-family: inherit;      /* match the page font */
   resize: vertical;          /* allow user to expand if needed */
   min-height: 70px;          /* ~3 lines */
   line-height: 1.35;
@@ -96,13 +98,23 @@ li { margin: 6px 0; }
 .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
 .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
 
-/* Quotes (rendered to blocks via JS) */
+/* Quotes */
 #quotes { list-style:none; padding-left:0; margin:0; }
 #quotes .quote-item { margin:0 0 14px 0; }
 #quotes .quote-text { font-style: italic; margin:0; }
-#quotes .quote-tag { margin-top:4px; font-size:0.85em; color:#333; }
+#quotes .quote-tag { margin-top:4px; font-size:0.9em; color:#333; }
 
-/* References */
-.ref-list { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
-.ref-item { background:#fff; border-radius:12px; padding:14px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
-.ref-item a { text-decoration:none; color:#0b6bcb; }
+/* References (chips, non-links) */
+.ref-list {
+  display:grid;
+  grid-template-columns: repeat(auto-fit,minmax(260px,1fr));
+  gap:12px;
+}
+.ref-item {
+  background:#fff;
+  border-radius:12px;
+  padding:14px;
+  box-shadow:0 2px 10px rgba(0,0,0,.06);
+  color:#0b6bcb;            /* keep the visual style but it's not a link */
+  font-weight: 600;
+}
