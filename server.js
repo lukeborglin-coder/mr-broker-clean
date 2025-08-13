@@ -1,4 +1,4 @@
-// server.js — Pinecone v2 + Google Drive + exact-slide PNG previews (public) + structured/narrative answers + SSE ingest
+// server.js — Diverse multi-report answering + exact-slide PNG previews + numeric citations
 
 import fs from "node:fs";
 import path from "node:path";
@@ -74,42 +74,19 @@ async function ensurePineconeIndex() {
 }
 let index;
 
-// ---------- Public debug ----------
-app.get("/debug/pinecone", async (req, res) => {
-  try {
-    const desc = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
-    let stats = null;
-    try {
-      stats = await pinecone.index(PINECONE_INDEX).describeIndexStats();
-    } catch (e) {
-      stats = { error: e.message };
-    }
-    res.json({ ok: true, index: PINECONE_INDEX, desc, stats });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/debug/drive-env", (req, res) => {
-  res.json({
-    DRIVE_ROOT_FOLDER_ID,
-    GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS || null,
-    GOOGLE_CREDENTIALS_JSON: process.env.GOOGLE_CREDENTIALS_JSON || null,
-    credsFilePath: CREDS_PATH || null,
-    credsFileExists: !!(CREDS_PATH && fs.existsSync(CREDS_PATH)),
-  });
-});
-
-// ---------- Helpers (general) ----------
+// ---------- Name cleaning ----------
 function cleanReportName(name) {
   if (!name) return "Untitled";
   let n = String(name).replace(/\.pdf$/i, "");
-  // remove trailing date-like or wave tokens: _111324, _20250115, -W6, _v2, etc.
-  n = n.replace(/[\s_-]*(\d{6,8}|w\d+|W\d+|v\d+|V\d+)$/i, "");
+  // strip common trailing tokens: _111324, -20250115, _Q42024, _W6, _v2, -v3, etc.
+  n = n.replace(/([_\-]\d{6,8})$/i, "");
+  n = n.replace(/([_\-]Q[1-4]\d{4})$/i, "");
+  n = n.replace(/([_\-][WV]\d{1,2})$/i, "");
+  n = n.replace(/([_\-]v\d+)$/i, "");
   return n.trim();
 }
 
-// ---------- Page PNG preview (exact slide) — PUBLIC (no auth header needed) ----------
+// ---------- Page PNG preview (public, no auth header needed) ----------
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createCanvas } from "canvas";
 
@@ -134,7 +111,7 @@ async function renderPdfPagePng(fileId, pageNumber) {
   const pdf = await getDocument({ data, useWorker: false }).promise;
   const page = await pdf.getPage(pageNum);
 
-  const scale = 1.5; // image quality
+  const scale = 1.5;
   const viewport = page.getViewport({ scale });
   const canvas = createCanvas(viewport.width, viewport.height);
   const ctx = canvas.getContext("2d");
@@ -164,7 +141,7 @@ app.get("/preview/page.png", async (req, res) => {
   }
 });
 
-// ---------- Auth guard (everything below requires x-auth-token) ----------
+// ---------- Auth guard for API routes ----------
 app.use((req, res, next) => {
   if (!AUTH_TOKEN) return next();
   if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN) {
@@ -173,70 +150,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- Health ----------
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    env: {
-      auth: Boolean(AUTH_TOKEN),
-      driveRoot: Boolean(DRIVE_ROOT_FOLDER_ID),
-      googleCreds: Boolean(CREDS_PATH),
-      openai: Boolean(OPENAI_API_KEY),
-      pinecone: Boolean(PINECONE_API_KEY),
-      index: PINECONE_INDEX,
-      cloud: PINECONE_CLOUD,
-      region: PINECONE_REGION,
-    },
-  });
-});
-
-// ---------- Drive diagnostics ----------
-app.get("/drive/debug", (req, res) => {
-  res.json({
-    driveRootId: DRIVE_ROOT_FOLDER_ID || null,
-    credsPath: CREDS_PATH || null,
-    credsExists: !!(CREDS_PATH && fs.existsSync(CREDS_PATH)),
-    authTokenConfigured: Boolean(AUTH_TOKEN),
-  });
-});
-
-app.get("/drive/files/flat", async (req, res) => {
-  try {
-    const folderId = DRIVE_ROOT_FOLDER_ID;
-    if (!folderId) return res.status(400).json({ error: "DRIVE_ROOT_FOLDER_ID not set" });
-    const files = [];
-    const q = `'${folderId}' in parents and trashed = false`;
-    let pageToken;
-    do {
-      const r = await drive.files.list({
-        q,
-        fields: "nextPageToken, files(id,name,mimeType,size,modifiedTime,webViewLink,iconLink)",
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        corpora: "allDrives",
-        pageSize: 1000,
-        pageToken,
-      });
-      (r.data.files || []).forEach((f) =>
-        files.push({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
-          size: f.size ? Number(f.size) : null,
-          modifiedTime: f.modifiedTime,
-          webViewLink: f.webViewLink,
-          iconLink: f.iconLink,
-        })
-      );
-      pageToken = r.data.nextPageToken || undefined;
-    } while (pageToken);
-    res.json({ folderId, count: files.length, files });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to list Drive files", detail: e?.response?.data || e?.message });
-  }
-});
-
-// ---------- Embedding + Ingest helpers ----------
+// ---------- Helpers: embed/chunk/ingest ----------
 async function embedText(text) {
   const { data } = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return data[0].embedding;
@@ -292,36 +206,54 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Inf
   }
 }
 
-// ---------- Answering (structured JSON for UI) ----------
-async function answerWithContextStructured(question, contexts) {
-  const contextText = contexts
-    .map((m, i) => `# Source ${i + 1}
-File: ${m?.metadata?.fileName || "Untitled"}  |  Page: ${m?.metadata?.page ?? "?"}
+// ---------- Diverse-context answering with numeric citations ----------
+async function buildDiverseSources(matches, maxSources = 8) {
+  // Take the best match per file, keep order by score, cap to maxSources
+  const byFile = new Map();
+  for (const m of matches) {
+    const fid = m.metadata?.fileId;
+    if (!fid) continue;
+    if (!byFile.has(fid)) byFile.set(fid, m);
+  }
+  const diverse = [...byFile.values()].slice(0, maxSources);
+  // Assign ref numbers
+  return diverse.map((m, i) => ({
+    ref: i + 1,
+    fileId: m.metadata.fileId,
+    fileName: cleanReportName(m.metadata.fileName || "Untitled"),
+    page: m.metadata.page ?? m.metadata.slide,
+    text: m.metadata.text || ""
+  }));
+}
+
+async function answerStructuredWithRefs(question, sources) {
+  const contextText = sources.map(s => `# Ref [${s.ref}]
+File: ${s.fileName}  |  Page: ${s.page ?? "?"}
 ---
-${m?.metadata?.text || ""}`)
-    .join("\n\n");
+${s.text}`).join("\n\n");
 
-  const prompt = `You are a pharma market-research analyst writing client-ready insights.
-Answer USING ONLY the context. Output STRICT JSON with this shape:
+  const prompt = `You are a pharma market-research analyst.
+Use ONLY the context refs below. Create a narrative headline + 1–5 supporting bullets.
+Cite sources by their numeric tag in square brackets, e.g., [1], [2].
+If a bullet draws on multiple refs, include multiple tags like [1][3].
 
+Return STRICT JSON:
 {
-  "headline": "One-sentence (or two) narrative answer to the user's question.",
+  "headline": "single or two-sentence narrative that synthesizes across all refs, with [n] tags as needed",
   "bullets": [
-    { "text": "supporting point concisely stated with numbers if present", "sourceFile": "Exact file name as shown in the context", "page": 12 },
-    ...
+    { "text": "concise support with numbers if present and [n] tags" }
   ]
 }
 
 Rules:
-- "headline" is narrative (not a bullet), client-ready.
-- 1 to 5 bullets MAX. If more exist, choose the most decision-relevant.
-- Each bullet MUST include sourceFile (from the Context 'File:' line) and page number if available.
-- Do NOT invent numbers or sources; if unknown, omit the bullet.
+- Do NOT invent numbers.
+- Prefer trend and comparator insights.
+- Keep bullets to 1–5, most decision-relevant.
 
 Question:
 ${question}
 
-Context:
+CONTEXT (Refs):
 ${contextText}`;
 
   const r = await openai.chat.completions.create({
@@ -332,21 +264,13 @@ ${contextText}`;
   });
 
   let obj = {};
-  try {
-    obj = JSON.parse(r.choices?.[0]?.message?.content || "{}");
-  } catch {
-    obj = { headline: "", bullets: [] };
-  }
-  // sanitize bullets 1..5
-  const bullets = Array.isArray(obj.bullets) ? obj.bullets.slice(0, 5).map(b => ({
-    text: String(b?.text || "").trim(),
-    sourceFile: cleanReportName(String(b?.sourceFile || "")),
-    page: (b?.page && Number(b.page)) || undefined
-  })).filter(b => b.text) : [];
-  return { headline: String(obj.headline || "").trim(), bullets };
+  try { obj = JSON.parse(r.choices?.[0]?.message?.content || "{}"); } catch {}
+  const headline = String(obj.headline || "").trim();
+  const bullets = Array.isArray(obj.bullets) ? obj.bullets.map(b => ({ text: String(b?.text || "").trim() })).filter(b => b.text) : [];
+  return { headline, bullets };
 }
 
-// ---------- Live Drive allowlist for search ----------
+// ---------- Live Drive allowlist ----------
 let _driveCache = { ids: new Set(), ts: 0 };
 async function listDriveFileIds() {
   const now = Date.now();
@@ -374,11 +298,11 @@ async function listDriveFileIds() {
   return ids;
 }
 
-// ---------- SEARCH (structured answer + page images + deduped clean refs) ----------
+// ---------- SEARCH ----------
 app.post("/search", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-    const { clientId = "demo", userQuery, topK = 10 } = req.body || {};
+    const { clientId = "demo", userQuery, topK = 30 } = req.body || {};
     if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
@@ -391,44 +315,29 @@ app.post("/search", async (req, res) => {
 
     const q = await index.namespace(clientId).query({
       vector,
-      topK: Number(topK) || 10,
+      topK: Number(topK) || 30,     // get more, then diversify
       includeMetadata: true,
       filter: pineconeFilter,
     });
 
     const matches = q.matches || [];
+    // Build diverse set of sources across files (max 8 into model)
+    const sources = await buildDiverseSources(matches, 8);
+    const structured = await answerStructuredWithRefs(userQuery, sources);
 
-    const structured = await answerWithContextStructured(userQuery, matches);
+    // Build references list from sources (dedup, clean names)
+    const references = sources.map(s => ({
+      ref: s.ref,
+      fileId: s.fileId,
+      fileName: cleanReportName(s.fileName),
+      page: s.page
+    }));
 
-    // Dedup references by fileId; strip ".pdf" and trailing date-like tokens
-    const seenRef = new Set();
-    const references = [];
-    for (const m of matches) {
-      const fid = m.metadata?.fileId;
-      if (!fid || seenRef.has(fid)) continue;
-      seenRef.add(fid);
-      const cleanName = cleanReportName(m.metadata?.fileName || "Untitled");
-      references.push({
-        fileId: fid,
-        fileName: cleanName,
-        page: m.metadata?.page ?? m.metadata?.slide,
-      });
-    }
-
-    // Visuals: exact page PNGs (up to 5 unique fileId+page)
-    const seenVis = new Set();
+    // Visuals: up to 5 page PNGs using the same diverse sources
     const visuals = [];
-    for (const m of matches) {
-      const fid = m.metadata?.fileId;
-      const page = m.metadata?.page ?? m.metadata?.slide;
-      if (!fid || !page) continue;
-      const key = `${fid}:${page}`;
-      if (seenVis.has(key)) continue;
-      seenVis.add(key);
-      const imageUrl = `/preview/page.png?fileId=${encodeURIComponent(fid)}&page=${encodeURIComponent(page)}`;
-      const cleanName = cleanReportName(m.metadata?.fileName || "Untitled");
-      visuals.push({ fileId: fid, fileName: cleanName, page, imageUrl });
-      if (visuals.length >= 5) break;
+    for (const s of sources.slice(0, 5)) {
+      const imageUrl = `/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page || 1)}`;
+      visuals.push({ fileId: s.fileId, fileName: s.fileName, page: s.page || 1, imageUrl });
     }
 
     res.json({ structured, references, visuals });
@@ -437,7 +346,7 @@ app.post("/search", async (req, res) => {
   }
 });
 
-// ---------- Admin: purge namespace ----------
+// ---------- Admin utilities ----------
 app.post("/admin/rebuild-from-drive", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
@@ -449,8 +358,6 @@ app.post("/admin/rebuild-from-drive", async (req, res) => {
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
-
-// ---------- Admin: list PDFs ----------
 app.post("/admin/ingest-list", async (req, res) => {
   try {
     const files = [];
@@ -476,8 +383,6 @@ app.post("/admin/ingest-list", async (req, res) => {
     res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
-
-// ---------- Admin: ingest ONE PDF ----------
 app.post("/admin/ingest-one", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
@@ -495,8 +400,6 @@ app.post("/admin/ingest-one", async (req, res) => {
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
-
-// ---------- Admin: ingest ALL PDFs with live progress (SSE) ----------
 app.post("/admin/ingest-drive", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -548,6 +451,23 @@ app.post("/admin/ingest-drive", async (req, res) => {
   } finally {
     setTimeout(() => { try { res.end(); } catch {} }, 250);
   }
+});
+
+// ---------- Health ----------
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    env: {
+      auth: Boolean(AUTH_TOKEN),
+      driveRoot: Boolean(DRIVE_ROOT_FOLDER_ID),
+      googleCreds: Boolean(CREDS_PATH),
+      openai: Boolean(OPENAI_API_KEY),
+      pinecone: Boolean(PINECONE_API_KEY),
+      index: PINECONE_INDEX,
+      cloud: PINECONE_CLOUD,
+      region: PINECONE_REGION,
+    },
+  });
 });
 
 // ---------- Boot ----------
