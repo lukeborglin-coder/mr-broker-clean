@@ -1,271 +1,332 @@
-// server.js — stable baseline for client chatbot project
-// Endpoints:
-//   POST /upsert-chunks  -> { clientId, fileName, fileUrl, study, date, chunks:[{idSuffix,text}] }
-//   POST /search         -> { clientId, userQuery, topK }
-// Behavior:
-//   - Pinecone namespace per clientId
-//   - Returns { answer, bullets, quotes, references } for UI
-//   - Helpful diagnostics routes and explicit error messages
+// server.js — recency/trend-aware synthesis + reliable slide preview fallbacks
 
 import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { google } from "googleapis";
 import OpenAI from "openai";
 import { Pinecone } from "@pinecone-database/pinecone";
 
-// ---------- Env + App ----------
-const envPath = path.resolve(process.cwd(), ".env");
-dotenv.config({ path: envPath, override: true });
+// ---------- Env / App ----------
+dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
+const PORT = process.env.PORT || 3000;
 
-const PORT = Number(process.env.PORT || 3000);
-const AUTH_TOKEN = process.env.AUTH_TOKEN || "";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const PINECONE_API_KEY = process.env.PINECONE_API_KEY || "";
-const PINECONE_INDEX_HOST = process.env.PINECONE_INDEX_HOST || ""; // e.g. https://myindex-xxxx.svc.us-east1-gcp.pinecone.io
-const DEFAULT_CLIENT_ID = process.env.DEFAULT_CLIENT_ID || "demo";
+const AUTH_TOKEN = (process.env.AUTH_TOKEN || "").trim();
+const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 
-if (!OPENAI_API_KEY) console.warn("[warn] OPENAI_API_KEY not set");
-if (!PINECONE_API_KEY) console.warn("[warn] PINECONE_API_KEY not set");
-if (!PINECONE_INDEX_HOST) console.warn("[warn] PINECONE_INDEX_HOST not set (required)");
-if (!AUTH_TOKEN) console.warn("[warn] AUTH_TOKEN not set — set one for production");
+const PINECONE_INDEX = process.env.PINECONE_INDEX || "mr-index";
+const PINECONE_CLOUD = process.env.PINECONE_CLOUD || "aws";
+const PINECONE_REGION = process.env.PINECONE_REGION || "us-east-1";
+const LIVE_DRIVE_FILTER = String(process.env.LIVE_DRIVE_FILTER || "true").toLowerCase() === "true";
+
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const EMBEDDING_DIMS = 1536;
 
 const app = express();
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "15mb" }));
 app.use(cors());
 app.use(express.static("public"));
 
-// ---------- Auth ----------
-app.use((req, res, next) => {
-  if (!AUTH_TOKEN) return next(); // local/dev
-  const token = req.get("x-auth-token");
-  if (token !== AUTH_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized: missing/invalid x-auth-token" });
+// ---------- Google Drive ----------
+function getCredsPath() {
+  const p =
+    (process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim() ||
+    (process.env.GOOGLE_CREDENTIALS_JSON || "").trim();
+  return p;
+}
+const CREDS_PATH = getCredsPath();
+const gauth = new google.auth.GoogleAuth({
+  keyFile: CREDS_PATH,
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+});
+const drive = google.drive({ version: "v3", auth: gauth });
+
+// ---------- OpenAI + Pinecone ----------
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
+
+async function ensurePineconeIndex() {
+  const list = await pinecone.listIndexes();
+  const exists = list.indexes?.some((i) => i.name === PINECONE_INDEX);
+  if (exists) return;
+  await pinecone.createIndex({
+    name: PINECONE_INDEX,
+    dimension: EMBEDDING_DIMS,
+    metric: "cosine",
+    spec: { serverless: { cloud: PINECONE_CLOUD, region: PINECONE_REGION } },
+  });
+  for (let i = 0; i < 30; i++) {
+    const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
+    if (d?.status?.ready) break;
+    await new Promise((r) => setTimeout(r, 2000));
   }
+}
+let index;
+
+// ---------- Name / Date helpers ----------
+function cleanReportName(name) {
+  if (!name) return "Untitled";
+  let n = String(name).replace(/\.pdf$/i, "");
+  n = n.replace(/([_\-]\d{6,8})$/i, "");     // _111324, -20250115
+  n = n.replace(/([_\-]Q[1-4]\d{4})$/i, ""); // _Q42024
+  n = n.replace(/([_\-][WV]\d{1,2})$/i, ""); // _W6
+  n = n.replace(/([_\-]v\d+)$/i, "");        // _v2
+  return n.trim();
+}
+function dateFromName(name) {
+  const s = String(name || "");
+  let m;
+  m = s.match(/(20\d{2})[-_ ]?(0[1-9]|1[0-2])/); if (m) return new Date(+m[1], +m[2]-1, 1).getTime();
+  m = s.match(/Q([1-4])\s?20(\d{2})/i);        if (m) return new Date(2000+ +m[2], (+m[1]-1)*3, 1).getTime();
+  m = s.match(/(20\d{2})/);                    if (m) return new Date(+m[1], 0, 1).getTime();
+  m = s.match(/(0[1-9]|1[0-2])([0-3]\d)(2\d)/); if (m) return new Date(2000+ +m[3], +m[1]-1, +m[2]).getTime();
+  return 0;
+}
+function fmtYMD(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = (d.getMonth()+1).toString().padStart(2,"0");
+  return `${y}-${m}`;
+}
+
+// ---------- Serve raw PDF for client-side pdf.js ----------
+app.get("/file/pdf", async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "");
+    if (!fileId) return res.status(400).send("fileId required");
+    const r = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+    const buf = Buffer.from(r.data || []);
+    if (!buf.length) return res.status(404).send("empty");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.end(buf);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+// ---------- PNG preview (server-side fallback) ----------
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { createCanvas } from "canvas";
+const PREVIEW_DIR = "/tmp/previews";
+if (!fs.existsSync(PREVIEW_DIR)) fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+
+async function downloadDriveFileBuffer(fileId) {
+  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+  const buf = Buffer.from(resp.data || []);
+  if (!buf.length) throw new Error("empty file");
+  return buf;
+}
+async function renderPdfPagePng(fileId, pageNumber) {
+  const safeId = String(fileId).replace(/[^a-zA-Z0-9_-]/g, "");
+  const pageNum = Math.max(1, Number(pageNumber) || 1);
+  const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
+  if (fs.existsSync(pngPath)) return pngPath;
+
+  const data = await downloadDriveFileBuffer(fileId);
+  const pdf = await getDocument({ data, useWorker: false }).promise;
+  const page = await pdf.getPage(pageNum);
+  const viewport = page.getViewport({ scale: 1.5 });
+  const canvas = createCanvas(viewport.width, viewport.height);
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  await new Promise((res, rej) => {
+    const out = fs.createWriteStream(pngPath);
+    canvas.createPNGStream().pipe(out);
+    out.on("finish", res);
+    out.on("error", rej);
+  });
+  return pngPath;
+}
+app.get("/preview/page.png", async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "");
+    const page = Number(req.query.page || 1);
+    if (!fileId) return res.status(400).send("fileId required");
+    try {
+      const png = await renderPdfPagePng(fileId, page);
+      res.type("image/png"); fs.createReadStream(png).pipe(res); return;
+    } catch {
+      const blank = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=","base64");
+      res.type("image/png").send(blank);
+    }
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+// ---------- Auth guard for API ----------
+app.use((req, res, next) => {
+  if (!AUTH_TOKEN) return next();
+  if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN) return res.status(401).json({ error: "Unauthorized" });
   next();
 });
 
-// ---------- Clients ----------
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-const pine = new Pinecone({ apiKey: PINECONE_API_KEY });
-const index = PINECONE_INDEX_HOST
-  ? pine.Index(PINECONE_INDEX_HOST) // SDK supports host alias
-  : null;
-
-// ---------- Helpers ----------
-function ns(clientId) {
-  return (clientId || "").trim() || DEFAULT_CLIENT_ID;
+// ---------- Embedding / ingest ----------
+async function embedText(text) {
+  const { data } = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
+  return data[0].embedding;
+}
+async function parsePdfPages(buffer) {
+  const mod = await import("pdf-parse/lib/pdf-parse.js").catch(() => null);
+  const fn = (mod?.default || mod) || (await import("pdf-parse")).default;
+  const parsed = await fn(buffer);
+  return (parsed.text || "").split("\f").map(p=>p.trim()).filter(Boolean);
+}
+function chunkText(str, chunk=2000, overlap=200){const out=[];let i=0;while(i<str.length){out.push(str.slice(i,i+chunk));i+=Math.max(1,chunk-overlap);}return out;}
+async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
+  const vectors=[];
+  for (let i=0;i<chunks.length;i++){
+    const values=await embedText(chunks[i]);
+    vectors.push({ id:`${fileId}_${page??0}_${i}_${Date.now()}`, values, metadata:{ clientId,fileId,fileName,page,text:chunks[i] }});
+  }
+  if (vectors.length) await index.namespace(clientId).upsert(vectors);
+}
+async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages=Infinity }) {
+  const buf=await downloadDriveFileBuffer(fileId);
+  const pages=await parsePdfPages(buf);
+  const limit=Math.min(pages.length, Number.isFinite(maxPages)?maxPages:pages.length);
+  for (let p=0;p<limit;p++){const t=pages[p];if(!t)continue;const ch=chunkText(t,2000,200);await upsertChunks({clientId,fileId,fileName,chunks:ch,page:p+1});}
 }
 
-function cleanQuotesKeepPeriod(s) {
-  if (!s) return "";
-  let t = String(s).trim();
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
-    t = t.slice(1, -1).trim();
-  }
-  return t;
+// ---------- Search helpers (recency + trend metadata) ----------
+async function buildDiverseSources(matches, maxSources=8){
+  const byFile=new Map();
+  for(const m of matches){const fid=m.metadata?.fileId;if(!fid)continue;if(!byFile.has(fid))byFile.set(fid,m);}
+  const diverse=[...byFile.values()];
+  const metas=await Promise.all(diverse.map(async m=>{
+    try{
+      const info=await drive.files.get({fileId:m.metadata.fileId,fields:"id,name,modifiedTime",supportsAllDrives:true}).then(r=>r.data);
+      const tName=dateFromName(info.name||m.metadata.fileName||"");
+      const tMod=info.modifiedTime?new Date(info.modifiedTime).getTime():0;
+      const ts=Math.max(tName,tMod);
+      return { match:m, name:info.name||m.metadata.fileName||"", ts };
+    }catch{
+      const ts=dateFromName(m.metadata.fileName||"");
+      return { match:m, name:m.metadata.fileName||"", ts };
+    }
+  }));
+  metas.sort((a,b)=> (b.ts||0)-(a.ts||0));
+  return metas.slice(0,maxSources).map((x,i)=>({
+    ref: i+1,
+    fileId: x.match.metadata.fileId,
+    fileName: cleanReportName(x.name || x.match.metadata.fileName || "Untitled"),
+    page: x.match.metadata.page ?? x.match.metadata.slide ?? 1,
+    text: x.match.metadata.text || "",
+    ts: x.ts || 0
+  }));
 }
 
-function shapeForUi(answerText, matches) {
-  // Build bullets from the top few retrieved chunks' first sentences
-  const bullets = [];
-  const quotes = [];
-  const references = [];
+async function answerStructured(question, sources){
+  const ctx = sources.map(s=>`# Ref ${s.ref}
+File: ${s.fileName} | Page: ${s.page} | Date: ${fmtYMD(s.ts) || "unknown"}
+---
+${s.text}`).join("\n\n");
 
-  (matches || []).slice(0, 6).forEach((m) => {
-    const txt = (m?.metadata?.text || "").trim();
-    const fileName = m?.metadata?.fileName || m?.metadata?.title || "Untitled";
-    const firstSentence = txt.split(/(?<=\.)\s+/)[0] || txt;
-    if (firstSentence) bullets.push(firstSentence.replace(/\.\s*$/, "") + ".");
-    // Create clean quote candidates from the same sentence
-    if (firstSentence) quotes.push(cleanQuotesKeepPeriod(firstSentence));
-    references.push({
-      title: m?.metadata?.title || fileName,
-      fileName,
-      page: m?.metadata?.page,
-      slide: m?.metadata?.slide,
-    });
-  });
+  const prompt = `You are a pharma market-research analyst.
 
-  // Deduplicate quotes & references lightly
-  const qset = new Set();
-  const quotesUnique = [];
-  for (const q of quotes) {
-    const k = q.toLowerCase();
-    if (!qset.has(k)) {
-      qset.add(k);
-      quotesUnique.push(q.endsWith(".") ? q : q + ".");
-    }
-  }
+Use ONLY the refs to answer. Rules:
+- Determine the *current* metric/value (e.g., satisfaction, share, NPS) by using the *most recent* relevant reference (latest Date). 
+- If older refs contain a prior value for the same metric, compute and state the trend succinctly, e.g., "now 60%, up +10% vs 2024."
+- Prefer recent evidence; never average across waves unless explicitly stated in refs.
+- Write a concise, conversational "headline" (2–4 sentences) plus 1–3 short bullets. 
+- Then provide 3–7 Supporting Detail bullets that are close to the wording/numbers in the refs.
+- Use numeric citations with NO brackets and NO space before the superscript (use ^n^ placeholders that I'll convert to superscripts).
+- Ensure all bullet lines DO NOT end with a period.
 
-  const rset = new Set();
-  const refsUnique = [];
-  for (const r of references) {
-    const key = (r.title || r.fileName || "").toLowerCase();
-    if (!rset.has(key)) {
-      rset.add(key);
-      refsUnique.push(r);
-    }
-  }
+Also produce:
+- OPTIONAL "quotes": 1–4 short verbatim snippets (<=25 words each) that support the headline. Place citations after the closing quotation mark; include them as part of the string like: "…quote" ^2^. Keep quotes clean (no trailing period inside the quotes).
 
-  return {
-    answer: answerText || "",
-    bullets: bullets.slice(0, 6),
-    quotes: quotesUnique.slice(0, 6),
-    references: refsUnique.slice(0, 12),
-  };
+Return STRICT JSON:
+{
+  "headline": { "paragraph": "sentences with ^n^", "bullets": ["bullet with ^n^ and no trailing period"] },
+  "supporting": [ { "text": "close-to-source bullet with numbers and ^n^ (no trailing period)" } ],
+  "quotes": ["short quote with citation after the quote like: \\"…\\" ^2^"]
 }
 
-// ---------- Diagnostics ----------
-app.get("/health", (req, res) => res.json({ ok: true }));
-app.get("/env", (req, res) => {
-  res.json({
-    PORT,
-    DEFAULT_CLIENT_ID,
-    hasAuthToken: Boolean(AUTH_TOKEN),
-    openaiKeyLen: (OPENAI_API_KEY || "").length,
-    pineKeyLen: (PINECONE_API_KEY || "").length,
-    pineHost: PINECONE_INDEX_HOST,
-  });
-});
-app.get("/whoami", (req, res) => res.json({ clientIdDefault: DEFAULT_CLIENT_ID }));
-app.get("/ping-pinecone", async (req, res) => {
-  try {
-    if (!index) return res.status(500).json({ error: "Pinecone index not configured" });
-    const stats = await index.describeIndexStats();
-    res.json({ ok: true, stats });
-  } catch (e) {
-    res.status(500).json({ error: "Pinecone error", detail: String(e?.message || e) });
-  }
-});
-
-// ---------- Ingest ----------
-app.post("/upsert-chunks", async (req, res) => {
-  try {
-    if (!index) return res.status(500).json({ error: "PINECONE_INDEX_HOST is not configured" });
-
-    const { clientId, fileName, fileUrl, study, date, chunks } = req.body || {};
-    if (!Array.isArray(chunks) || chunks.length === 0) {
-      return res.status(400).json({ error: "No chunks provided" });
-    }
-
-    const namespace = ns(clientId);
-
-    const vectors = chunks.map((c, i) => {
-      const id = `${fileName || "file"}:${c.idSuffix ?? i}`;
-      return {
-        id,
-        values: [], // we will use server-side sparse embeddings; keep empty for now if using hybrid
-        metadata: {
-          text: c.text,
-          fileName,
-          fileUrl,
-          study,
-          date,
-        },
-      };
-    });
-
-    // If you're using text-embedding for dense vectors, compute here:
-    // const emb = await openai.embeddings.create({ model: "text-embedding-3-large", input: chunks.map(c => c.text) })
-    // and map to vectors[i].values = emb.data[i].embedding
-
-    await index.namespace(namespace).upsert(vectors);
-    res.json({ ok: true, upserted: vectors.length, namespace });
-  } catch (e) {
-    console.error("upsert-chunks error:", e);
-    res.status(500).json({ error: "Failed to upsert", detail: String(e?.message || e) });
-  }
-});
-
-// ---------- Search ----------
-app.post("/search", async (req, res) => {
-  try {
-    if (!index) return res.status(500).json({ error: "PINECONE_INDEX_HOST is not configured" });
-
-    const { clientId, userQuery, topK = 6 } = req.body || {};
-    const namespace = ns(clientId);
-
-    if (!userQuery || !String(userQuery).trim()) {
-      return res.status(400).json({ error: "userQuery is required" });
-    }
-
-    // Get a query embedding (you can switch to hybrid if you’ve set it up)
-    const embed = await openai.embeddings.create({
-      model: "text-embedding-3-large",
-      input: userQuery,
-    });
-    const qvec = embed.data[0].embedding;
-
-    const results = await index.namespace(namespace).query({
-      vector: qvec,
-      topK: Math.max(3, Math.min(24, Number(topK) || 6)),
-      includeMetadata: true,
-    });
-
-    const matches = results?.matches || [];
-    if (!matches.length) {
-      return res.json({
-        answer: "",
-        bullets: [],
-        quotes: [],
-        references: [],
-        note: `No hits in Pinecone for clientId="${namespace}". Check clientId and ingestion.`,
-      });
-    }
-
-    // Build a compact context for the LLM
-    const context = matches
-      .slice(0, 12)
-      .map((m, i) => `#${i + 1} (${m?.metadata?.fileName || "file"})\n${m?.metadata?.text || ""}`)
-      .join("\n\n---\n\n");
-
-    const prompt = `
-You are a research analyst. Answer the question using ONLY the provided context.
-If you can compute a trend (e.g., 79% -> 83%) prefer the latest.
-Cite supporting details in bullet form, and pull 2-4 short quotes from the text.
-Keep quotes without outer double quotes, but keep ending periods.
-
-QUESTION:
-${userQuery}
+Question:
+${question}
 
 CONTEXT:
-${context}
+${ctx}`;
 
-Write JSON with keys: answer (string), bullets (array of 3-6 strings), quotes (array of 2-4 strings).
-`;
+  const r = await openai.chat.aiCompletions?.create?.({}) // guard for older SDKs (no-op)
+  const resp = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role:"user", content: prompt }],
+    temperature: 0.2,
+    response_format: { type:"json_object" }
+  });
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: "You output strictly compact JSON." },
-        { role: "user", content: prompt },
-      ],
-      response_format: { type: "json_object" },
-    });
+  let obj={ headline:{ paragraph:"", bullets:[] }, supporting:[], quotes:[] };
+  try{ obj=JSON.parse(resp.choices?.[0]?.message?.content||"{}"); }catch{}
+  obj.headline = {
+    paragraph: String(obj.headline?.paragraph||"").trim(),
+    bullets: Array.isArray(obj.headline?.bullets)? obj.headline.bullets.slice(0,3).map(s=>String(s||"").trim()).filter(Boolean) : []
+  };
+  obj.supporting = Array.isArray(obj.supporting)? obj.supporting.slice(0,7).map(b=>({ text:String(b?.text||"").trim() })).filter(b=>b.text) : [];
+  obj.quotes = Array.isArray(obj.quotes)? obj.quotes.slice(0,4).map(q=>String(q||"").trim()).filter(Boolean) : [];
+  return obj;
+}
 
-    let draft = {};
-    try {
-      draft = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
-    } catch {
-      draft = {};
+// ---------- Drive allowlist ----------
+let _driveCache={ids:new Set(),ts:0};
+async function listDriveFileIds(){
+  const now=Date.now(); if(now-_driveCache.ts<60_000 && _driveCache.ids.size>0) return _driveCache.ids;
+  const ids=new Set(); if(!DRIVE_ROOT_FOLDER_ID) return ids;
+  const q=`'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
+  let pageToken=null;
+  do{
+    const r=await drive.files.list({ q, fields:"files(id,name,mimeType),nextPageToken", pageSize:1000, includeItemsFromAllDrives:true, supportsAllDrives:true, pageToken });
+    (r.data.files||[]).forEach(f=>{ if((f.mimeType||"").toLowerCase().includes("pdf")) ids.add(f.id); });
+    pageToken=r.data.nextPageToken||null;
+  }while(pageToken);
+  _driveCache={ids,ts:now}; return ids;
+}
+
+// ---------- SEARCH ----------
+app.post("/search", async (req, res) => {
+  try{
+    if(!index) return res.status(503).json({ error:"Pinecone index not ready yet" });
+    const { clientId="demo", userQuery, topK=40 } = req.body||{};
+    if(!userQuery) return res.status(400).json({ error:"userQuery required" });
+
+    const vector=await embedText(userQuery);
+    let filter;
+    if (LIVE_DRIVE_FILTER) {
+      const live=await listDriveFileIds();
+      filter = live.size ? { fileId:{ $in:[...live] } } : { fileId:{ $in:["__none__"] } };
     }
 
-    // Ensure UI shape & add references
-    const ui = shapeForUi(draft?.answer || "", matches);
-    if (Array.isArray(draft?.bullets)) ui.bullets = draft.bullets;
-    if (Array.isArray(draft?.quotes)) ui.quotes = draft.quotes.map(cleanQuotesKeepPeriod);
+    const q=await index.namespace(clientId).query({ vector, topK:Number(topK)||40, includeMetadata:true, filter });
+    const matches=q.matches||[];
 
-    res.json(ui);
-  } catch (e) {
-    console.error("search error:", e);
-    res.status(500).json({ error: "Search failed", detail: String(e?.message || e) });
+    const sources=await buildDiverseSources(matches, 8);
+    const structured=await answerStructured(userQuery, sources);
+
+    const references=sources.map(s=>({ ref:s.ref, fileId:s.fileId, fileName:cleanReportName(s.fileName), page:s.page||1 }));
+    const visuals=sources.slice(0, 6).map(s=>({
+      fileId:s.fileId,
+      fileName:s.fileName,
+      page:s.page||1,
+      // provides a PNG fallback URL that the client can try if /file/pdf render fails
+      imageUrl:`/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page||1)}`
+    }));
+
+    res.json({ structured, references, visuals });
+  }catch(e){
+    res.status(500).json({ error:e?.message||String(e) });
   }
 });
 
-// ---------- Start ----------
-app.listen(PORT, () => {
-  console.log(`mr-broker running on :${PORT}`);
-});
+// ---------- Boot ----------
+(async ()=>{
+  try{ await ensurePineconeIndex(); index=pinecone.index(PINECONE_INDEX); }catch(e){ console.error("pinecone bootstrap failed",e); }
+  app.listen(PORT, ()=>console.log(`mr-broker running on :${PORT}`));
+})();
