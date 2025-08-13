@@ -31,15 +31,19 @@ body {
 
 /* Search */
 .search { margin: 18px 0 20px; }
-#qform { display:flex; gap: 8px; }
+#qform { display:grid; grid-template-columns: 1fr auto; gap: 8px 8px; align-items: start; }
 #q {
-  flex: 1;
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid #d6dae0;
   background: #fff;
   font-size: 15px;
+  width: 100%;
+  resize: vertical;          /* allow user to expand if needed */
+  min-height: 70px;          /* ~3 lines at default font */
+  line-height: 1.35;
 }
+.search-actions { display:flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 #ask {
   padding: 10px 14px;
   border: 0;
@@ -47,8 +51,10 @@ body {
   background: #ff7a00;
   color: #fff; font-weight: 700;
   cursor: pointer;
+  height: 40px;
 }
 #ask:hover { filter: brightness(.95); }
+.hint { margin-right: 2px; }
 
 /* Results wrapper */
 .results { margin-top: 10px; }
