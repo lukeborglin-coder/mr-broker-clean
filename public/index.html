@@ -6,24 +6,17 @@
   <title>COGgpt — Research Q&A</title>
 
   <link rel="stylesheet" href="/styles.css" />
-  <!-- Auth token for /search; update if rotated -->
   <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
 
-  <!-- Charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="page">
-
-    <!-- Header -->
     <header class="header">
-      <h1 class="title">
-        <span class="title-cog">COG</span><span class="title-gpt">gpt</span>
-      </h1>
+      <h1 class="title"><span class="title-cog">COG</span><span class="title-gpt">gpt</span></h1>
       <div class="beta-badge">BETA</div>
     </header>
 
-    <!-- Search -->
     <section class="search">
       <form id="qform" autocomplete="off">
         <textarea id="q" rows="3"
@@ -33,9 +26,7 @@
       <div id="inlineErr" class="muted hidden"></div>
     </section>
 
-    <!-- Results -->
     <div id="results" class="results hidden">
-
       <section class="callout" aria-live="polite">
         <div id="answer"></div>
         <ul id="keynums" class="keynums"></ul>
@@ -78,11 +69,14 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+      [].concat(children).forEach(c => {
+        if (c === null || c === undefined) return;
+        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+      });
       return node;
     }
 
-    // ^2^ -> <sup>2</sup> (no brackets/spaces)
+    // ^2^ -> <sup>2</sup>
     const caretsToSup = s => String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
 
     function ensurePeriodInsideQuotes(txt) {
@@ -98,7 +92,7 @@
     }
     const niceTitle = s => (s || "").replace(/_/g, " ");
 
-    // ---------- time parsing from report title ----------
+    // ---------- time parsing ----------
     function parseTimeFromTitle(title="") {
       const t = String(title);
       const year = (t.match(/(20\d{2})/) || [])[1] ? +RegExp.$1 : null;
@@ -122,20 +116,20 @@
     const sortRefsAsc = refs => [...(refs||[])].sort((a,b)=>parseTimeFromTitle(a.fileName).score - parseTimeFromTitle(b.fileName).score);
     const sortRefsDesc = refs => sortRefsAsc(refs).reverse();
 
-    // ---------- gather lines (we also accept unsourced) ----------
+    // ---------- gather all possible lines (supporting + bullets + paragraph) ----------
     function gatherLines(data) {
       const s = data.structured || {};
       const arr = [];
-      if (Array.isArray(s.headline?.bullets)) arr.push(...s.headline.bullets);
       if (Array.isArray(s.supporting)) arr.push(...s.supporting.map(x=>x.text).filter(Boolean));
+      if (Array.isArray(s.headline?.bullets)) arr.push(...s.headline.bullets);
       if (s.headline?.paragraph) arr.push(s.headline.paragraph);
       return arr;
     }
 
-    // detect trend intent (Evrysdi + Satisfaction/NPS)
+    // trend intent (Evrysdi + Satisfaction/NPS somewhere in request or response)
     function isTrendIntent(userQuery, data) {
       const txt = (userQuery + " " + gatherLines(data).join(" ")).toLowerCase();
-      return /\bevrysdi\b/.test(txt) && (/\bsatisfaction\b/.test(txt) || /\bnps\b/.test(txt) || /net\s*promoter/.test(txt));
+      return /\bsatisfaction\b|\bnps\b|\bnet\s*promoter\b/.test(txt);
     }
 
     // ---------- map multiple % on one line to waves by time ----------
@@ -145,7 +139,7 @@
       const hintsNow  = /\bnow\b|\bcurrent\b/i.test(lineText);
       for (let i=0; i<percents.length; i++) {
         const v = +percents[i];
-        let refObj = refsSortedDesc[i] || refsSortedDesc[0]; // 1st → latest; 2nd → prev; …
+        let refObj = refsSortedDesc[i] || refsSortedDesc[0]; // 1st → latest; 2nd → previous; …
         if (percents.length === 1 && hintsPrev && refsSortedDesc[1]) refObj = refsSortedDesc[1];
         if (percents.length === 1 && hintsNow) refObj = refsSortedDesc[0];
         out.push({ value: v, ref: refObj.ref });
@@ -153,7 +147,7 @@
       return out;
     }
 
-    // ---------- collect trend points (robust: supporting, bullets, paragraph; caret optional) ----------
+    // ---------- collect trend points (robust; no “Evrysdi” requirement; caret optional) ----------
     function collectTrendPoints(data) {
       const refMap = buildRefMap(data.references || []);
       const refsAsc = sortRefsAsc(data.references || []);
@@ -162,7 +156,7 @@
 
       const points = [];
       lines.forEach(text => {
-        if (!/evrysdi/i.test(text)) return;
+        // must be satisfaction or NPS line
         if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
 
         // pull all % on this line
@@ -184,7 +178,7 @@
         });
       });
 
-      // de‑dupe by ref (keep one value per report, prefer the last mention)
+      // de‑dupe by ref (keep one value per report, prefer last mention)
       const byRef = new Map();
       points.forEach(p => byRef.set(p.ref, p));
       return Array.from(byRef.values()).sort((a,b)=>a.score - b.score);
@@ -218,7 +212,7 @@
         return [points[points.length-1]?.raw, points[points.length-2]?.raw, points[points.length-3]?.raw].filter(Boolean);
       }
 
-      // if no points, show paragraph as-is (sourced if possible)
+      // fallback: paragraph
       const s = (window.__DATA__?.structured) || {};
       const p = s.headline?.paragraph || window.__DATA__?.answer || window.__DATA__?.summary || window.__DATA__?.result || "";
       answer.innerHTML = caretsToSup(p);
@@ -226,25 +220,25 @@
       return [];
     }
 
-    // ---------- Additional Support (top 5 + Show more, with generated per‑wave bullets) ----------
+    // ---------- Additional Support (generated per‑wave bullets + extras) ----------
     function renderAdditionalSupport(data, usedRaw, pointsForBullets) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
 
+      // generated bullets (ensure superscripts)
       const gen = (pointsForBullets || []).map(p => `${p.x}: ${p.y}% ^${p.ref}^`);
 
       const s = data.structured || {};
       const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
       const modelLines = headBul.concat(supp)
-        .filter(t => /\^?\d+\^?/.test(String(t))) // keep even if caret-less (we’ll still show it)
+        .filter(t => /%/.test(String(t))) // must include a %
         .filter(t => !usedRaw.some(raw => String(raw).trim() === String(t).trim()));
 
       const all = gen.concat(modelLines);
 
       const refMap = buildRefMap(data.references || []);
       const withTime = all.map(t => {
-        // use first caret if present; otherwise assume latest
         const m = String(t).match(/\^(\d+)\^/);
         let ref = m ? +m[1] : (sortRefsDesc(data.references || [])[0]?.ref);
         const time = refMap.get(ref)?.time || {score:0};
@@ -278,7 +272,7 @@
       }
     }
 
-    // ---------- quotes (respondent only) ----------
+    // ---------- quotes ----------
     function renderQuotes(data) {
       const panel = qs("#quotesPanel");
       const root = qs("#quotes"); root.innerHTML = "";
@@ -308,7 +302,7 @@
 
       if (!points.length) { hide(panel); return; }
 
-      // Table (always)
+      // table (always)
       const table = document.createElement("table");
       table.className = "data-table";
       table.innerHTML = `
@@ -323,7 +317,7 @@
       });
       tbl.appendChild(table);
 
-      // Line chart if ≥2 points
+      // line chart if ≥2 points
       if (points.length >= 2) {
         const labels = points.map(p => p.x);
         const values = points.map(p => p.y);
@@ -381,7 +375,7 @@
 
       let data = {};
       try { data = dataText ? JSON.parse(dataText) : {}; } catch { data = {}; }
-      window.__DATA__ = data; // for paragraph fallback in renderHeadlineAndKeys
+      window.__DATA__ = data;
 
       try {
         const trendIntent = isTrendIntent(userQuery, data);
@@ -394,7 +388,6 @@
           usedRaw = renderHeadlineAndKeys(points);
           renderAdditionalSupport(data, usedRaw, points);
         } else {
-          // generic fallback
           const s = data.structured || {};
           const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
           qs("#answer").innerHTML = caretsToSup(p);
