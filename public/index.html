@@ -78,11 +78,14 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+      [].concat(children).forEach(c => {
+        if (c === null || c === undefined) return;
+        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+      });
       return node;
     }
 
-    // ^2^ -> <sup>2</sup>
+    // ^2^ -> <sup>2</sup> (no brackets/spaces)
     const caretsToSup = s => String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
 
     function ensurePeriodInsideQuotes(txt) {
@@ -106,11 +109,10 @@
       const wave = (t.match(/\bW(\d{1,2})\b/i) || [])[1] ? +RegExp.$1 : null;
       const isATU = /ATU/i.test(t);
       const score = (year || 0) * 100 + (wave || 0) * 4 + (quarter || 0);
-      let parts = [];
+      const parts = [];
       if (wave) parts.push(`W${wave}${isATU ? " ATU" : ""}`);
       if (year) parts.push(String(year));
-      if (!parts.length && year) parts = [String(year)];
-      return { year, quarter, wave, isATU, score, label: parts.join(", ") || "Study" };
+      return { year, quarter, wave, isATU, score, label: (parts.length ? parts.join(", ") : (year ? String(year) : "Study")) };
     }
     function buildRefMap(refs=[]) {
       const map = new Map();
@@ -120,6 +122,8 @@
       }));
       return map;
     }
+    const sortRefsAsc = refs => [...(refs||[])].sort((a,b)=>parseTimeFromTitle(a.fileName).score - parseTimeFromTitle(b.fileName).score);
+    const sortRefsDesc = refs => sortRefsAsc(refs).reverse();
 
     // ---------- gather sourced text ----------
     function getSourcedTextBlocks(data) {
@@ -131,113 +135,69 @@
       return arr.filter(t => /\^\d+\^/.test(String(t))); // only sourced
     }
 
-    // ---------- brands & topic routing ----------
-    const BRANDS = ["Evrysdi","Spinraza","Zolgensma","Nusinersen","Risdiplam"];
-    function detectBrands(text) {
-      const found = new Set();
-      BRANDS.forEach(b => { if (new RegExp("\\b" + b + "\\b", "i").test(text)) found.add(b); });
-      // possessive heuristic (e.g., "Spinraza's share")
-      const poss = text.match(/\b([A-Z][a-zA-Z]+)'s\b/g) || [];
-      poss.forEach(p => found.add(p.replace(/'s$/,'')));
-      return Array.from(found);
-    }
-    function isMarketShareQuery(userQuery, blocks) {
-      const q = String(userQuery||"");
-      const joined = (blocks||[]).join(" ");
-      const txt = (q + " " + joined).toLowerCase();
-      return /\bmarket share|share\b/.test(txt);
-    }
+    // ---------- intent routing ----------
     function isTrendMetric(blocks) {
       const txt = (blocks||[]).join(" ").toLowerCase();
-      return /\bsatisfaction\b|\bnps\b|\bnet\s*promoter\b/.test(txt);
+      return /\bevrysdi\b/.test(txt) && (/\bsatisfaction\b/.test(txt) || /\bnps\b/.test(txt) || /net\s*promoter/.test(txt));
     }
 
-    // ---------- collect points: satisfaction/NPS (chronological) ----------
+    // ---------- map multiple % on one line to waves by time ----------
+    function mapPercentsToRefs(percents, refsSortedDesc, lineText) {
+      const out = [];
+      const hintsPrev = /\bprev(ious)?\s+wave\b/i.test(lineText);
+      const hintsNow  = /\bnow\b|\bcurrent\b/i.test(lineText);
+
+      for (let i=0; i<percents.length; i++) {
+        const v = percents[i];
+        let refObj = refsSortedDesc[i] || refsSortedDesc[0]; // 1st → latest; 2nd → prev; …
+        // tiny nudge: if only one % and the line says "previous wave", pick previous ref if available
+        if (percents.length === 1 && hintsPrev && refsSortedDesc[1]) refObj = refsSortedDesc[1];
+        if (percents.length === 1 && hintsNow) refObj = refsSortedDesc[0];
+        out.push({ value: +v, ref: refObj.ref });
+      }
+      return out;
+    }
+
+    // ---------- collect trend points (robust) ----------
     function collectTrendPoints(data) {
       const refMap = buildRefMap(data.references || []);
+      const refsAsc = sortRefsAsc(data.references || []);
+      const refsDesc = refsAsc.slice().reverse();
       const blocks = getSourcedTextBlocks(data);
-      const points = [];
 
+      const points = [];
       blocks.forEach(line => {
         const text = String(line);
         if (!/evrysdi/i.test(text)) return;
         if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
 
-        const refM = text.match(/\^(\d+)\^/);
-        const pctM = text.match(/(\d{1,3})%\b/);
-        if (!refM || !pctM) return;
+        const pcts = Array.from(text.matchAll(/(\d{1,3})%\b/g)).map(m => +m[1]);
+        if (!pcts.length) return;
 
-        const ref = +refM[1];
-        const y = +pctM[1];
-        const info = refMap.get(ref) || {};
-        const { title, time } = info;
-        const label = time.label || "Study";
-
-        points.push({
-          x: label, y, ref,
-          title: title || "Report",
-          score: time.score || 0,
-          raw: text
+        const mapped = mapPercentsToRefs(pcts, refsDesc, text);
+        mapped.forEach(({value, ref}) => {
+          const info = refMap.get(ref) || {};
+          const { title, time } = info;
+          points.push({
+            x: (time && time.label) ? time.label : "Study",
+            y: value,
+            ref,
+            title: title || "Report",
+            score: (time && time.score) ? time.score : 0,
+            raw: text
+          });
         });
       });
 
-      const map = new Map();
-      points.forEach(p => map.set(p.score + "::" + p.x, p));
-      return Array.from(map.values()).sort((a,b)=>a.score - b.score);
-    }
-
-    // ---------- collect market-share snapshot(s) ----------
-    function collectSharePoints(data) {
-      const refMap = buildRefMap(data.references || []);
-      const blocks = getSourcedTextBlocks(data);
-      const rows = [];
-
-      blocks.forEach(line => {
-        const text = String(line);
-        if (!/\bshare\b/i.test(text)) return;
-        const refM = text.match(/\^(\d+)\^/);
-        if (!refM) return;
-        const ref = +refM[1];
-        const info = refMap.get(ref) || {};
-        const { title, time } = info;
-
-        const brands = detectBrands(text);
-        const percents = Array.from(text.matchAll(/(\d{1,3})%\b/g)).map(m => +m[1]);
-
-        // Heuristic: if multiple brands mentioned and multiple %'s, pair them in order
-        if (brands.length && percents.length) {
-          const n = Math.min(brands.length, percents.length);
-          for (let i=0;i<n;i++){
-            rows.push({
-              brand: brands[i],
-              value: percents[i],
-              ref,
-              title: title || "Report",
-              time: time,
-              timeLabel: time.label || "Study",
-              score: time.score || 0,
-              raw: text
-            });
-          }
-        } else if (brands.length === 1 && percents.length >= 1) {
-          rows.push({
-            brand: brands[0],
-            value: percents[0],
-            ref,
-            title: title || "Report",
-            time: time,
-            timeLabel: time.label || "Study",
-            score: time.score || 0,
-            raw: text
-          });
-        }
-      });
-
-      return rows;
+      // de-dupe: keep the latest value for each ref
+      const byRef = new Map();
+      points.forEach(p => byRef.set(p.ref, p));
+      const unique = Array.from(byRef.values()).sort((a,b)=>a.score - b.score);
+      return unique;
     }
 
     // ---------- headline + key numbers ----------
-    function headlineFromTrend(points) {
+    function headlineFromTrend(points, refMap) {
       const latest = points[points.length - 1];
       const prev1  = points[points.length - 2];
       const prev2  = points[points.length - 3];
@@ -248,66 +208,42 @@
       if (prev2) parts.push(`and ${prev2.y}% (${prev2.x})<sup class="ref-sup">${prev2.ref}</sup>`);
       return parts.join(", ") + ".";
     }
-    function headlineFromShare(latestSnapshotByBrand) {
-      // prioritize Evrysdi if present
-      const ev = latestSnapshotByBrand.find(r => /evrysdi/i.test(r.brand));
-      const label = ev ? ev.timeLabel : (latestSnapshotByBrand[0]?.timeLabel || "Study");
-      const topLine = ev
-        ? `Evrysdi's current market share is ${ev.value}% (${label})<sup class="ref-sup">${ev.ref}</sup>.`
-        : `Current market share snapshot (${label}) is available.<sup class="ref-sup">${latestSnapshotByBrand[0].ref}</sup>`;
 
-      // append a short compare sentence (Spinraza / Zolgensma if present)
-      const others = latestSnapshotByBrand.filter(r => !/evrysdi/i.test(r.brand)).slice(0,2);
-      const comps = others.map(o => `${o.brand}: ${o.value}%<sup class="ref-sup">${o.ref}</sup>`).join(", ");
-      return comps ? `${topLine} ${comps}.` : topLine;
-    }
-
-    // ---------- render headline & key numbers (+return raw lines to dedup) ----------
     function renderHeadlineAndKeys_Trend(points) {
       const answer = qs("#answer");
       const keyUl = qs("#keynums"); keyUl.innerHTML = "";
+
       const line = headlineFromTrend(points);
       answer.innerHTML = line;
 
-      // Key numbers: latest, prev1, prev2 (max 3)
+      // Key numbers: one per wave (latest back to two priors)
       [points[points.length-1], points[points.length-2], points[points.length-3]]
         .filter(Boolean)
         .forEach(p => keyUl.appendChild(el("li", { html: `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>` })));
       show(keyUl);
+      // raw lines used, to dedup from Additional Support
       return [points[points.length-1]?.raw, points[points.length-2]?.raw, points[points.length-3]?.raw].filter(Boolean);
     }
-    function renderHeadlineAndKeys_Share(latestSnapshotByBrand) {
-      const answer = qs("#answer");
-      const keyUl = qs("#keynums"); keyUl.innerHTML = "";
 
-      answer.innerHTML = headlineFromShare(latestSnapshotByBrand);
-
-      // Key numbers: list the top 3 brands in that snapshot
-      latestSnapshotByBrand.slice(0,3).forEach(r => {
-        keyUl.appendChild(el("li", { html: `${r.brand}: ${r.value}% (${r.timeLabel})<sup class="ref-sup">${r.ref}</sup>` }));
-      });
-      show(keyUl);
-      // return the raw lines used to dedup
-      return latestSnapshotByBrand.slice(0,3).map(r => r.raw);
-    }
-
-    // ---------- Additional Support (chronological, top 5 + Show more, dedup) ----------
-    function renderAdditionalSupport(data, usedRaw) {
+    // ---------- Additional Support (chronological, top 5 + Show more, de‑dup) ----------
+    function renderAdditionalSupport(data, usedRaw, pointsForNiceBullets=[]) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
 
+      // Start with one generated bullet per wave (clean + sourced)
+      const gen = pointsForNiceBullets.map(p => `${p.x}: ${p.y}% ^${p.ref}^`);
+      // Then add model bullets that weren’t used in headline
       const s = data.structured || {};
       const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
-      const all = headBul.concat(supp);
-
-      // keep only sourced bullets and remove any that duplicate key lines (by exact text)
-      const sourced = all
+      const modelLines = headBul.concat(supp)
         .filter(t => /\^\d+\^/.test(String(t)))
         .filter(t => !usedRaw.some(raw => String(raw).trim() === String(t).trim()));
 
+      const all = gen.concat(modelLines);
+
       const refMap = buildRefMap(data.references || []);
-      const withTime = sourced.map(t => {
+      const withTime = all.map(t => {
         const m = String(t).match(/\^(\d+)\^/);
         const ref = m ? +m[1] : null;
         const time = refMap.get(ref)?.time || {score:0};
@@ -363,7 +299,7 @@
       });
     }
 
-    // ---------- visuals ----------
+    // ---------- visuals (trend) ----------
     function renderTrendVisual(points) {
       const panel = qs("#visualsPanel");
       const grid  = qs("#charts"); grid.innerHTML = "";
@@ -403,59 +339,6 @@
         });
       }
       show(panel);
-    }
-
-    function renderShareVisual(rows) {
-      const panel = qs("#visualsPanel");
-      const grid  = qs("#charts"); grid.innerHTML = "";
-      const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
-      if (!rows.length) { hide(panel); return; }
-
-      // 1) Latest snapshot by time (max score)
-      const byTime = new Map();
-      rows.forEach(r => {
-        const k = r.score;
-        if (!byTime.has(k)) byTime.set(k, []);
-        byTime.get(k).push(r);
-      });
-      const latestScore = Math.max(...Array.from(byTime.keys()));
-      const latest = byTime.get(latestScore);
-
-      // bar chart for latest time
-      const labels = latest.map(r => r.brand);
-      const values = latest.map(r => r.value);
-      const timeLabel = latest[0]?.timeLabel || "Study";
-
-      const card = el("div", { class: "chart-card" }, [ el("h4", {}, `Market Share Snapshot — ${timeLabel}`), el("canvas") ]);
-      grid.appendChild(card);
-      new Chart(card.querySelector("canvas").getContext("2d"), {
-        type: "bar",
-        data: { labels, datasets: [{ label: "", data: values }] },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
-          plugins: { legend: { display: false } }
-        }
-      });
-
-      // 2) Table of all rows (chronological)
-      const all = rows.sort((a,b)=>a.score - b.score);
-      const table = document.createElement("table");
-      table.className = "data-table";
-      table.innerHTML = `
-        <thead><tr><th>Study / Report</th><th>Time</th><th>Brand</th><th>Share</th><th>Source</th></tr></thead>
-        <tbody></tbody>
-      `;
-      const tb = table.querySelector("tbody");
-      all.forEach(r => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${r.title}</td><td>${r.timeLabel}</td><td>${r.brand}</td><td>${r.value}%</td><td><sup class="ref-sup">${r.ref}</sup></td>`;
-        tb.appendChild(tr);
-      });
-      tbl.appendChild(table);
-
-      show(panel);
-      return latest; // return latest snapshot for headline usage
     }
 
     // ---------- references ----------
@@ -500,47 +383,36 @@
 
       try {
         const blocks = getSourcedTextBlocks(data);
-        const isShare = isMarketShareQuery(userQuery, blocks);
         const isTrend = isTrendMetric(blocks);
 
         let usedRaw = [];
-        if (isShare) {
-          // market share path
-          const rows = collectSharePoints(data);
-          const latest = renderShareVisual(rows) || [];
-          if (latest.length) {
-            usedRaw = renderHeadlineAndKeys_Share(latest);
-          } else {
-            // fallback: still try to craft a headline from any rows
-            const any = rows.slice(0,3);
-            if (any.length) usedRaw = renderHeadlineAndKeys_Share(any);
-          }
-        } else if (isTrend) {
-          // satisfaction/NPS trend
-          const points = collectTrendPoints(data);
+        if (isTrend) {
+          const points = collectTrendPoints(data);           // <-- robust, multi-% + wave mapping
           renderTrendVisual(points);
-          if (points.length) usedRaw = renderHeadlineAndKeys_Trend(points);
+          if (points.length) {
+            usedRaw = renderHeadlineAndKeys_Trend(points);
+            renderAdditionalSupport(data, usedRaw, points);  // generated per‑wave bullets + extras (no dupes)
+          } else {
+            // fallback to original paragraph
+            const s = data.structured || {};
+            const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
+            qs("#answer").innerHTML = caretsToSup(p);
+            hide(qs("#keynums"));
+            renderAdditionalSupport(data, usedRaw, []);
+          }
         } else {
-          // unknown → fall back to original paragraph (but still try to render any trend)
+          // generic fallback
           const s = data.structured || {};
           const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
-          let html = caretsToSup(p);
-          if (!/\^(\d+)\^/.test(p) && Array.isArray(data.references) && data.references.length) {
-            const num = data.references[0]?.ref;
-            if (typeof num === "number") html = html.replace(/([.!?])\s*$/, `$1<sup class="ref-sup">${num}</sup>`);
-          }
-          qs("#answer").innerHTML = html;
+          qs("#answer").innerHTML = caretsToSup(p);
           hide(qs("#keynums"));
-          // also try trend visuals as a bonus
-          const points = collectTrendPoints(data);
-          renderTrendVisual(points);
+          renderAdditionalSupport(data, usedRaw, []);
         }
 
-        renderAdditionalSupport(data, usedRaw);
         renderQuotes(data);
         renderRefs(data.references || data.refs || []);
-
         show(qs("#results"));
+
       } catch (err) {
         console.error("Render error:", err);
         qs("#inlineErr").textContent = "There was an error rendering results. See console for details.";
