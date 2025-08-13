@@ -5,13 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COGgpt — Research Q&A</title>
 
-  <!-- Core CSS -->
   <link rel="stylesheet" href="/styles.css" />
-
   <!-- Auth token for /search; update if you rotate -->
   <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
-
-  <!-- Charts (for auto visuals) -->
+  <!-- Charts (for visuals) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -19,7 +16,9 @@
 
     <!-- Header -->
     <header class="header">
-      <h1 class="title">COG<span class="brand-accent">gpt</span></h1>
+      <h1 class="title">
+        <span class="title-cog">COG</span><span class="title-gpt">gpt</span>
+      </h1>
       <div class="beta-badge">BETA</div>
     </header>
 
@@ -48,10 +47,10 @@
         <div id="quotes"></div>
       </section>
 
-      <section class="panel">
+      <!-- Visuals panel (will be hidden entirely if nothing chartable) -->
+      <section id="visualsPanel" class="panel">
         <h3>Visuals</h3>
         <div id="charts" class="charts-grid"></div>
-        <p id="chartNote" class="muted" style="display:none;">Auto‑generated visuals from extracted numbers.</p>
       </section>
 
       <section class="panel">
@@ -63,9 +62,9 @@
 
   <script>
     // ---------- helpers ----------
-    const qs = (s, r=document) => r.querySelector(s);
+    const qs  = (s, r=document) => r.querySelector(s);
+    const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
-
     const show = el => el && el.classList.remove("hidden");
     const hide = el => el && el.classList.add("hidden");
 
@@ -76,7 +75,6 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      // IMPORTANT: skip null/undefined children to avoid appendChild(null) errors
       [].concat(children).forEach(c => {
         if (c === null || c === undefined) return;
         node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
@@ -84,53 +82,46 @@
       return node;
     }
 
-    function cleanOuterQuotes(s) {
-      if (!s) return "";
-      return String(s).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
+    // Footnote marker ^2^ -> <sup>[2]</sup>
+    function footnotesToSuperscripts(s) {
+      return String(s || "").replace(/\^(\d+)\^/g, (_, n) => `\u00A0[${n}]`);
     }
-    function stripFootnotes(s) {
-      // remove ^1^, ^23^ markers etc
-      return String(s || "").replace(/\^\d+\^/g, "");
+
+    // Ensure quotes have ending punctuation (., !, ?)
+    function ensureTerminalPunct(s) {
+      if (!s) return s;
+      const t = String(s).trim();
+      return /[.!?]$/.test(t) ? t : (t + ".");
     }
-    function splitQuoteAndTag(s) {
-      const txt = cleanOuterQuotes(stripFootnotes(s));
+
+    // Extract respondent tag if present: “ … ” - Tag
+    function splitQuoteAndTag(raw) {
+      const txt = String(raw || "").trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
       const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
       return { quote: (m ? m[1] : txt).trim(), tag: (m && m[2] ? m[2] : "").trim() };
     }
-    function stripFinalPeriodForBullets(s) {
-      return String(s || "").trim().replace(/[.。]\s*$/, "");
-    }
+
     function niceTitle(s) { return (s || "").replace(/_/g, " "); }
-    function slideLink(url, slideIndex) {
-      if (!url) return "#";
-      if (typeof slideIndex === "number") {
-        const sep = url.includes("?") ? "&" : "?";
-        return `${url}${sep}slide=${slideIndex + 1}`;
-      }
-      return url;
-    }
-    function humanSlideLabel(ref) {
-      if (typeof ref?.slideIndex === "number") return `Slide ${ref.slideIndex + 1}`;
-      if (typeof ref?.page === "number" && ref.page > 1) return `p.${ref.page}`;
-      return "";
-    }
 
     // ---------- renderers ----------
     function renderAnswer(text) {
-      const box = qs("#answer");
-      box.textContent = text || "No answer.";
+      qs("#answer").textContent = text || "No answer.";
     }
 
+    // Keep periods off bullet ends (your earlier preference), but include [n] refs
     function renderBullets(items = []) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const arr = Array.isArray(items) ? items : [];
-      if (!arr.length) {
-        ul.appendChild(el("li",{class:"muted"},"No supporting detail returned."));
-        return;
-      }
-      arr.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
+      if (!arr.length) { ul.appendChild(el("li",{class:"muted"},"No supporting detail returned.")); return; }
+      arr.forEach(x => {
+        let t = String(x || "").trim();
+        t = footnotesToSuperscripts(t);
+        t = t.replace(/[.。]\s*$/, ""); // drop final period for bullets
+        ul.appendChild(el("li", {}, t));
+      });
     }
 
+    // Show quotes with “ ”, italics, period at end, tag below, and superscript refs
     function renderQuotes(items = []) {
       const root = qs("#quotes"); root.innerHTML = "";
       const arr = Array.isArray(items) ? items : [];
@@ -140,67 +131,120 @@
         let text="", tag="";
         if (item && typeof item === "object") { text = item.text || item.quote || ""; tag = item.tag || item.respondent || ""; }
         else { text = String(item || ""); }
-        const parsed = splitQuoteAndTag(text);
-        if (!tag) tag = parsed.tag;
+        const { quote, tag: parsedTag } = splitQuoteAndTag(text);
+        if (!tag) tag = parsedTag;
 
-        const block = el("div", { class: "quote-item" }, [
-          el("p", { class: "quote-text" }, parsed.quote),
+        let qtxt = ensureTerminalPunct(quote);
+        qtxt = footnotesToSuperscripts(qtxt);
+
+        const wrap = el("div", { class: "quote-item" }, [
+          el("p", { class: "quote-text" }, `“${qtxt}”`),
           tag ? el("div", { class: "quote-tag" }, "— " + tag) : null
         ]);
-        root.appendChild(block);
+        root.appendChild(wrap);
       });
     }
 
-    function renderCharts(visuals = [], maxCharts = 4) {
-      const grid = qs("#charts"); const note = qs("#chartNote");
+    // Try to build a simple satisfaction trend from text if you don't send numeric series.
+    function inferTrendFromText({ headline = "", bullets = [] }) {
+      const points = [];
+
+      const scan = (s) => {
+        const text = String(s || "");
+        // examples it will catch: "now at 79%", "79%", "37% in 2024", "in 2023 it's 68%"
+        const re = /(?:(now|current|currently|today)|(\d{4}))?[^0-9%]{0,20}(\d{1,3})%/gi;
+        let m;
+        while ((m = re.exec(text))) {
+          const label = m[1] ? "Now" : (m[2] ? m[2] : null);
+          const val = Number(m[3]);
+          if (label) points.push({ x: label, y: val });
+        }
+      };
+
+      scan(headline);
+      bullets.forEach(scan);
+
+      // unique by label; keep last occurrence
+      const map = new Map();
+      for (const p of points) map.set(p.x, p.y);
+      const uniq = Array.from(map.entries()).map(([x,y]) => ({x,y}));
+
+      // sort by year; keep Now last
+      const years = uniq.filter(p => /^\d{4}$/.test(p.x)).sort((a,b)=>Number(a.x)-Number(b.x));
+      const now   = uniq.find(p => p.x === "Now");
+      const out = years.concat(now ? [now] : []);
+      return out.length >= 2 ? out : [];
+    }
+
+    function renderChartsFromSeries(series) {
+      const grid = qs("#charts");
       grid.innerHTML = "";
-      const arr = Array.isArray(visuals) ? visuals : [];
-      let drawn = 0;
+      const labels = series.map(p => p.x);
+      const values = series.map(p => Number(p.y));
 
-      // Only render if the series have numeric points; your current payload is thumbnails,
-      // so we'll skip and show the "No chartable data" message.
-      arr.slice(0, maxCharts).forEach(series => {
-        if (!series || !Array.isArray(series.points) || series.points.length < 2) return;
+      const card = el("div", { class: "chart-card" }, [
+        el("h4", {}, "Satisfaction Trend"),
+        el("canvas")
+      ]);
+      grid.appendChild(card);
 
-        const labels = series.points.map(p => p.x);
-        const values = series.points.map(p => Number(p.y));
-
-        const card = el("div", { class: "chart-card" }, [
-          el("h4", {}, series.title || "Chart"),
-          el("canvas")
-        ]);
-        grid.appendChild(card);
-
-        const canvas = card.querySelector("canvas");
-        new Chart(canvas.getContext("2d"), {
-          type: (series.type === "bar" ? "bar" : "line"),
-          data: { labels, datasets: [{ label: series.title || "", data: values }] },
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
-            plugins: { legend: { display: false } }
-          }
-        });
-        drawn++;
+      const ctx = card.querySelector("canvas").getContext("2d");
+      new Chart(ctx, {
+        type: "line",
+        data: { labels, datasets: [{ label: "Satisfaction", data: values }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
+          plugins: { legend: { display: false } }
+        }
       });
-
-      note.style.display = drawn ? "block" : "none";
-      if (!drawn) grid.appendChild(el("div",{class:"muted"},"No chartable data found."));
     }
 
+    function renderVisuals(data) {
+      const panel = qs("#visualsPanel");
+      const grid  = qs("#charts");
+
+      // First, try explicit numeric series if present
+      let numericSeries = [];
+      if (Array.isArray(data.visuals)) {
+        const s = data.visuals.find(v => Array.isArray(v.points) && v.points.length >= 2);
+        if (s) numericSeries = s.points;
+      }
+
+      if (!numericSeries.length) {
+        // Try to infer from structured headline/bullets
+        const s = data.structured || {};
+        const headline = (s.headline && s.headline.paragraph) ? s.headline.paragraph : "";
+        const bullets  = []
+          .concat(Array.isArray(s.headline?.bullets) ? s.headline.bullets : [])
+          .concat(Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : []);
+        const inferred = inferTrendFromText({ headline, bullets });
+        if (inferred.length >= 2) numericSeries = inferred;
+      }
+
+      if (!numericSeries.length) {
+        // Hide the entire visuals panel if nothing to show
+        hide(panel);
+        grid.innerHTML = "";
+        return;
+      }
+
+      show(panel);
+      renderChartsFromSeries(numericSeries);
+    }
+
+    // References with numbers; show as non-links: “[n] Title”
     function renderRefs(refs = []) {
       const list = qs("#refs"); list.innerHTML = "";
       const arr = Array.isArray(refs) ? refs : [];
       if (!arr.length) { list.appendChild(el("div",{class:"muted"},"No sources returned.")); return; }
 
       arr.forEach(r => {
+        const num = (typeof r.ref === "number" ? r.ref : null);
         const title = niceTitle(r.fileName || "Report");
-        const label = humanSlideLabel(r);
-        const url = slideLink(r.fileUrl, r.slideIndex);
-        const item = el("div", { class: "ref-item" }, [
-          el("a", { href: url || "#", target: "_blank", rel: "noopener" }, title),
-          label ? el("div", { class: "muted" }, label) : null
-        ]);
+        const label = num ? `[${num}] ${title}` : title;
+
+        const item = el("div", { class: "ref-item" }, label); // plain text; no <a>
         list.appendChild(item);
       });
     }
@@ -254,13 +298,12 @@
           .concat(supportingObjs.map(o => o?.text).filter(Boolean));
 
         const quotes  = Array.isArray(s.quotes) ? s.quotes : (data.quotes || []);
-        const visuals = data.visuals || data.charts || [];
         const refs    = data.references || data.refs || [];
 
         renderAnswer(answer);
         renderBullets(bullets);
         renderQuotes(quotes);
-        renderCharts(visuals);
+        renderVisuals(data);     // hide panel if nothing chartable
         renderRefs(refs);
 
         show(qs("#results"));
