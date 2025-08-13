@@ -19,15 +19,12 @@
     .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff }
     .visual img { width:100%; height:180px; object-fit:cover; display:block }
     .visual .cap { font-size:12px; padding:6px 8px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-    .small { font-size: 12px; color:#666 }
     .headline { font-size: 18px; font-weight:600; margin-bottom:.5rem }
-    .support-item em { font-style: italic; color:#666 }
-    .show-more { background:none; border:0; color:#0a58ca; cursor:pointer; padding:0; margin-top:.25rem }
+    .support-item sup { font-size: 11px; color:#666; margin-left:4px }
   </style>
 </head>
 <body>
   <div class="page">
-
     <header class="header">
       <h1 class="title">Research Q&amp;A</h1>
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
@@ -39,20 +36,20 @@
     </section>
 
     <div class="cards">
-      <!-- Key Finding (headline narrative) -->
+      <!-- Key Finding -->
       <section class="card">
         <h2>Key Finding</h2>
         <div id="headline" class="prose muted">Ask a question to see findings…</div>
       </section>
 
-      <!-- Supporting Detail (bullets w/ sources) -->
+      <!-- Supporting Detail -->
       <section class="card">
         <h2>Supporting Detail</h2>
         <ul id="support" class="prose"></ul>
-        <button id="showMoreBtn" class="show-more" style="display:none">Show more</button>
+        <button id="showMoreBtn" class="button link" style="display:none;background:none;border:0;color:#0a58ca;cursor:pointer;padding:0">Show more</button>
       </section>
 
-      <!-- Report Slides (exact pages) -->
+      <!-- Report Slides -->
       <section class="card">
         <h2>Report Slides</h2>
         <div id="visuals" class="visuals"><div class="muted">No slides yet.</div></div>
@@ -61,7 +58,7 @@
       <!-- Reports Referenced -->
       <section class="card">
         <h2>Reports Referenced</h2>
-        <ul id="refs"></ul>
+        <ol id="refs"></ol>
       </section>
     </div>
   </div>
@@ -70,12 +67,16 @@
     const API_BASE = location.origin;
     const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
 
-    // Renderers
+    // state for refs (ref -> fileName)
+    let _refs = [];
+
     function renderHeadline(text) {
       const el = document.getElementById("headline");
       if (!text) { el.classList.add("muted"); el.textContent = "No findings."; return; }
       el.classList.remove("muted");
       el.innerHTML = `<div class="headline">${text}</div>`;
+      // Convert [n] tags in headline into superscripts
+      el.innerHTML = el.innerHTML.replace(/\[(\d+)\]/g, (_, n) => `<sup>[${n}]</sup>`);
     }
 
     let _allSupport = [];
@@ -89,18 +90,13 @@
         btn.style.display = "none";
         return;
       }
-      el.innerHTML = first.map(b => {
-        const src = b.sourceFile ? ` <em>(${b.sourceFile}${b.page ? ", p." + b.page : ""})</em>` : "";
-        return `<li class="support-item">${b.text}${src}</li>`;
+      const toHtml = arr => arr.map(b => {
+        const withTags = String(b.text || "").replace(/\[(\d+)\]/g, (_, n) => `<sup>[${n}]</sup>`);
+        return `<li class="support-item">${withTags}</li>`;
       }).join("");
+      el.innerHTML = toHtml(first);
       btn.style.display = (_allSupport.length > 5) ? "" : "none";
-      btn.onclick = () => {
-        el.innerHTML = _allSupport.map(b => {
-          const src = b.sourceFile ? ` <em>(${b.sourceFile}${b.page ? ", p." + b.page : ""})</em>` : "";
-          return `<li class="support-item">${b.text}${src}</li>`;
-        }).join("");
-        btn.style.display = "none";
-      };
+      btn.onclick = () => { el.innerHTML = toHtml(_allSupport); btn.style.display = "none"; };
     }
 
     function renderVisuals(visuals) {
@@ -109,7 +105,6 @@
         el.innerHTML = `<div class="muted">No slides found.</div>`;
         return;
       }
-      // cap to 1–5 slides, images link to full PNG
       const list = visuals.slice(0, 5);
       el.innerHTML = list.map(v => `
         <a class="visual" href="${v.imageUrl}" target="_blank" rel="noopener">
@@ -120,16 +115,10 @@
     }
 
     function renderRefs(refs) {
+      _refs = Array.isArray(refs) ? refs.slice().sort((a,b)=>a.ref-b.ref) : [];
       const el = document.getElementById("refs");
-      if (!refs || refs.length === 0) { el.innerHTML = `<li class="muted">No reports referenced.</li>`; return; }
-      // dedup (should be pre-deduped), just list clean names
-      const seen = new Set(), items = [];
-      for (const r of refs) {
-        if (seen.has(r.fileId)) continue;
-        seen.add(r.fileId);
-        items.push(`<li>${r.fileName}</li>`);
-      }
-      el.innerHTML = items.join("");
+      if (_refs.length === 0) { el.innerHTML = `<li class="muted">No reports referenced.</li>`; return; }
+      el.innerHTML = _refs.map(r => `<li value="${r.ref}">${r.fileName}</li>`).join("");
     }
 
     function showThinking() {
@@ -155,15 +144,15 @@
         const resp = await fetch(`${API_BASE}/search`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-auth-token": AUTH_TOKEN },
-          body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 10 })
+          body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 30 })
         });
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         const data = await resp.json();
-        // structured: { headline, bullets }
-        renderHeadline(data.structured?.headline);
+
+        renderHeadline(data.structured?.headline || "");
         renderSupport(data.structured?.bullets || []);
-        renderVisuals(data.visuals);
-        renderRefs(data.references);
+        renderVisuals(data.visuals || []);
+        renderRefs(data.references || []);
       } catch (e) {
         console.error("search error:", e);
         showError(e.message || e);
