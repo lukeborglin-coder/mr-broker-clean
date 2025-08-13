@@ -8,10 +8,10 @@
   <!-- Core CSS -->
   <link rel="stylesheet" href="/styles.css" />
 
-  <!-- Demo auth token (browser adds this to /search). Update if you rotate. -->
+  <!-- Auth token for /search; update if you rotate -->
   <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
 
-  <!-- Charts for simple visuals -->
+  <!-- Charts (for auto visuals) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -28,39 +28,32 @@
       <form id="qform" autocomplete="off">
         <textarea id="q" rows="3"
           placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”"></textarea>
-        <div class="search-actions">
-          <button id="ask" type="submit" title="Submit (Ctrl+Enter)">Ask</button>
-          <div class="hint muted">Press <b>Ctrl+Enter</b> to submit</div>
-        </div>
+        <button id="ask" type="submit" title="Ask">Ask</button>
       </form>
+      <div id="inlineErr" class="muted hidden"></div>
     </section>
 
-    <!-- Results wrapper (hidden until first successful search) -->
+    <!-- Results (hidden until we have results) -->
     <div id="results" class="results hidden">
 
-      <!-- Answer -->
       <section id="answer" class="callout" aria-live="polite"></section>
 
-      <!-- Supporting Detail -->
       <section class="panel">
         <h3>Supporting Detail</h3>
         <ul id="bullets"></ul>
       </section>
 
-      <!-- Supporting Quotes -->
       <section class="panel">
         <h3>Supporting Quotes</h3>
         <div id="quotes"></div>
       </section>
 
-      <!-- Visuals -->
       <section class="panel">
         <h3>Visuals</h3>
         <div id="charts" class="charts-grid"></div>
         <p id="chartNote" class="muted" style="display:none;">Auto‑generated visuals from extracted numbers.</p>
       </section>
 
-      <!-- Report References -->
       <section class="panel">
         <h3>Report References</h3>
         <div id="refs" class="ref-list"></div>
@@ -69,10 +62,13 @@
   </div>
 
   <script>
-    // ================= helpers =================
+    // ---------- helpers ----------
     const qs = (s, r=document) => r.querySelector(s);
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
-    const safeArray = v => Array.isArray(v) ? v : [];
+    const toArr = v => Array.isArray(v) ? v : (v ? [v] : []);
+
+    const show = el => el && el.classList.remove("hidden");
+    const hide = el => el && el.classList.add("hidden");
 
     function el(tag, attrs = {}, children = []) {
       const node = document.createElement(tag);
@@ -84,8 +80,6 @@
       [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
       return node;
     }
-    function show(elm) { elm?.classList.remove("hidden"); }
-    function hide(elm) { elm?.classList.add("hidden"); }
 
     function cleanOuterQuotes(s) {
       if (!s) return "";
@@ -114,20 +108,22 @@
       return "";
     }
 
-    // ================= renderers =================
+    // ---------- renderers ----------
     function renderAnswer(text) {
       const box = qs("#answer");
       box.textContent = text || "No answer.";
     }
+
     function renderBullets(items = []) {
       const ul = qs("#bullets"); ul.innerHTML = "";
-      const arr = safeArray(items);
-      if (!arr.length) return ul.appendChild(el("div",{class:"muted"},"No supporting detail returned."));
+      const arr = Array.isArray(items) ? items : [];
+      if (!arr.length) { ul.appendChild(el("div",{class:"muted"},"No supporting detail returned.")); return; }
       arr.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
     }
+
     function renderQuotes(items = []) {
       const root = qs("#quotes"); root.innerHTML = "";
-      const arr = safeArray(items);
+      const arr = Array.isArray(items) ? items : [];
       if (!arr.length) { root.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
 
       arr.forEach(item => {
@@ -144,10 +140,11 @@
         root.appendChild(block);
       });
     }
+
     function renderCharts(visuals = [], maxCharts = 4) {
       const grid = qs("#charts"); const note = qs("#chartNote");
       grid.innerHTML = "";
-      const arr = safeArray(visuals);
+      const arr = Array.isArray(visuals) ? visuals : [];
       let drawn = 0;
 
       arr.slice(0, maxCharts).forEach(series => {
@@ -177,9 +174,10 @@
       note.style.display = drawn ? "block" : "none";
       if (!drawn) grid.appendChild(el("div",{class:"muted"},"No chartable data found."));
     }
+
     function renderRefs(refs = []) {
       const list = qs("#refs"); list.innerHTML = "";
-      const arr = safeArray(refs);
+      const arr = Array.isArray(refs) ? refs : [];
       if (!arr.length) { list.appendChild(el("div",{class:"muted"},"No sources returned.")); return; }
 
       arr.forEach(r => {
@@ -195,68 +193,80 @@
       });
     }
 
-    // ================= fetch/search =================
+    // ---------- fetch/search ----------
     async function runQuery(userQuery) {
+      hide(qs("#inlineErr"));
+
       const token = document.querySelector('meta[name="auth-token"]')?.content || window.AUTH_TOKEN || "";
       const payload = { clientId: "genentech", userQuery, topK: 6 };
 
-      const res = await fetch("/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-auth-token": token },
-        body: JSON.stringify(payload)
-      });
+      let dataText = "";
+      try {
+        const res = await fetch("/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-auth-token": token },
+          body: JSON.stringify(payload)
+        });
 
-      if (!res.ok) {
-        let bodyText = "";
-        try { bodyText = await res.text(); } catch {}
-        console.error("Search failed:", res.status, res.statusText, "Body:", bodyText);
-        throw new Error("Search failed: " + res.status);
+        if (!res.ok) {
+          const body = await res.text().catch(()=>"");
+          console.error("Search failed:", res.status, res.statusText, body);
+          qs("#inlineErr").textContent = "Search failed (" + res.status + "). See console for details.";
+          show(qs("#inlineErr"));
+          return;
+        }
+
+        dataText = await res.text();
+      } catch (err) {
+        console.error("Network error:", err);
+        qs("#inlineErr").textContent = "Network error. See console for details.";
+        show(qs("#inlineErr"));
+        return;
       }
 
-      // Some backends return text/plain; guard JSON parse
       let data = {};
-      const text = await res.text();
-      try { data = text ? JSON.parse(text) : {}; }
+      try { data = dataText ? JSON.parse(dataText) : {}; }
       catch (e) {
-        console.warn("Non‑JSON response from /search:", text);
+        console.warn("Non‑JSON /search response:", dataText);
         data = {};
       }
 
-      // tolerate slight key differences
-      const answer  = has(data,"answer")  ? data.answer  : (data.summary ?? data.result ?? "");
-      const bullets = has(data,"bullets") ? data.bullets : (data.supporting ?? data.keyFindings ?? []);
-      const quotes  = has(data,"quotes")  ? data.quotes  : (data.supportingQuotes ?? []);
-      const visuals = has(data,"visuals") ? data.visuals : (data.charts ?? []);
-      const refs    = has(data,"references") ? data.references : (data.refs ?? []);
+      try {
+        const answer  = has(data,"answer")  ? data.answer  : (data.summary ?? data.result ?? "");
+        const bullets = has(data,"bullets") ? data.bullets : (data.supporting ?? data.keyFindings ?? []);
+        const quotes  = has(data,"quotes")  ? data.quotes  : (data.supportingQuotes ?? []);
+        const visuals = has(data,"visuals") ? data.visuals : (data.charts ?? []);
+        const refs    = has(data,"references") ? data.references : (data.refs ?? []);
 
-      renderAnswer(answer);
-      renderBullets(bullets);
-      renderQuotes(quotes);
-      renderCharts(visuals);
-      renderRefs(refs);
+        renderAnswer(answer);
+        renderBullets(bullets);
+        renderQuotes(quotes);
+        renderCharts(visuals);
+        renderRefs(refs);
 
-      // show results container on first successful render
-      show(qs("#results"));
+        show(qs("#results"));
+      } catch (err) {
+        console.error("Render error:", err, "Data was:", data);
+        qs("#inlineErr").textContent = "There was an error rendering results. See console for details.";
+        show(qs("#inlineErr"));
+      }
     }
 
-    // Submit
+    // Submit (Enter to submit; Shift+Enter makes a newline)
     document.getElementById("qform").addEventListener("submit", async (e) => {
       e.preventDefault();
       const q = document.getElementById("q").value.trim();
       if (!q) return;
-      try { await runQuery(q); }
-      catch (err) { alert("Search error. See console for details."); }
+      await runQuery(q);
     });
-
-    // Ctrl+Enter to submit from textarea
     document.getElementById("q").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         document.getElementById("qform").dispatchEvent(new Event("submit"));
       }
     });
 
-    // No auto-run. Panels stay hidden until a question is asked.
+    // No auto-run; panels remain hidden until a question is asked.
   </script>
 </body>
 </html>
