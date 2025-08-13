@@ -4,33 +4,24 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COGgpt — Research Q&A</title>
+
+  <!-- Your static CSS -->
   <link rel="stylesheet" href="/styles.css" />
+
+  <!-- Auth token for demo (browser adds it to /search). Replace if you rotate it. -->
+  <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
+
+  <!-- Chart.js for simple visuals -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <style>
-    /* keep your existing styles.css; these are tiny helpers only */
-    .header { position: relative; align-items: center; display:flex; justify-content: space-between; }
-    .beta-badge { position:absolute; right:0; top:0; color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:14px; }
-    .charts-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
-    .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
-    .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
-    .muted { color:#666; font-size:12px; }
-    .quote-wrap { display:block; }
-    .quote-item { margin:0 0 14px 0; }
-    .quote-text { font-style: italic; margin:0; }
-    .quote-tag { margin-top:4px; font-size: 0.85em; color:#333; }
-    .ref-list { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
-    .ref-item { background:#fff; border-radius:12px; padding:14px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
-    .ref-item a { text-decoration:none; color:#0b6bcb; }
-  </style>
 </head>
 <body>
   <div class="page">
 
     <!-- Header -->
     <header class="header">
-      <h1 class="title">COG<span style="color:#ff7a00;">gpt</span></h1>
-      <!-- Removed company logo on the right; keeping a subtle BETA badge -->
-      <div class="beta-badge">BETA</div>
+      <h1 class="title">COG<span class="brand-accent">gpt</span></h1>
+      <!-- No top‑right logo (per request) -->
+      <span class="beta-badge">BETA</span>
     </header>
 
     <!-- Search -->
@@ -43,21 +34,22 @@
     </section>
 
     <!-- Answer -->
-    <section id="answer" class="callout" style="display:none;"></section>
+    <section id="answer" class="callout" style="display:none;">No answer.</section>
 
-    <!-- Supporting Detail (bullets; no trailing periods) -->
+    <!-- Supporting Detail -->
     <section class="panel">
       <h3>Supporting Detail</h3>
       <ul id="bullets"></ul>
     </section>
 
-    <!-- Supporting Quotes (no bullets; italic quotes + respondent tag under) -->
+    <!-- Supporting Quotes -->
     <section class="panel">
       <h3>Supporting Quotes</h3>
-      <div id="quotes" class="quote-wrap"></div>
+      <!-- We’ll transform whatever your backend renders into italic quotes with a tag under each -->
+      <div id="quotes"></div>
     </section>
 
-    <!-- Visuals (charts only) -->
+    <!-- Visuals -->
     <section class="panel">
       <h3>Visuals</h3>
       <div id="charts" class="charts-grid"></div>
@@ -72,12 +64,28 @@
   </div>
 
   <script>
-    // ---------- helpers ----------
+    // =============== helpers ===============
+    const qs = (s, r=document) => r.querySelector(s);
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
 
+    function el(tag, attrs = {}, children = []) {
+      const node = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k === "class") node.className = v;
+        else if (k === "html") node.innerHTML = v;
+        else node.setAttribute(k, v);
+      }
+      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+      return node;
+    }
     function cleanOuterQuotes(s) {
       if (!s) return "";
       return String(s).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
+    }
+    function splitQuoteAndTag(s) {
+      const txt = cleanOuterQuotes(s);
+      const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
+      return { quote: (m ? m[1] : txt).trim(), tag: (m && m[2] ? m[2] : "").trim() };
     }
     function stripFinalPeriodForBullets(s) {
       return String(s || "").trim().replace(/[.。]\s*$/, "");
@@ -96,36 +104,22 @@
       if (typeof ref.page === "number" && ref.page > 1) return `p.${ref.page}`;
       return "";
     }
-    function splitQuoteAndTag(s) {
-      const txt = cleanOuterQuotes(s);
-      const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
-      return { quote: (m ? m[1] : txt).trim(), tag: (m && m[2] ? m[2] : "").trim() };
-    }
-    function el(tag, attrs = {}, children = []) {
-      const node = document.createElement(tag);
-      for (const [k, v] of Object.entries(attrs)) {
-        if (k === "class") node.className = v;
-        else if (k === "html") node.innerHTML = v;
-        else node.setAttribute(k, v);
-      }
-      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
-      return node;
-    }
 
-    // ---------- renderers ----------
+    // =============== renderers ===============
     function renderAnswer(text) {
-      const box = document.getElementById("answer");
+      const box = qs("#answer");
       box.textContent = text || "No answer.";
       box.style.display = "block";
     }
     function renderBullets(items = []) {
-      const ul = document.getElementById("bullets"); ul.innerHTML = "";
-      if (!items.length) return;
+      const ul = qs("#bullets"); ul.innerHTML = "";
       items.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
     }
+    // No bullets for quotes; italic line + small respondent tag
     function renderQuotes(items = []) {
-      const wrap = document.getElementById("quotes"); wrap.innerHTML = "";
-      if (!items.length) { wrap.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
+      const root = qs("#quotes"); root.innerHTML = "";
+      if (!items.length) { root.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
+
       items.forEach(item => {
         let text="", tag="";
         if (item && typeof item === "object") { text = item.text || item.quote || ""; tag = item.tag || item.respondent || ""; }
@@ -133,15 +127,16 @@
         const parsed = splitQuoteAndTag(text);
         if (!tag) tag = parsed.tag;
 
-        const block = el("div", { class: "quote-item" });
-        block.appendChild(el("p", { class: "quote-text" }, parsed.quote));
-        if (tag) block.appendChild(el("div", { class: "quote-tag" }, "— " + tag));
-        wrap.appendChild(block);
+        const block = el("div", { class: "quote-item" }, [
+          el("p", { class: "quote-text" }, parsed.quote),
+          tag ? el("div", { class: "quote-tag" }, "— " + tag) : null
+        ]);
+        root.appendChild(block);
       });
     }
+    // Only charts (no thumbnails)
     function renderCharts(visuals = [], maxCharts = 4) {
-      const grid = document.getElementById("charts");
-      const note = document.getElementById("chartNote");
+      const grid = qs("#charts"); const note = qs("#chartNote");
       grid.innerHTML = "";
       let drawn = 0;
 
@@ -150,11 +145,13 @@
         const labels = series.points.map(p => p.x);
         const values = series.points.map(p => Number(p.y));
 
-        const card = el("div", { class: "chart-card" });
-        card.appendChild(el("h4", {}, series.title || "Chart"));
-        const canvas = el("canvas"); card.appendChild(canvas);
+        const card = el("div", { class: "chart-card" }, [
+          el("h4", {}, series.title || "Chart"),
+          el("canvas")
+        ]);
         grid.appendChild(card);
 
+        const canvas = card.querySelector("canvas");
         new Chart(canvas.getContext("2d"), {
           type: (series.type === "bar" ? "bar" : "line"),
           data: { labels, datasets: [{ label: series.title || "", data: values }] },
@@ -171,7 +168,7 @@
       if (!drawn) grid.appendChild(el("div",{class:"muted"},"No chartable data found."));
     }
     function renderRefs(refs = []) {
-      const list = document.getElementById("refs"); list.innerHTML = "";
+      const list = qs("#refs"); list.innerHTML = "";
       if (!refs.length) { list.appendChild(el("div",{class:"muted"},"No sources returned.")); return; }
 
       refs.forEach(r => {
@@ -187,28 +184,23 @@
       });
     }
 
-    // ---------- fetch/search ----------
+    // =============== fetch/search glue ===============
     async function runQuery(userQuery) {
+      const token = document.querySelector('meta[name="auth-token"]')?.content || "";
       const res = await fetch("/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // DO NOT send x-auth-token from browser; server protects API itself
+        headers: { "Content-Type": "application/json", "x-auth-token": token },
         body: JSON.stringify({ clientId: "genentech", userQuery, topK: 6 })
       });
       if (!res.ok) throw new Error("Search failed: " + res.status);
       const data = await res.json();
 
-      // tolerant field picks (your backend sometimes varies):
-      const answer =
-        data.answer ?? data.summary ?? data.result ?? "";
-      const bullets =
-        data.bullets ?? data.supporting ?? data.keyFindings ?? [];
-      const quotes =
-        data.quotes ?? data.supportingQuotes ?? [];
-      const visuals =
-        data.visuals ?? data.charts ?? [];
-      const refs =
-        data.references ?? data.refs ?? [];
+      // tolerate slight key differences
+      const answer  = has(data,"answer")  ? data.answer  : (data.summary ?? data.result ?? "");
+      const bullets = has(data,"bullets") ? data.bullets : (data.supporting ?? data.keyFindings ?? []);
+      const quotes  = has(data,"quotes")  ? data.quotes  : (data.supportingQuotes ?? []);
+      const visuals = has(data,"visuals") ? data.visuals : (data.charts ?? []);
+      const refs    = has(data,"references") ? data.references : (data.refs ?? []);
 
       renderAnswer(answer);
       renderBullets(bullets);
@@ -225,11 +217,14 @@
       catch (err) { console.error(err); alert("Search error. See console for details."); }
     });
 
-    // auto-run once for the default value
+    // Auto-run once for demo
     window.addEventListener("DOMContentLoaded", () => {
       const q = document.getElementById("q").value.trim();
       if (q) document.getElementById("qform").dispatchEvent(new Event("submit"));
     });
   </script>
+
+  <!-- Small DOM post-processor to keep your layout intact while applying requested tweaks -->
+  <script src="/ux-patches.js"></script>
 </body>
 </html>
