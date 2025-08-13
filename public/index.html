@@ -3,326 +3,429 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>COG gpt — Research Q&A</title>
+  <title>COG gpt</title>
+
+  <!-- Chart.js for data-driven mini-charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" integrity="sha256-fnY0B8ULQwREH6o9C3sJqC1Kp6kUmk7i6m8m7mQ7nMU=" crossorigin="anonymous"></script>
+
+  <!-- pdf.js for last-resort PDF rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" integrity="sha512-4M1bQtm8Hq3mE/z39agaYp7k7iH7mG1Zr1wV9wRjQqFZsT4p1c9lN6dT1f9H7jv5t2q9nVJLLwJX5qXU6a1hAw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
   <style>
-    :root {
-      --bg: #f6f7f9;
-      --panel: #ffffff;
-      --ink: #111827;
-      --muted: #6b7280;
-      --accent: #ff7a00;
-      --ring: #d1d5db;
-    }
+    :root { --brand:#ff7a00; --grey:#4b4b4b; --card:#ffffff; --cardBorder:#e9e9e9; --cardLeft:#ececec; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-      color: var(--ink);
-      background: var(--bg);
-    }
-    .page { max-width: 1100px; margin: 24px auto 56px; padding: 0 16px; position: relative; }
-    header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
-    header .logo { font-weight: 800; font-size: 28px; letter-spacing: 0.5px; }
-    header .logo .dot { color: var(--accent); }
-    header .beta { color: #9ca3af; font-weight: 700; letter-spacing: .02em; }
+    body { margin:0; background:#f7f7f7; color:#111; font:16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .page { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
 
-    .searchbar {
-      display: grid; grid-template-columns: 1fr auto; gap: 12px;
-      background: var(--panel); padding: 16px; border-radius: 12px; border: 1px solid var(--ring);
-      position: sticky; top: 0; z-index: 1;
-    }
-    textarea {
-      width: 100%; min-height: 52px; resize: vertical; padding: 12px 14px; font-size: 15px; line-height: 1.4;
-      border: 1px solid var(--ring); border-radius: 10px; outline: none; background: #fff;
-    }
-    button.ask {
-      padding: 12px 18px; border-radius: 10px; border: 1px solid var(--ring);
-      background: var(--accent); color: #fff; font-weight: 700; cursor: pointer;
-    }
-    button.ask:disabled { opacity: .6; cursor: not-allowed; }
+    /* Header */
+    .brandline { display:flex; align-items:center; justify-content:flex-start; margin-bottom:28px; }
+    .brandtitle { font-weight:900; letter-spacing:.6px; font-size:56px; line-height:1; }
+    .brandtitle .cog { color:var(--grey) }
+    .brandtitle .gpt { color:var(--brand); font-weight:600; font-size:.46em; margin-left:2px; } /* smaller “gpt” */
 
-    .section { background: var(--panel); border: 1px solid var(--ring); border-radius: 12px; padding: 16px; margin-top: 16px; }
-    .section h3 { margin: 0 0 8px; font-size: 16px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
-    .answer { border-left: 4px solid var(--accent); background: #fff7ef; }
-    .answer p { margin: 0; }
-    ul { margin: 8px 0 0 18px; }
-    li { margin: 6px 0; }
-    .tiny { color: var(--muted); font-size: 12px; }
-
-    .mode-toggle { display: flex; gap: 8px; margin-bottom: 10px; }
-    .mode-toggle button {
-      border: 1px solid var(--ring); background: #fff; padding: 8px 12px; border-radius: 999px; cursor: pointer;
+    /* Search */
+    .search { display:flex; gap:10px; align-items:stretch; margin-bottom:12px; }
+    .search-textarea {
+      flex:1; resize:vertical; min-height:86px; max-height:220px;
+      padding:12px 14px; font-size:16px; line-height:1.3; border-radius:10px; border:1px solid #ddd; background:#fff;
+      font-family: inherit; /* match site font */
     }
-    .mode-toggle button.active { background: #111827; color: #fff; border-color: #111827; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-    .ref-card, .chart-card, .table-card {
-      border: 1px solid var(--ring); border-radius: 10px; padding: 12px; background: #fff;
+    .button.ask {
+      width:100px; border-radius:10px; border:1px solid #ff9e40;
+      background:var(--brand); color:#fff; cursor:pointer; font-weight:800; padding:0 10px;
+      font-size:18px;
     }
-    .ref-title { font-weight: 600; }
-    .superscript { vertical-align: super; font-size: 0.75em; }
+    .button.ask:hover { filter:brightness(.96) }
 
-    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    /* Sections spacing */
+    .sections { display:grid; gap:18px; margin-top:10px; }
+
+    /* Hero (orange) */
+    .hero { background:#fff8ef; border:1px solid #ffd9b3; border-left:8px solid var(--brand); border-radius:12px; padding:18px 20px; }
+    .hero .headline { font-size:18px; line-height:1.5; margin:0 0 .6rem 0 }
+    .hero ul { margin:.25rem 0 0 1.1rem }
+
+    /* Secondary cards */
+    .card { background:var(--card); border:1px solid var(--cardBorder); border-left:6px solid var(--cardLeft); border-radius:12px; padding:18px 20px; }
+    .card h2 { margin:0 0 10px 0; }
+
+    .muted { color:#7a7a7a }
+    sup { font-size:.6em; line-height:0; vertical-align: super; }
+
+    .support-item { margin:.35rem 0 }
+    .support-item sup { margin-left:1px }
+
+    /* visuals */
+    .visuals { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px }
+    .visual { border:1px solid #eee; border-radius:12px; overflow:hidden; background:#fff; display:flex; flex-direction:column; }
+    .visual canvas, .visual img { width:100%; height:180px; object-fit:cover; display:block; background:#fafafa }
+    .visual .cap { font-size:12px; padding:6px 8px; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
   </style>
-
-  <!-- Chart.js for Charts mode -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="page">
-    <header>
-      <div class="logo">COG<span class="dot">gpt</span></div>
-      <div class="beta">(BETA)</div>
+    <header class="header brandline">
+      <div class="brandtitle"><span class="cog">COG</span><span class="gpt">gpt</span></div>
     </header>
 
-    <!-- Search -->
-    <div class="searchbar">
-      <textarea id="q" placeholder="ask anything about your research (e.g., “What is Evrysdi’s trending satisfaction?”)"></textarea>
-      <button id="ask" class="ask">Ask</button>
+    <section class="search">
+      <textarea id="q" class="search-textarea" rows="3" placeholder="Ask about satisfaction, NPS, drivers, trends..."></textarea>
+      <button id="ask" class="button ask" type="button">Ask</button>
+    </section>
+
+    <div class="sections">
+      <!-- HERO Finding -->
+      <section class="hero">
+        <div id="headline" class="headline muted">Ask a question to see findings…</div>
+        <ul id="headlineBullets" class="muted"></ul>
+      </section>
+
+      <section id="detailCard" class="card" style="display:none;">
+        <h2>Supporting Detail</h2>
+        <ul id="support"></ul>
+        <button id="showMoreBtn" class="button link" style="display:none;background:none;border:0;color:#0a58ca;cursor:pointer;padding:0">Show more</button>
+      </section>
+
+      <section id="quotesCard" class="card" style="display:none;">
+        <h2>Supporting Quotes</h2>
+        <ul id="quotesList"></ul>
+      </section>
+
+      <section id="slidesCard" class="card" style="display:none;">
+        <h2>Report Slides</h2>
+        <div id="visuals" class="visuals"></div>
+      </section>
+
+      <section id="refsCard" class="card" style="display:none; border-left-color: transparent;">
+        <h2>Report References</h2>
+        <ol id="refs" style="font-style: italic;"></ol>
+      </section>
     </div>
-
-    <!-- Results (all hidden until a question is asked and a response arrives) -->
-    <section class="section answer" id="answerBox" style="display:none">
-      <p id="answerText"></p>
-    </section>
-
-    <section class="section" id="detailBox" style="display:none">
-      <h3>Supporting Detail</h3>
-      <ul id="detailList"></ul>
-    </section>
-
-    <section class="section" id="quotesBox" style="display:none">
-      <h3>Supporting Quotes</h3>
-      <ul id="quotesList"></ul>
-      <div class="tiny" id="quotesFoot"></div>
-    </section>
-
-    <section class="section" id="slidesBox" style="display:none">
-      <div class="mode-toggle">
-        <button id="modeCharts" class="active" data-mode="charts">Charts</button>
-        <button id="modeRefs" data-mode="references">References</button>
-      </div>
-      <div id="slidesBody"></div>
-    </section>
-
-    <section class="section" id="refsBox" style="display:none">
-      <h3>References</h3>
-      <ol id="refsList"></ol>
-    </section>
-
-    <p class="tiny" style="margin-top:10px">
-      Tip: if your server requires a token, open DevTools Console and run:
-      <code>localStorage.setItem('AUTH_TOKEN','YOUR_TOKEN_HERE')</code> then refresh.
-    </p>
   </div>
 
   <script>
-    // ===== Utilities =====
-    const AUTH_TOKEN = localStorage.getItem('AUTH_TOKEN') || '';
-    const $  = (sel) => document.querySelector(sel);
-    const show = (sel, yes) => { const el = $(sel); if (!el) return; el.style.display = yes ? '' : 'none'; };
+    const API_BASE = location.origin;
+    const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
 
-    // Remove outer wrapping quotes but keep punctuation
-    function cleanQuote(text) {
-      if (!text) return '';
-      let s = String(text).trim();
-      if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-        s = s.slice(1, -1).trim();
-      }
-      return s;
+    // --- Helpers: superscripts and punctuation rules ---
+    function toSuperscripts(text) {
+      if (!text) return "";
+      text = text.replace(/\[(\d+)\]/g, "^$1^");
+      return text.replace(/\s*\^(\d+)\^\s*/g, (_, n) => `<sup>${n}</sup>`);
+    }
+    function stripPeriod(s) { return s ? s.replace(/\s*\.\s*$/,'') : s; }
+
+    // Move superscripts outside of closing quotes for quotes list
+    function moveCiteOutsideQuotes(html) {
+      // grab <sup>…</sup> and move outside the closing quote
+      const sups = [];
+      let body = html.replace(/<sup>(\d+)<\/sup>/g, (_,n)=>{ sups.push(n); return "";});
+      const tail = sups.length ? " " + sups.map(n=>`<sup>${n}</sup>`).join("") : "";
+      return `“${body}”${tail}`;
     }
 
-    function extractPercents(text) {
-      if (!text) return [];
-      const re = /(\d{1,3})\s*%/g;
-      const out = []; let m;
-      while ((m = re.exec(text)) !== null) {
-        const n = Number(m[1]);
-        if (n >= 0 && n <= 100) out.push(n);
-      }
-      return out;
-    }
+    // --- Build metrics from text (headline + supporting) ---
+    // Parses percentages tied to years/waves and product names; then keeps the most recent value,
+    // and constructs a trend (delta) if an older reference exists.
+    function extractMetrics(structured) {
+      const texts = [];
+      if (structured?.headline?.paragraph) texts.push(structured.headline.paragraph);
+      (structured?.headline?.bullets || []).forEach(b => texts.push(b));
+      (structured?.supporting || []).forEach(b => texts.push(b.text || ""));
+      const all = texts.join("\n");
 
-    function makeLineChart(canvas, label, arr) {
-      const ctx = canvas.getContext('2d');
-      new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: arr.map((_, i) => `T${i+1}`),
-          datasets: [{ label, data: arr, tension: 0.25, pointRadius: 3 }]
-        },
-        options: {
-          responsive: true,
-          plugins: { legend: { display: true } },
-          scales: { y: { suggestedMin: 0, suggestedMax: 100, ticks: { callback: v => v + '%' } } }
+      // Basic entity capture (expand as needed)
+      const entities = ['Evrysdi','Spinraza','Zolgensma','Risdiplam','Nusinersen','Onasemnogene'];
+      const entRe = new RegExp(`\\b(${entities.join('|')})\\b`, 'i');
+
+      // Capture patterns like "2025 ... 60%" or "W6 2025 ... 60%" or "Q4 2024 ... 55%"
+      const pat = /(?:(20\d{2})|(?:Q[1-4]\s*20\d{2})|(?:W\d{1,2}\s*20\d{2})|(?:Q[1-4])|(?:W\d{1,2}))[^%]{0,60}?(\d{1,3})%/gi;
+
+      // If a product is nearby, associate; otherwise attach to "Overall"
+      const windowPad = 40;
+
+      const seriesMap = {}; // key: label (e.g., Evrysdi Satisfaction) -> { points: [{t,label,year,val}], latest, prev }
+      let m;
+      while ((m = pat.exec(all)) !== null) {
+        const around = all.slice(Math.max(0, m.index - windowPad), Math.min(all.length, m.index + windowPad));
+        const ent = (around.match(entRe) || [,'Overall'])[1];
+        const yearMatch = (m[1] && Number(m[1])) || null;
+        const val = Number(m[2]);
+        const label = `${ent} satisfaction`; // simple default; you can refine by looking for 'NPS','share',etc.
+        if (!seriesMap[label]) seriesMap[label] = { points: [] };
+        seriesMap[label].points.push({ label, ent, year: yearMatch, val });
+      }
+
+      // Consolidate: pick latest year as "current", find an earlier one for delta
+      for (const k of Object.keys(seriesMap)) {
+        const pts = seriesMap[k].points.filter(p => p.year).sort((a,b)=> (b.year||0)-(a.year||0));
+        if (pts.length) {
+          seriesMap[k].latest = pts[0];
+          seriesMap[k].prev   = pts.find(p => p.year !== seriesMap[k].latest.year) || null;
+        } else {
+          // if no year captured, keep the largest value as current
+          const any = seriesMap[k].points.sort((a,b)=> b.val-a.val);
+          seriesMap[k].latest = any[0] || null;
+          seriesMap[k].prev = any[1] || null;
         }
-      });
-    }
-
-    function liRef(ref) {
-      const slideMatch = String(ref?.title || ref?.name || ref).match(/\b(p\.?\s?\d+|slide\s*\d+)\b/i);
-      const slideHint = slideMatch ? ` — ${slideMatch[0]}` : '';
-      const text = (ref && (ref.title || ref.name)) ? (ref.title || ref.name) : (typeof ref === 'string' ? ref : 'Untitled');
-      return `<li><span class="ref-title">${text}</span>${slideHint}</li>`;
-    }
-
-    // ===== Rendering =====
-    function renderAll(payload) {
-      const { answer, bullets = [], quotes = [], references = [] } = payload || {};
-
-      const hasAny = Boolean(answer) || bullets.length || quotes.length || references.length;
-
-      // Answer box (always show something after a query)
-      $('#answerText').textContent = answer || 'I don’t have enough information.';
-      show('#answerBox', true);
-
-      // Details
-      const detailHTML = (bullets || []).map(b => `<li>${String(b).replace(/\.\s*$/,'')}.</li>`).join('');
-      $('#detailList').innerHTML = detailHTML;
-      show('#detailBox', bullets.length > 0);
-
-      // Quotes (strip outer quotes, keep periods)
-      const quoteHTML = (quotes || []).map(q => {
-        let s = cleanQuote(q);
-        if (!/[.!?]$/.test(s) && /[.!?]$/.test(String(q).trim())) s = s + '.';
-        return `<li><strong>${s}</strong> <span class="superscript">⁴</span></li>`;
-      }).join('');
-      $('#quotesList').innerHTML = quoteHTML;
-      $('#quotesFoot').textContent = quotes.length ? 'Outer quotes removed; sentence punctuation preserved.' : '';
-      show('#quotesBox', quotes.length > 0);
-
-      // References (bottom list)
-      $('#refsList').innerHTML = (references || []).map(liRef).join('');
-      show('#refsBox', references.length > 0);
-
-      // Slides section: only show after a query, and only if we can display *either* chart data or references
-      const allText = [answer, ...(bullets || [])].join(' | ');
-      const percents = extractPercents(allText);
-      const canChart = percents.length >= 1;
-      const canRefs = (references || []).length > 0;
-      show('#slidesBox', canChart || canRefs);
-
-      if (canChart || canRefs) renderSlidesMode(canChart ? 'charts' : 'references', payload);
-    }
-
-    function renderSlidesMode(mode, payload) {
-      const { answer = '', bullets = [], references = [] } = payload || {};
-      $('#modeCharts').classList.toggle('active', mode === 'charts');
-      $('#modeRefs').classList.toggle('active', mode === 'references');
-
-      const host = $('#slidesBody');
-      host.innerHTML = '';
-
-      if (mode === 'references') {
-        const box = document.createElement('div'); box.className = 'grid';
-        (references || []).forEach(ref => {
-          const card = document.createElement('div');
-          card.className = 'ref-card';
-          card.innerHTML = `<div class="ref-title">${(ref?.title || ref?.name || 'Untitled')}</div>
-                            <div class="tiny">${ref?.fileName || ''}</div>`;
-          box.appendChild(card);
-        });
-        host.appendChild(box);
-        return;
       }
-
-      // Charts
-      const allText = [answer, ...bullets].join(' | ');
-      const percents = extractPercents(allText);
-
-      const visualsWrap = document.createElement('div'); visualsWrap.className = 'grid';
-
-      // Trend line if ≥2 points
-      if (percents.length >= 2) {
-        const card = document.createElement('div');
-        card.className = 'chart-card';
-        card.innerHTML = `<canvas id="trendChart" height="170"></canvas>
-                          <div class="tiny" style="margin-top:6px">Auto-derived from numeric values detected in answer/details.</div>`;
-        visualsWrap.appendChild(card);
-        setTimeout(() => makeLineChart($('#trendChart'), 'Trend', percents.slice(-5)), 0);
-      }
-
-      // Key Metrics table
-      const tableCard = document.createElement('div'); tableCard.className = 'table-card';
-      const labels = ['Metric 1', 'Metric 2', 'Metric 3', 'Metric 4'];
-      const rows = percents.slice(0, 4).map((p, i) => `<tr><td>${labels[i]}</td><td style="text-align:right">${p}%</td></tr>`);
-      tableCard.innerHTML = `
-        <div style="font-weight:600;margin-bottom:6px">Key Metrics</div>
-        <table style="width:100%; border-collapse:collapse">
-          <tbody>
-            ${rows.length ? rows.join('') : `<tr><td class="tiny">No numeric metrics detected in text.</td></tr>`}
-          </tbody>
-        </table>
-        <div class="tiny" style="margin-top:6px">Numbers parsed from current answer/details text.</div>
-      `;
-      visualsWrap.appendChild(tableCard);
-
-      host.appendChild(visualsWrap);
+      return seriesMap;
     }
 
-    // ===== Events / Search =====
-    $('#modeCharts').addEventListener('click', () => renderSlidesMode('charts', window.__lastPayload || {}));
-    $('#modeRefs').addEventListener('click', () => renderSlidesMode('references', window.__lastPayload || {}));
-
-    function hideAllResults() {
-      ['#answerBox','#detailBox','#quotesBox','#slidesBox','#refsBox'].forEach(sel => show(sel, false));
+    // --- HEADLINE RENDER ---
+    function renderHeadline(obj) {
+      const el = document.getElementById("headline");
+      const bl = document.getElementById("headlineBullets");
+      const text = obj?.paragraph || "";
+      const bullets = Array.isArray(obj?.bullets) ? obj.bullets : [];
+      if (!text) { el.classList.add("muted"); el.textContent = "No findings."; bl.innerHTML=""; return; }
+      el.classList.remove("muted");
+      el.innerHTML = toSuperscripts(text);
+      bl.classList.remove("muted");
+      bl.innerHTML = bullets.slice(0,3).map(b => `<li>${toSuperscripts(stripPeriod(b))}</li>`).join("");
     }
-    hideAllResults(); // start with a clean page
 
-    async function doAsk() {
-      const btn = $('#ask');
-      const q = $('#q').value.trim();
-      if (!q) return;
+    // --- SUPPORT DETAIL ---
+    let _allSupport = [];
+    function renderSupport(bullets) {
+      _allSupport = Array.isArray(bullets) ? bullets : [];
+      const card = document.getElementById("detailCard");
+      const el = document.getElementById("support");
+      const btn = document.getElementById("showMoreBtn");
+      const first = _allSupport.slice(0, 5);
+      if (!first.length) { card.style.display="none"; el.innerHTML=""; btn.style.display="none"; return; }
+      card.style.display = "";
+      const toHtml = arr => arr.map(b => `<li class="support-item">${toSuperscripts(stripPeriod(b.text || ""))}</li>`).join("");
+      el.innerHTML = toHtml(first);
+      btn.style.display = (_allSupport.length > 5) ? "" : "none";
+      btn.onclick = () => { el.innerHTML = toHtml(_allSupport); btn.style.display = "none"; };
+    }
 
-      btn.disabled = true; btn.textContent = 'Thinking…';
-      hideAllResults();
+    // --- QUOTES ---
+    function renderQuotes(quotes) {
+      const card = document.getElementById("quotesCard");
+      const list = document.getElementById("quotesList");
+      const arr = Array.isArray(quotes) ? quotes.filter(Boolean) : [];
+      if (!arr.length) { card.style.display = "none"; list.innerHTML=""; return; }
+      card.style.display = "";
+      list.innerHTML = arr.map(q => moveCiteOutsideQuotes(toSuperscripts(stripPeriod(q)))).map(s => `<li>${s}</li>`).join("");
+    }
 
-      try {
-        const resp = await fetch('/search', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(AUTH_TOKEN ? { 'x-auth-token': AUTH_TOKEN } : {})
+    // --- CHARTS ---
+    function createChartCanvas() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 800; canvas.height = 400; // Chart.js will resize to parent
+      canvas.style.width = "100%"; canvas.style.height = "180px"; canvas.style.objectFit = "cover";
+      return canvas;
+    }
+
+    function chartConfigForSeries(label, points) {
+      // If we have >=2 years, do a line chart by year; otherwise bar of current
+      const yrs = points.filter(p=>p.year).map(p=>p.year);
+      if (new Set(yrs).size >= 2) {
+        const sorted = points.filter(p=>p.year).sort((a,b)=>a.year-b.year);
+        return {
+          type: 'line',
+          data: {
+            labels: sorted.map(p=>String(p.year)),
+            datasets: [{
+              label, data: sorted.map(p=>p.val),
+              tension: 0.2,
+            }]
           },
-          body: JSON.stringify({ clientId: 'genentech', userQuery: q, topK: 6 })
-        });
+          options: {
+            plugins: { legend: { display:false }, tooltip:{ enabled:true } },
+            scales: {
+              y: { beginAtZero:true, ticks:{ callback:v=>v+'%' } },
+              x: { grid: { display:false } }
+            }
+          }
+        };
+      } else {
+        const latest = points[0];
+        return {
+          type: 'bar',
+          data: {
+            labels: [latest.year ? String(latest.year) : 'Current'],
+            datasets: [{ label, data: [latest.val] }]
+          },
+          options: {
+            plugins: { legend: { display:false }, tooltip:{ enabled:true } },
+            scales: {
+              y: { beginAtZero:true, ticks:{ callback:v=>v+'%' } },
+              x: { grid: { display:false } }
+            }
+          }
+        };
+      }
+    }
 
-        // Handle non-200s with a friendly error box
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => '');
-          $('#answerText').textContent = `Request failed (${resp.status}). ${text || 'Check server logs and token.'}`;
-          show('#answerBox', true);
-          return;
+    async function renderPdfThumb(fileId, page) {
+      try {
+        // try client-side render first
+        const resp = await fetch(`${API_BASE}/file/pdf?fileId=${encodeURIComponent(fileId)}`, { headers: { "x-auth-token": AUTH_TOKEN } });
+        if (!resp.ok) throw new Error(`pdf ${resp.status}`);
+        const buf = await resp.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: buf, useWorker: false }).promise;
+        const pg = await pdf.getPage(Math.max(1, Number(page)||1));
+        const viewport = pg.getViewport({ scale: 1.2 });
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        await pg.render({ canvasContext: ctx, viewport }).promise;
+        canvas.style.width = "100%"; canvas.style.height = "180px"; canvas.style.objectFit = "cover";
+        return canvas;
+      } catch {
+        // fallback to server PNG
+        const img = document.createElement("img");
+        img.src = `${API_BASE}/preview/page.png?fileId=${encodeURIComponent(fileId)}&page=${encodeURIComponent(page||1)}`;
+        img.alt = "Slide preview";
+        return img;
+      }
+    }
+
+    // Build visuals: prefer CHARTS from parsed metrics, then fill remaining with up to-6 thumbnails
+    async function renderVisuals(structured, visualsMeta) {
+      const card = document.getElementById("slidesCard");
+      const el = document.getElementById("visuals");
+      el.innerHTML = "";
+      card.style.display = "none";
+
+      // 1) Extract metric series from text
+      const seriesMap = extractMetrics(structured);
+
+      // 2) Build up to 6 visuals using charts first
+      const items = [];
+      const labels = Object.keys(seriesMap);
+      for (const label of labels) {
+        if (items.length >= 6) break;
+        const s = seriesMap[label];
+        if (!s.latest) continue;
+        const pts = [];
+        if (s.prev) pts.push(s.prev);
+        pts.push(s.latest);
+        const cell = document.createElement("div");
+        cell.className = "visual";
+        const canvas = createChartCanvas();
+        cell.appendChild(canvas);
+
+        // Caption with trend if available
+        let capText = `${label}: ${s.latest.val}%`;
+        if (s.latest.year) capText += ` (${s.latest.year})`;
+        if (s.prev) {
+          const delta = (s.latest.val - s.prev.val);
+          const sign = delta > 0 ? "+" : "";
+          capText += ` (${sign}${delta}% vs ${s.prev.year || 'prior'})`;
         }
+        const cap = document.createElement("div");
+        cap.className = "cap";
+        cap.textContent = capText;
+        cell.appendChild(cap);
+        el.appendChild(cell);
 
+        const cfg = chartConfigForSeries(label, pts);
+        // Use neutral colors; Chart.js picks defaults; we keep it simple per your style note
+        new Chart(canvas.getContext('2d'), cfg);
+        items.push(cell);
+      }
+
+      // 3) If still fewer than 6 visuals, try to add PDF thumbnails from server meta
+      if (items.length < 6 && Array.isArray(visualsMeta)) {
+        for (const v of visualsMeta) {
+          if (items.length >= 6) break;
+          const cell = document.createElement("div");
+          cell.className = "visual";
+          const holder = document.createElement("div");
+          holder.style.width = "100%"; holder.style.height = "180px"; holder.style.background = "#fafafa";
+          cell.appendChild(holder);
+          const cap = document.createElement("div");
+          cap.className = "cap";
+          cap.textContent = `${v.fileName} (p.${v.page || "?"})`;
+          cell.appendChild(cap);
+          el.appendChild(cell);
+
+          try {
+            const thumb = await renderPdfThumb(v.fileId, v.page || 1);
+            holder.replaceWith(thumb);
+          } catch (e) {
+            console.error("thumb render failed", e);
+          }
+          items.push(cell);
+        }
+      }
+
+      if (items.length > 0) {
+        card.style.display = "";
+      } else {
+        // nothing renderable
+        card.style.display = "none";
+      }
+    }
+
+    // --- References ---
+    function renderRefs(refs) {
+      const card = document.getElementById("refsCard");
+      const el = document.getElementById("refs");
+      if (!refs || refs.length === 0) { card.style.display="none"; el.innerHTML=""; return; }
+      card.style.display = "";
+      el.innerHTML = refs.slice().sort((a,b)=>a.ref-b.ref).map(r => `<li value="${r.ref}">${r.fileName}</li>`).join("");
+    }
+
+    // --- Page state helpers ---
+    function showThinking() {
+      document.getElementById("headline").classList.add("muted");
+      document.getElementById("headline").textContent = "Thinking…";
+      document.getElementById("headlineBullets").innerHTML = "";
+
+      ["detailCard","quotesCard","slidesCard","refsCard"].forEach(id => document.getElementById(id).style.display="none");
+      document.getElementById("support").innerHTML = "";
+      document.getElementById("quotesList").innerHTML = "";
+      document.getElementById("visuals").innerHTML = "";
+      document.getElementById("refs").innerHTML = "";
+      document.getElementById("showMoreBtn").style.display = "none";
+    }
+
+    function showError(msg) {
+      const h = document.getElementById("headline");
+      h.classList.add("muted");
+      h.textContent = `Error: ${msg}`;
+      ["detailCard","quotesCard","slidesCard","refsCard"].forEach(id => document.getElementById(id).style.display="none");
+    }
+
+    // --- Ask flow ---
+    async function ask() {
+      const q = document.getElementById("q").value.trim();
+      if (!q) return;
+      showThinking();
+      try {
+        const resp = await fetch(`${API_BASE}/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-auth-token": AUTH_TOKEN },
+          body: JSON.stringify({ clientId: "genentech", userQuery: q, topK: 40 })
+        });
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         const data = await resp.json();
 
-        // Normalize shapes your server might return
-        const normalized = {
-          answer: data.answer || data.summary || '',
-          bullets: data.details || data.bullets || [],
-          quotes: data.quotes || [],
-          references: data.references || data.sources || [],
-          visuals: data.visuals || {}
-        };
+        // Headline + supporting + quotes
+        renderHeadline(data.structured?.headline || {});
+        renderSupport(data.structured?.supporting || []);
+        const quotesArr = Array.isArray(data.structured?.quotes) ? data.structured.quotes : [];
+        renderQuotes(quotesArr);
 
-        window.__lastPayload = normalized;
-        renderAll(normalized);
+        // Visuals (charts first, then up to 6 pdf thumbs)
+        await renderVisuals(data.structured || {}, data.visuals || []);
+
+        // Refs
+        renderRefs(data.references || []);
       } catch (e) {
-        $('#answerText').textContent = `Search error: ${e?.message || e}`;
-        show('#answerBox', true);
-        console.error(e);
-      } finally {
-        btn.disabled = false; btn.textContent = 'Ask';
+        console.error("search error:", e);
+        showError(e.message || e);
       }
     }
 
-    $('#ask').addEventListener('click', doAsk);
-    $('#q').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || !e.shiftKey)) {
-        e.preventDefault();
-        doAsk();
-      }
+    document.getElementById("ask").addEventListener("click", ask);
+    document.getElementById("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); }
     });
   </script>
 </body>
