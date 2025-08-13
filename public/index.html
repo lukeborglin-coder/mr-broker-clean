@@ -5,24 +5,37 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
-  <!-- Chart.js for quick visuals -->
+  <!-- Charts for auto-generated visuals -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-    /* small helpers so you don’t need to touch styles.css */
+    /* helpers so you don't need to touch styles.css */
+    .header { position: relative; }
+    .beta-badge {
+      position: absolute; right: 0; top: 0;
+      font-weight: 700; letter-spacing: .08em;
+      color: #b9b9b9; font-size: 14px; padding: 4px 0;
+      user-select: none;
+    }
     .charts-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
-    .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
     .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
+    .muted { color:#666; font-size:12px; }
+    .quote-wrap { display:block; }
+    .quote-item { margin:0 0 14px 0; }
+    .quote-text { font-style: italic; margin:0; }
+    .quote-tag { margin-top:4px; font-size: 0.85em; color:#333; }
     .ref-list { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
     .ref-item { background:#fff; border-radius:12px; padding:14px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
     .ref-item a { text-decoration:none; color:#0b6bcb; }
-    .muted { color:#666; font-size:12px; }
   </style>
 </head>
 <body>
   <div class="page">
+
     <!-- Header -->
     <header class="header">
       <h1 class="title">COG<span style="color:#ff7a00;">gpt</span></h1>
+      <div class="beta-badge">BETA</div> <!-- Top-right light grey -->
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
     </header>
 
@@ -30,7 +43,7 @@
     <section class="search">
       <form id="qform">
         <input id="q" type="text" placeholder="ask a question about your research…" autocomplete="off"
-               value="what is Evrysdi’s trending satisfaction?" />
+               value="What are the barriers to treatment for untreated patients?" />
         <button id="ask" type="submit">Ask</button>
       </form>
     </section>
@@ -38,57 +51,68 @@
     <!-- Answer -->
     <section id="answer" class="callout" style="display:none;"></section>
 
-    <!-- Supporting Detail -->
+    <!-- Supporting Detail (bullets: no periods at end) -->
     <section class="panel">
       <h3>Supporting Detail</h3>
       <ul id="bullets"></ul>
     </section>
 
-    <!-- Supporting Quotes (fixed formatting) -->
+    <!-- Supporting Quotes (no bullets, no extra quotes; italic text + respondent tag below) -->
     <section class="panel">
       <h3>Supporting Quotes</h3>
-      <ul id="quotes"></ul>
+      <div id="quotes" class="quote-wrap"></div>
     </section>
 
-    <!-- Visuals + Source Slides (hybrid) -->
+    <!-- Visuals (charts only; we no longer try to render PDF/slide thumbnails) -->
     <section class="panel">
       <h3>Visuals</h3>
       <div id="charts" class="charts-grid"></div>
       <p id="chartNote" class="muted" style="display:none;">
-        Showing auto‑generated visuals from extracted numbers.
+        Auto‑generated visuals from extracted numbers.
       </p>
     </section>
 
+    <!-- Report References (underscores → spaces; hide p.1 unless a specific slide/page is provided) -->
     <section class="panel">
-      <h3>Source Slides</h3>
+      <h3>Report References</h3>
       <div id="refs" class="ref-list"></div>
-      <p class="muted">Click any source to open the original report at the cited slide/page.</p>
     </section>
   </div>
 
   <script>
-    // --- Helpers -------------------------------------------------------------
-
-    // Remove only the OUTER wrapping quotes if present; keep periods.
-    function cleanQuoteText(txt) {
-      if (!txt) return "";
-      // Trim whitespace, then strip a single pair of leading/trailing quotes (straight or curly)
-      const cleaned = String(txt).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
-      // Ensure there is a trailing period if the original had one; otherwise keep as-is.
-      return cleaned;
+    // ---------- Helpers ----------
+    function cleanOuterQuotes(s) {
+      if (!s) return "";
+      return String(s).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
     }
-
-    // Create a Google Slides deep-link if we have slideIndex; otherwise return fileUrl
-    function slideLink(fileUrl, slideIndex) {
-      if (!fileUrl) return "#";
-      // If it already has params, just append slide index as best-effort
+    function stripFinalPeriodForBullets(s) {
+      return String(s || "").trim().replace(/[.。]\s*$/, "");
+    }
+    function humanSlideLabel(ref) {
+      // Prefer explicit slideIndex; otherwise show page if >1; else nothing.
+      if (typeof ref.slideIndex === "number") return `Slide ${ref.slideIndex + 1}`;
+      if (typeof ref.page === "number" && ref.page > 1) return `p.${ref.page}`;
+      return "";
+    }
+    function slideLink(url, slideIndex) {
+      if (!url) return "#";
       if (typeof slideIndex === "number") {
-        const hasQuery = fileUrl.includes("?");
-        return fileUrl + (hasQuery ? "&" : "?") + "slide=" + (slideIndex + 1); // humans count from 1
+        const sep = url.includes("?") ? "&" : "?";
+        return `${url}${sep}slide=${slideIndex + 1}`;
       }
-      return fileUrl;
+      return url;
     }
-
+    function niceTitle(s) {
+      return (s || "").replace(/_/g, " ");
+    }
+    // Extract optional respondent tag at the end like: ...." - Evrysdi Patient
+    function splitQuoteAndTag(s) {
+      const txt = cleanOuterQuotes(s);
+      const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/); // capture trailing dash + tag
+      const quote = m ? m[1].trim() : txt;
+      const tag = m && m[2] ? m[2].trim() : "";
+      return { quote, tag };
+    }
     function el(tag, attrs = {}, children = []) {
       const node = document.createElement(tag);
       for (const [k, v] of Object.entries(attrs)) {
@@ -103,8 +127,7 @@
       return node;
     }
 
-    // --- Rendering logic -----------------------------------------------------
-
+    // ---------- Renderers ----------
     function renderAnswer(text) {
       const box = document.getElementById("answer");
       box.textContent = text || "No answer.";
@@ -115,34 +138,45 @@
       const ul = document.getElementById("bullets");
       ul.innerHTML = "";
       items.forEach(x => {
-        // Ensure NO trailing period for bullets (your preference)
-        let t = String(x || "").trim();
-        t = t.replace(/[.。]\s*$/, ""); // drop final period if present
-        ul.appendChild(el("li", {}, t));
+        ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x)));
       });
     }
 
+    // No bullets for quotes; each quote is a block with italic line + smaller respondent tag
     function renderQuotes(items = []) {
-      const ul = document.getElementById("quotes");
-      ul.innerHTML = "";
-      items.forEach(q => {
-        // remove extra wrapping quotes, but DO NOT remove periods
-        const cleaned = cleanQuoteText(q);
-        ul.appendChild(el("li", {}, cleaned));
+      const container = document.getElementById("quotes");
+      container.innerHTML = "";
+      if (!items.length) {
+        container.appendChild(el("div", { class: "muted" }, "No quotes returned."));
+        return;
+      }
+      items.forEach(item => {
+        // Accept either a string or an object { text, tag }
+        let text = "", tag = "";
+        if (item && typeof item === "object") {
+          text = item.text || item.quote || "";
+          tag = item.tag || item.respondent || "";
+        } else {
+          text = String(item || "");
+        }
+        const { quote, tag: parsedTag } = splitQuoteAndTag(text);
+        if (!tag) tag = parsedTag; // prefer explicit tag, else parsed
+
+        const block = el("div", { class: "quote-item" });
+        block.appendChild(el("p", { class: "quote-text" }, quote));
+        if (tag) block.appendChild(el("div", { class: "quote-tag" }, "— " + tag));
+        container.appendChild(block);
       });
     }
 
-    // Draw up to N charts from numeric series (if available)
-    function renderCharts(visuals = [], maxCharts = 3) {
+    // Strictly render CHARTS from numeric series (no thumbnails)
+    function renderCharts(visuals = [], maxCharts = 4) {
       const grid = document.getElementById("charts");
       const note = document.getElementById("chartNote");
       grid.innerHTML = "";
       let drawn = 0;
 
       visuals.slice(0, maxCharts).forEach(series => {
-        // expected shape example:
-        // { title: "Evrysdi Satisfaction", type:"line",
-        //   points:[{x:"2023", y:79}, {x:"2024", y:83}] }
         if (!series || !Array.isArray(series.points) || series.points.length < 2) return;
 
         const card = el("div", { class: "chart-card" });
@@ -156,25 +190,18 @@
 
         new Chart(canvas.getContext("2d"), {
           type: (series.type === "bar" ? "bar" : "line"),
-          data: {
-            labels,
-            datasets: [{ label: series.title || "", data: values }]
-          },
+          data: { labels, datasets: [{ label: series.title || "", data: values }] },
           options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
             plugins: { legend: { display: false } }
           }
         });
-        card.style.height = "260px";
         drawn++;
       });
 
       note.style.display = drawn ? "block" : "none";
-      if (!drawn) {
-        grid.appendChild(el("div", { class: "muted" }, "No chartable data found for this answer."));
-      }
+      if (!drawn) grid.appendChild(el("div", { class: "muted" }, "No chartable data found."));
     }
 
     function renderRefs(refs = []) {
@@ -186,38 +213,26 @@
       }
 
       refs.forEach(r => {
-        // expected ref shape:
-        // {
-        //   fileName: "Final_2025 ... Readout.pptx",
-        //   fileUrl: "https://docs.google.com/presentation/d/....",
-        //   slideIndex: 11, // optional (0-based)
-        //   page: 1,       // optional for PDFs
-        //   snippet: "…"
-        // }
-        const title = r.fileName || "Report";
-        const slideLabel =
-          (typeof r.slideIndex === "number") ? `Slide ${r.slideIndex + 1}` :
-          (typeof r.page === "number") ? `p.${r.page}` : "";
+        const title = niceTitle(r.fileName || "Report");
+        const label = humanSlideLabel(r);
         const url = slideLink(r.fileUrl, r.slideIndex);
 
         const item = el("div", { class: "ref-item" }, [
           el("a", { href: url, target: "_blank", rel: "noopener" }, title),
-          slideLabel ? el("div", { class: "muted" }, slideLabel) : null,
+          label ? el("div", { class: "muted" }, label) : null,
           r.snippet ? el("div", { class: "muted" }, r.snippet) : null
         ]);
-
         list.appendChild(item);
       });
     }
 
-    // --- Demo fetch glue -----------------------------------------------------
-    // Works with your existing /search endpoint. Adjust field names if yours differ.
+    // ---------- Fetch/search glue ----------
     async function runQuery(userQuery) {
       const res = await fetch("/search", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-auth-token": (window.AUTH_TOKEN || "") // optional; your server may not require from browser
+          "x-auth-token": (window.AUTH_TOKEN || "")
         },
         body: JSON.stringify({
           clientId: "genentech",
@@ -225,39 +240,26 @@
           topK: 6
         })
       });
-
       if (!res.ok) throw new Error("Search failed: " + res.status);
       const data = await res.json();
 
-      // Expected shape from your server (tolerant to missing fields):
-      // {
-      //   answer: "…",
-      //   bullets: ["…","…"],
-      //   quotes: ["“quoted sentence.”", "“another one.”"],
-      //   visuals: [{ title, type, points:[{x,y},…] }, …],
-      //   references: [{fileName, fileUrl, slideIndex?, page?, snippet?}, …]
-      // }
-      renderAnswer(data.answer || "No answer.");
+      // Expected payload keys (tolerant to variants)
+      renderAnswer(data.answer || "");
       renderBullets(data.bullets || data.supporting || []);
-      renderQuotes(data.quotes || []);
-      renderCharts(data.visuals || []);
-      renderRefs(data.references || []);
+      renderQuotes(data.quotes || data.supportingQuotes || []);
+      renderCharts(data.visuals || []);                 // charts only
+      renderRefs(data.references || data.refs || []);
     }
 
-    // Submit handler
     document.getElementById("qform").addEventListener("submit", async (e) => {
       e.preventDefault();
       const q = document.getElementById("q").value.trim();
       if (!q) return;
-      try {
-        await runQuery(q);
-      } catch (err) {
-        console.error(err);
-        alert("Search error. See console for details.");
-      }
+      try { await runQuery(q); }
+      catch (err) { console.error(err); alert("Search error. See console for details."); }
     });
 
-    // Auto-run once for the default field value (nice for demos)
+    // auto-run once for demo
     window.addEventListener("DOMContentLoaded", () => {
       const q = document.getElementById("q").value.trim();
       if (q) document.getElementById("qform").dispatchEvent(new Event("submit"));
