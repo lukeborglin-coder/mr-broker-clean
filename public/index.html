@@ -25,7 +25,7 @@
     .brandline { display:flex; align-items:center; justify-content:space-between; }
     .brandtitle { font-weight:900; letter-spacing:.6px; font-size:56px; line-height:1; } /* doubled size */
     .brandtitle .cog { color:var(--grey) }
-    .brandtitle .gpt { color:var(--brand); font-weight:600; } /* not bold as COG */
+    .brandtitle .gpt { color:var(--brand); font-weight:600; } /* lighter than COG */
     /* Hero finding card */
     .hero { background:#fff8ef; border:1px solid #ffd9b3; border-left:8px solid var(--brand); border-radius:12px; padding:18px 20px; }
     .hero .headline { font-size:18px; line-height:1.45; margin:0 0 .6rem 0 }
@@ -44,7 +44,6 @@
   <div class="page">
     <header class="header brandline">
       <div class="brandtitle"><span class="cog">COG</span><span class="gpt">gpt</span></div>
-      <!-- removed logo on the right -->
     </header>
 
     <section class="search">
@@ -67,7 +66,7 @@
         <button id="showMoreBtn" class="button link" style="display:none;background:none;border:0;color:#0a58ca;cursor:pointer;padding:0">Show more</button>
       </section>
 
-      <!-- Report Slides (static images with pdf.js fallback) -->
+      <!-- Report Slides -->
       <section class="card">
         <h2>Report Slides</h2>
         <div id="visuals" class="visuals"><div class="muted">No slides yet.</div></div>
@@ -85,10 +84,10 @@
     const API_BASE = location.origin;
     const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
 
-    // Normalize any model tags to superscripts with NO space before them.
+    // Superscript conversion: [n] or ^n^ -> <sup>n</sup>, with no preceding space
     function toSuperscripts(text) {
       if (!text) return "";
-      text = text.replace(/\[(\d+)\]/g, "^$1^"); // normalize
+      text = text.replace(/\[(\d+)\]/g, "^$1^");
       return text.replace(/\s*\^(\d+)\^\s*/g, (_, n) => `<sup>${n}</sup>`);
     }
 
@@ -121,7 +120,7 @@
       btn.onclick = () => { el.innerHTML = toHtml(_allSupport); btn.style.display = "none"; };
     }
 
-    // --- slides rendering with robust fallbacks ---
+    // Client-side PDF rendering fallback
     async function renderPdfToCanvas(container, fileId, page) {
       try {
         const resp = await fetch(`${API_BASE}/file/pdf?fileId=${encodeURIComponent(fileId)}`, { headers: { "x-auth-token": AUTH_TOKEN } });
@@ -134,19 +133,16 @@
         const ctx = canvas.getContext("2d");
         canvas.width = viewport.width; canvas.height = viewport.height;
         await pg.render({ canvasContext: ctx, viewport }).promise;
-        // size-crop to fit card height
         canvas.style.width = "100%"; canvas.style.height = "180px"; canvas.style.objectFit = "cover";
         container.innerHTML = ""; container.appendChild(canvas);
-      } catch (e) {
-        // last-resort placeholder
+      } catch {
         container.innerHTML = `<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAABmJLR0QA/wD/AP+gvaeTAAAAPklEQVR4nO3BMQEAAADCoPdPbQ8HFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwG6kAAAUl7mNwAAAAASUVORK5CYII=" alt="slide" />`;
       }
     }
 
-    function attachImgFallbacks(el, items) {
-      [...el.querySelectorAll("img[data-fileid]")].forEach((img, i) => {
+    function attachImgFallbacks(el) {
+      [...el.querySelectorAll("img[data-fileid]")].forEach((img) => {
         img.onerror = async () => {
-          // replace the whole <img> with client-side rendered canvas
           const wrap = img.parentElement;
           const fileId = img.getAttribute("data-fileid");
           const page = img.getAttribute("data-page") || "1";
@@ -168,7 +164,7 @@
           <div class="cap">${v.fileName} (p.${v.page || "?"})</div>
         </div>
       `).join("");
-      attachImgFallbacks(el, list);
+      attachImgFallbacks(el);
     }
 
     function renderRefs(refs) {
