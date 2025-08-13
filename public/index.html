@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COGgpt — Research Q&A</title>
 
-  <!-- Your static CSS -->
+  <!-- Core CSS -->
   <link rel="stylesheet" href="/styles.css" />
 
-  <!-- Auth token for demo (browser adds it to /search). Replace if you rotate it. -->
+  <!-- Demo auth token (browser adds this to /search). Update if you rotate. -->
   <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
 
-  <!-- Chart.js for simple visuals -->
+  <!-- Charts for simple visuals -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -20,52 +20,55 @@
     <!-- Header -->
     <header class="header">
       <h1 class="title">COG<span class="brand-accent">gpt</span></h1>
-      <!-- No top‑right logo (per request) -->
-      <span class="beta-badge">BETA</span>
+      <div class="beta-badge">BETA</div>
     </header>
 
     <!-- Search -->
     <section class="search">
-      <form id="qform">
-        <input id="q" type="text" placeholder="ask a question about your research…" autocomplete="off"
-               value="What are the barriers to treatment for untreated patients?" />
+      <form id="qform" autocomplete="off">
+        <input id="q" type="text"
+               placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”" />
         <button id="ask" type="submit">Ask</button>
       </form>
     </section>
 
-    <!-- Answer -->
-    <section id="answer" class="callout" style="display:none;">No answer.</section>
+    <!-- Results wrapper (hidden until first successful search) -->
+    <div id="results" class="results hidden">
 
-    <!-- Supporting Detail -->
-    <section class="panel">
-      <h3>Supporting Detail</h3>
-      <ul id="bullets"></ul>
-    </section>
+      <!-- Answer -->
+      <section id="answer" class="callout" aria-live="polite"></section>
 
-    <!-- Supporting Quotes -->
-    <section class="panel">
-      <h3>Supporting Quotes</h3>
-      <!-- We’ll transform whatever your backend renders into italic quotes with a tag under each -->
-      <div id="quotes"></div>
-    </section>
+      <!-- Supporting Detail -->
+      <section class="panel">
+        <h3>Supporting Detail</h3>
+        <ul id="bullets"></ul>
+      </section>
 
-    <!-- Visuals -->
-    <section class="panel">
-      <h3>Visuals</h3>
-      <div id="charts" class="charts-grid"></div>
-      <p id="chartNote" class="muted" style="display:none;">Auto‑generated visuals from extracted numbers.</p>
-    </section>
+      <!-- Supporting Quotes -->
+      <section class="panel">
+        <h3>Supporting Quotes</h3>
+        <div id="quotes"></div>
+      </section>
 
-    <!-- Report References -->
-    <section class="panel">
-      <h3>Report References</h3>
-      <div id="refs" class="ref-list"></div>
-    </section>
+      <!-- Visuals -->
+      <section class="panel">
+        <h3>Visuals</h3>
+        <div id="charts" class="charts-grid"></div>
+        <p id="chartNote" class="muted" style="display:none;">Auto‑generated visuals from extracted numbers.</p>
+      </section>
+
+      <!-- Report References -->
+      <section class="panel">
+        <h3>Report References</h3>
+        <div id="refs" class="ref-list"></div>
+      </section>
+    </div>
   </div>
 
   <script>
-    // =============== helpers ===============
+    // ================= helpers =================
     const qs = (s, r=document) => r.querySelector(s);
+    const qsa = (s, r=document) => Array.from(r.querySelectorAll(s));
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
 
     function el(tag, attrs = {}, children = []) {
@@ -78,6 +81,9 @@
       [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
       return node;
     }
+    function show(elm) { elm?.classList.remove("hidden"); }
+    function hide(elm) { elm?.classList.add("hidden"); }
+
     function cleanOuterQuotes(s) {
       if (!s) return "";
       return String(s).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
@@ -105,17 +111,16 @@
       return "";
     }
 
-    // =============== renderers ===============
+    // ================= renderers =================
     function renderAnswer(text) {
       const box = qs("#answer");
       box.textContent = text || "No answer.";
-      box.style.display = "block";
     }
     function renderBullets(items = []) {
       const ul = qs("#bullets"); ul.innerHTML = "";
+      if (!items.length) return ul.appendChild(el("div",{class:"muted"},"No supporting detail returned."));
       items.forEach(x => ul.appendChild(el("li", {}, stripFinalPeriodForBullets(x))));
     }
-    // No bullets for quotes; italic line + small respondent tag
     function renderQuotes(items = []) {
       const root = qs("#quotes"); root.innerHTML = "";
       if (!items.length) { root.appendChild(el("div",{class:"muted"},"No quotes returned.")); return; }
@@ -134,7 +139,6 @@
         root.appendChild(block);
       });
     }
-    // Only charts (no thumbnails)
     function renderCharts(visuals = [], maxCharts = 4) {
       const grid = qs("#charts"); const note = qs("#chartNote");
       grid.innerHTML = "";
@@ -184,15 +188,25 @@
       });
     }
 
-    // =============== fetch/search glue ===============
+    // ================= fetch/search =================
     async function runQuery(userQuery) {
-      const token = document.querySelector('meta[name="auth-token"]')?.content || "";
+      const token = document.querySelector('meta[name="auth-token"]')?.content || window.AUTH_TOKEN || "";
+      const payload = { clientId: "genentech", userQuery, topK: 6 };
+
       const res = await fetch("/search", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-auth-token": token },
-        body: JSON.stringify({ clientId: "genentech", userQuery, topK: 6 })
+        body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error("Search failed: " + res.status);
+
+      if (!res.ok) {
+        // Better console detail to debug quickly
+        let bodyText = "";
+        try { bodyText = await res.text(); } catch {}
+        console.error("Search failed:", res.status, res.statusText, "Body:", bodyText);
+        throw new Error("Search failed: " + res.status);
+      }
+
       const data = await res.json();
 
       // tolerate slight key differences
@@ -207,6 +221,9 @@
       renderQuotes(quotes);
       renderCharts(visuals);
       renderRefs(refs);
+
+      // show results container on first successful render
+      show(qs("#results"));
     }
 
     document.getElementById("qform").addEventListener("submit", async (e) => {
@@ -214,17 +231,10 @@
       const q = document.getElementById("q").value.trim();
       if (!q) return;
       try { await runQuery(q); }
-      catch (err) { console.error(err); alert("Search error. See console for details."); }
+      catch (err) { alert("Search error. See console for details."); }
     });
 
-    // Auto-run once for demo
-    window.addEventListener("DOMContentLoaded", () => {
-      const q = document.getElementById("q").value.trim();
-      if (q) document.getElementById("qform").dispatchEvent(new Event("submit"));
-    });
+    // No auto-run. Panels stay hidden until a question is asked.
   </script>
-
-  <!-- Small DOM post-processor to keep your layout intact while applying requested tweaks -->
-  <script src="/ux-patches.js"></script>
 </body>
 </html>
