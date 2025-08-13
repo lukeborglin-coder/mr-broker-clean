@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COG gpt — Research Q&A</title>
 
-  <!-- Minimal reset + styles -->
   <style>
     :root {
       --bg: #f6f7f9;
@@ -22,10 +21,11 @@
       color: var(--ink);
       background: var(--bg);
     }
-    .page { max-width: 1100px; margin: 24px auto 56px; padding: 0 16px; }
-    header { display: flex; align-items: center; gap: 18px; margin-bottom: 10px; }
+    .page { max-width: 1100px; margin: 24px auto 56px; padding: 0 16px; position: relative; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
     header .logo { font-weight: 800; font-size: 28px; letter-spacing: 0.5px; }
     header .logo .dot { color: var(--accent); }
+    header .beta { color: #9ca3af; font-weight: 700; letter-spacing: .02em; }
 
     .searchbar {
       display: grid; grid-template-columns: 1fr auto; gap: 12px;
@@ -34,7 +34,7 @@
     }
     textarea {
       width: 100%; min-height: 52px; resize: vertical; padding: 12px 14px; font-size: 15px; line-height: 1.4;
-      border: 1px solid var(--ring); border-radius: 10px; outline: none;
+      border: 1px solid var(--ring); border-radius: 10px; outline: none; background: #fff;
     }
     button.ask {
       padding: 12px 18px; border-radius: 10px; border: 1px solid var(--ring);
@@ -44,22 +44,17 @@
 
     .section { background: var(--panel); border: 1px solid var(--ring); border-radius: 12px; padding: 16px; margin-top: 16px; }
     .section h3 { margin: 0 0 8px; font-size: 16px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
-    .answer {
-      border-left: 4px solid var(--accent); background: #fff7ef; /* soft accent */
-    }
+    .answer { border-left: 4px solid var(--accent); background: #fff7ef; }
     .answer p { margin: 0; }
     ul { margin: 8px 0 0 18px; }
     li { margin: 6px 0; }
     .tiny { color: var(--muted); font-size: 12px; }
 
-    /* Slides / toggle area */
     .mode-toggle { display: flex; gap: 8px; margin-bottom: 10px; }
     .mode-toggle button {
       border: 1px solid var(--ring); background: #fff; padding: 8px 12px; border-radius: 999px; cursor: pointer;
     }
-    .mode-toggle button.active {
-      background: #111827; color: #fff; border-color: #111827;
-    }
+    .mode-toggle button.active { background: #111827; color: #fff; border-color: #111827; }
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .ref-card, .chart-card, .table-card {
       border: 1px solid var(--ring); border-radius: 10px; padding: 12px; background: #fff;
@@ -67,46 +62,41 @@
     .ref-title { font-weight: 600; }
     .superscript { vertical-align: super; font-size: 0.75em; }
 
-    /* Mobile */
-    @media (max-width: 800px) {
-      .grid { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
   </style>
 
-  <!-- Chart.js for Option A visuals -->
+  <!-- Chart.js for Charts mode -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="page">
     <header>
       <div class="logo">COG<span class="dot">gpt</span></div>
+      <div class="beta">(BETA)</div>
     </header>
 
     <!-- Search -->
     <div class="searchbar">
-      <textarea id="q" placeholder="ask anything about your research (e.g., “what is Evrysdi’s trending satisfaction?”)"></textarea>
+      <textarea id="q" placeholder="ask anything about your research (e.g., “What is Evrysdi’s trending satisfaction?”)"></textarea>
       <button id="ask" class="ask">Ask</button>
     </div>
 
-    <!-- Answer -->
+    <!-- Results (all hidden until a question is asked and a response arrives) -->
     <section class="section answer" id="answerBox" style="display:none">
       <p id="answerText"></p>
     </section>
 
-    <!-- Supporting Detail -->
     <section class="section" id="detailBox" style="display:none">
       <h3>Supporting Detail</h3>
       <ul id="detailList"></ul>
     </section>
 
-    <!-- Supporting Quotes -->
     <section class="section" id="quotesBox" style="display:none">
       <h3>Supporting Quotes</h3>
       <ul id="quotesList"></ul>
       <div class="tiny" id="quotesFoot"></div>
     </section>
 
-    <!-- Report Slides (toggle between Charts and References) -->
     <section class="section" id="slidesBox" style="display:none">
       <div class="mode-toggle">
         <button id="modeCharts" class="active" data-mode="charts">Charts</button>
@@ -115,7 +105,6 @@
       <div id="slidesBody"></div>
     </section>
 
-    <!-- References (always shown at bottom) -->
     <section class="section" id="refsBox" style="display:none">
       <h3>References</h3>
       <ol id="refsList"></ol>
@@ -128,30 +117,25 @@
   </div>
 
   <script>
-    // ========== Utilities ==========
+    // ===== Utilities =====
     const AUTH_TOKEN = localStorage.getItem('AUTH_TOKEN') || '';
-    const $ = (sel) => document.querySelector(sel);
-    const show = (id, yes) => { const el = $(id); if (!el) return; el.style.display = yes ? '' : 'none'; };
+    const $  = (sel) => document.querySelector(sel);
+    const show = (sel, yes) => { const el = $(sel); if (!el) return; el.style.display = yes ? '' : 'none'; };
 
-    // Remove wrapping quotes but KEEP periods at end.
+    // Remove outer wrapping quotes but keep punctuation
     function cleanQuote(text) {
       if (!text) return '';
       let s = String(text).trim();
-
-      // If the whole thing is wrapped in matching "..." or '...' remove once.
       if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
         s = s.slice(1, -1).trim();
       }
-      // Do NOT strip trailing period – that's required.
       return s;
     }
 
-    // Extract percentages from strings, return array of numbers in order of appearance
     function extractPercents(text) {
       if (!text) return [];
       const re = /(\d{1,3})\s*%/g;
-      const out = [];
-      let m;
+      const out = []; let m;
       while ((m = re.exec(text)) !== null) {
         const n = Number(m[1]);
         if (n >= 0 && n <= 100) out.push(n);
@@ -159,7 +143,6 @@
       return out;
     }
 
-    // Build a simple line chart given an id and numbers
     function makeLineChart(canvas, label, arr) {
       const ctx = canvas.getContext('2d');
       new Chart(ctx, {
@@ -176,46 +159,50 @@
       });
     }
 
-    // Render references list items
     function liRef(ref) {
-      // Try to surface a slide number if it’s encoded like "(p.12)" or "(slide 12)" etc.
-      const slideMatch = String(ref?.title || ref).match(/\b(p\.?\s?\d+|slide\s*\d+)\b/i);
+      const slideMatch = String(ref?.title || ref?.name || ref).match(/\b(p\.?\s?\d+|slide\s*\d+)\b/i);
       const slideHint = slideMatch ? ` — ${slideMatch[0]}` : '';
-      const text = typeof ref === 'string' ? ref : (ref?.title || ref?.name || 'Untitled');
+      const text = (ref && (ref.title || ref.name)) ? (ref.title || ref.name) : (typeof ref === 'string' ? ref : 'Untitled');
       return `<li><span class="ref-title">${text}</span>${slideHint}</li>`;
     }
 
-    // ========== Rendering ==========
+    // ===== Rendering =====
     function renderAll(payload) {
-      const { answer, bullets = [], quotes = [], references = [], visuals = {} } = payload || {};
+      const { answer, bullets = [], quotes = [], references = [] } = payload || {};
 
-      // Answer
-      $('#answerText').textContent = answer || '';
-      show('#answerBox', Boolean(answer));
+      const hasAny = Boolean(answer) || bullets.length || quotes.length || references.length;
 
-      // Detail bullets
-      const detailHTML = bullets.map(b => `<li>${b.replace(/\.\s*$/,'')}.</li>`).join('');
+      // Answer box (always show something after a query)
+      $('#answerText').textContent = answer || 'I don’t have enough information.';
+      show('#answerBox', true);
+
+      // Details
+      const detailHTML = (bullets || []).map(b => `<li>${String(b).replace(/\.\s*$/,'')}.</li>`).join('');
       $('#detailList').innerHTML = detailHTML;
       show('#detailBox', bullets.length > 0);
 
-      // Supporting Quotes (strip extra quotes, keep periods)
-      const quoteHTML = quotes.map(q => {
+      // Quotes (strip outer quotes, keep periods)
+      const quoteHTML = (quotes || []).map(q => {
         let s = cleanQuote(q);
-        // ensure a period at end if the original had one; otherwise leave as-is
         if (!/[.!?]$/.test(s) && /[.!?]$/.test(String(q).trim())) s = s + '.';
         return `<li><strong>${s}</strong> <span class="superscript">⁴</span></li>`;
       }).join('');
       $('#quotesList').innerHTML = quoteHTML;
-      $('#quotesFoot').textContent = quotes.length ? 'Note: outer double quotes removed intentionally; sentence punctuation preserved.' : '';
+      $('#quotesFoot').textContent = quotes.length ? 'Outer quotes removed; sentence punctuation preserved.' : '';
       show('#quotesBox', quotes.length > 0);
 
-      // References (bottom)
-      $('#refsList').innerHTML = references.map(liRef).join('');
+      // References (bottom list)
+      $('#refsList').innerHTML = (references || []).map(liRef).join('');
       show('#refsBox', references.length > 0);
 
-      // Slides section (toggle area) – only show if we have *something* to show
-      show('#slidesBox', true);
-      renderSlidesMode('charts', payload);
+      // Slides section: only show after a query, and only if we can display *either* chart data or references
+      const allText = [answer, ...(bullets || [])].join(' | ');
+      const percents = extractPercents(allText);
+      const canChart = percents.length >= 1;
+      const canRefs = (references || []).length > 0;
+      show('#slidesBox', canChart || canRefs);
+
+      if (canChart || canRefs) renderSlidesMode(canChart ? 'charts' : 'references', payload);
     }
 
     function renderSlidesMode(mode, payload) {
@@ -227,52 +214,38 @@
       host.innerHTML = '';
 
       if (mode === 'references') {
-        // Option B: clean list of references (no thumbs)
-        const box = document.createElement('div');
-        box.className = 'grid';
-        references.forEach(ref => {
+        const box = document.createElement('div'); box.className = 'grid';
+        (references || []).forEach(ref => {
           const card = document.createElement('div');
           card.className = 'ref-card';
-          card.innerHTML = `<div class="ref-title">${(ref?.title || ref?.name || ref)}</div>
+          card.innerHTML = `<div class="ref-title">${(ref?.title || ref?.name || 'Untitled')}</div>
                             <div class="tiny">${ref?.fileName || ''}</div>`;
           box.appendChild(card);
         });
-        if (!references.length) {
-          const empty = document.createElement('div');
-          empty.className = 'tiny';
-          empty.textContent = 'No references returned.';
-          host.appendChild(empty);
-        } else {
-          host.appendChild(box);
-        }
+        host.appendChild(box);
         return;
       }
 
-      // Option A: Try to auto-build a couple of small visuals from text numbers
-      // Heuristics: collect percentages from answer + bullets, keep last 2–4 as a trend.
+      // Charts
       const allText = [answer, ...bullets].join(' | ');
       const percents = extractPercents(allText);
 
-      const visualsWrap = document.createElement('div');
-      visualsWrap.className = 'grid';
+      const visualsWrap = document.createElement('div'); visualsWrap.className = 'grid';
 
-      // 1) Trend chart if we have at least 2 percentage points
+      // Trend line if ≥2 points
       if (percents.length >= 2) {
         const card = document.createElement('div');
         card.className = 'chart-card';
         card.innerHTML = `<canvas id="trendChart" height="170"></canvas>
-                          <div class="tiny" style="margin-top:6px">Auto-derived from text (percent values detected in answer/details).</div>`;
+                          <div class="tiny" style="margin-top:6px">Auto-derived from numeric values detected in answer/details.</div>`;
         visualsWrap.appendChild(card);
         setTimeout(() => makeLineChart($('#trendChart'), 'Trend', percents.slice(-5)), 0);
       }
 
-      // 2) Table of “headline metrics” (pull first few percentages with short labels)
-      const tableCard = document.createElement('div');
-      tableCard.className = 'table-card';
-      const rows = [];
-      // Create simple labeled rows from the first 3–4 percentages we see
-      const labels = ['Current satisfaction', 'Previous satisfaction', 'NPS (latest)', 'NPS (prior)'];
-      percents.slice(0, 4).forEach((p, i) => rows.push(`<tr><td>${labels[i] || 'Metric'}</td><td style="text-align:right">${p}%</td></tr>`));
+      // Key Metrics table
+      const tableCard = document.createElement('div'); tableCard.className = 'table-card';
+      const labels = ['Metric 1', 'Metric 2', 'Metric 3', 'Metric 4'];
+      const rows = percents.slice(0, 4).map((p, i) => `<tr><td>${labels[i]}</td><td style="text-align:right">${p}%</td></tr>`);
       tableCard.innerHTML = `
         <div style="font-weight:600;margin-bottom:6px">Key Metrics</div>
         <table style="width:100%; border-collapse:collapse">
@@ -287,9 +260,14 @@
       host.appendChild(visualsWrap);
     }
 
-    // ========== Events ==========
+    // ===== Events / Search =====
     $('#modeCharts').addEventListener('click', () => renderSlidesMode('charts', window.__lastPayload || {}));
     $('#modeRefs').addEventListener('click', () => renderSlidesMode('references', window.__lastPayload || {}));
+
+    function hideAllResults() {
+      ['#answerBox','#detailBox','#quotesBox','#slidesBox','#refsBox'].forEach(sel => show(sel, false));
+    }
+    hideAllResults(); // start with a clean page
 
     async function doAsk() {
       const btn = $('#ask');
@@ -297,6 +275,8 @@
       if (!q) return;
 
       btn.disabled = true; btn.textContent = 'Thinking…';
+      hideAllResults();
+
       try {
         const resp = await fetch('/search', {
           method: 'POST',
@@ -307,11 +287,17 @@
           body: JSON.stringify({ clientId: 'genentech', userQuery: q, topK: 6 })
         });
 
+        // Handle non-200s with a friendly error box
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => '');
+          $('#answerText').textContent = `Request failed (${resp.status}). ${text || 'Check server logs and token.'}`;
+          show('#answerBox', true);
+          return;
+        }
+
         const data = await resp.json();
 
-        // Expecting your API to return at least:
-        // { answer: string, details?: string[] or bullets, quotes?: string[], references?: array, visuals?: object }
-        // Normalize a few possible shapes from your server
+        // Normalize shapes your server might return
         const normalized = {
           answer: data.answer || data.summary || '',
           bullets: data.details || data.bullets || [],
@@ -323,7 +309,8 @@
         window.__lastPayload = normalized;
         renderAll(normalized);
       } catch (e) {
-        alert('Search failed. Open DevTools Console for details.');
+        $('#answerText').textContent = `Search error: ${e?.message || e}`;
+        show('#answerBox', true);
         console.error(e);
       } finally {
         btn.disabled = false; btn.textContent = 'Ask';
@@ -337,26 +324,6 @@
         doAsk();
       }
     });
-
-    // Demo seed for layout sanity (remove if you don’t want it)
-    const demo = {
-      answer: "Evrysdi’s patient satisfaction has reached 83%, showing a positive trend compared to 79% previously. NPS has increased to 43%, up from 20%.",
-      bullets: [
-        "Current satisfaction with Evrysdi is 83%, up +4% from 79% in the last wave",
-        "Evrysdi users report significantly higher satisfaction than Spinraza users (83% vs. 69%)",
-        "Evrysdi’s NPS has increased to 43%, up from 20% in the previous wave"
-      ],
-      quotes: [
-        "\"Evrysdi users have significantly higher satisfaction than Spinraza users.\"",
-        "\"The increase in NPS reflects growing patient loyalty towards Evrysdi.\""
-      ],
-      references: [
-        { title: "Final_2025 SMA Evrysdi HCP Patient ATU W7 Readout (p.12)" },
-        { title: "2024 SMA Evrysdi HCP Patient ATU W6 Report (slide 10)" },
-        { title: "SMA Demand Conjoint Follow Up Report (p.1)" }
-      ]
-    };
-    renderAll(demo);
   </script>
 </body>
 </html>
