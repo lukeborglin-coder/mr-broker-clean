@@ -9,6 +9,25 @@ import { google } from "googleapis";
 import OpenAI from "openai";
 import { Pinecone } from "@pinecone-database/pinecone";
 
+// server.js (top of file, after other requires)
+const basicAuth = require('basic-auth');
+
+// Set the password required to access the site.
+// You can also set SITE_PASSWORD in your environment; the default is coggpt25.
+const SITE_PASSWORD = process.env.SITE_PASSWORD || 'coggpt25';
+
+// Basic‑Auth middleware: prompts for credentials and checks the password.
+app.use((req, res, next) => {
+  const credentials = basicAuth(req);
+  // If no credentials were sent, or the password is wrong, request authentication.
+  if (!credentials || credentials.pass !== SITE_PASSWORD) {
+    res.set('WWW-Authenticate', 'Basic realm="Secure Area"');
+    return res.status(401).send('Authentication required');
+  }
+  // If password matches, continue to the next handler.
+  next();
+});
+
 // ---------- Env / App ----------
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 const PORT = process.env.PORT || 3000;
@@ -330,3 +349,4 @@ app.post("/search", async (req, res) => {
   try{ await ensurePineconeIndex(); index=pinecone.index(PINECONE_INDEX); }catch(e){ console.error("pinecone bootstrap failed",e); }
   app.listen(PORT, ()=>console.log(`mr-broker running on :${PORT}`));
 })();
+
