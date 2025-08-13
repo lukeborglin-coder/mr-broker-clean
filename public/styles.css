@@ -9,6 +9,10 @@ body {
   line-height: 1.45;
 }
 
+/* Utilities */
+.hidden { display: none !important; }
+.muted { color:#666; font-size:12px; }
+
 /* Page wrapper */
 .page {
   max-width: 980px;
@@ -17,10 +21,13 @@ body {
 }
 
 /* Header */
-.header { display:flex; align-items:center; position:relative; }
-.title { margin: 0 8px 0 0; font-size: 28px; font-weight: 800; letter-spacing: .2px; }
+.header { display:flex; align-items:center; position:relative; min-height: 40px; }
+.title { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: .2px; }
 .brand-accent { color: #ff7a00; }
-.beta-badge { color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px; margin-left:8px; }
+.beta-badge {
+  position: absolute; top: 0; right: 0;
+  color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px;
+}
 
 /* Search */
 .search { margin: 18px 0 20px; }
@@ -42,6 +49,9 @@ body {
   cursor: pointer;
 }
 #ask:hover { filter: brightness(.95); }
+
+/* Results wrapper */
+.results { margin-top: 10px; }
 
 /* Panels */
 .panel {
@@ -71,15 +81,12 @@ body {
 ul { margin: 0; padding-left: 18px; }
 li { margin: 6px 0; }
 
-/* Muted text */
-.muted { color:#666; font-size:12px; }
-
-/* Visuals area */
+/* Visuals */
 .charts-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; }
 .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
 .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
 
-/* Quotes (we programmatically convert to these blocks) */
+/* Quotes (rendered to blocks via JS) */
 #quotes { list-style:none; padding-left:0; margin:0; }
 #quotes .quote-item { margin:0 0 14px 0; }
 #quotes .quote-text { font-style: italic; margin:0; }
