@@ -36,11 +36,15 @@
     <!-- Results (hidden until we have results) -->
     <div id="results" class="results hidden">
 
-      <section id="answer" class="callout" aria-live="polite"></section>
+      <section class="callout" aria-live="polite">
+        <div id="answer"></div>
+        <ul id="keynums" class="keynums"></ul>
+      </section>
 
       <section class="panel">
         <h3>Supporting Detail</h3>
         <ul id="bullets"></ul>
+        <button id="moreBtn" class="link-btn hidden" type="button">Show more</button>
       </section>
 
       <section id="quotesPanel" class="panel">
@@ -55,7 +59,7 @@
 
       <section class="panel">
         <h3>Report References</h3>
-        <ul id="refs" class="ref-list-ul"></ul>
+        <ol id="refs" class="ref-ol"></ol>
       </section>
     </div>
   </div>
@@ -81,17 +85,18 @@
       return node;
     }
 
-    // ^2^ -> <sup>[2]</sup> with no leading space
+    // ^2^ -> <sup>2</sup> (no brackets, no leading space)
     function caretsToSup(s) {
-      return String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">[${n}]</sup>`);
+      return String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
     }
+
     // ensure period inside quotes; ref superscripts remain outside
     function ensurePeriodInsideQuotes(txt) {
       const t = String(txt || "").trim();
-      if (/[.!?]$/.test(t)) return t;
-      return t + ".";
+      return /[.!?]$/.test(t) ? t : (t + ".");
     }
-    // split “Quote” — Tag (or - Tag). Requires starting quote to qualify as respondent quote.
+
+    // must look like a real respondent quote: starts with quote and has a trailing tag “— Tag”
     function splitQuoteAndTag(raw) {
       const text = String(raw || "").trim();
       const startsWithQuote = /^["“]/.test(text);
@@ -99,26 +104,43 @@
       const m = inner.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
       return { isQuoted: startsWithQuote, quote: (m ? m[1] : inner).trim(), tag: (m && m[2] ? m[2] : "").trim() };
     }
+
     function niceTitle(s) { return (s || "").replace(/_/g, " "); }
 
-    // ---------- headline ----------
-    function renderHeadline(data) {
+    // ---------- headline + key numbers ----------
+    function renderHeadlineAndKeys(data) {
       const s = data.structured || {};
       const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
       let html = caretsToSup(p);
-
-      // If no ^n^ present, append first reference number as superscript
+      // If headline has no markers, append first ref number so it's sourced
       if (!/\^(\d+)\^/.test(p) && Array.isArray(data.references) && data.references.length) {
         const num = data.references[0]?.ref;
-        if (typeof num === "number") html = html.replace(/([.!?])\s*$/, `$1<sup class="ref-sup">[${num}]</sup>`);
+        if (typeof num === "number") html = html.replace(/([.!?])\s*$/, `$1<sup class="ref-sup">${num}</sup>`);
       }
-
       qs("#answer").innerHTML = html;
+
+      // Key Numbers: take the first 2–3 sourced bullets
+      const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
+      const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
+      const all = headBul.concat(supp);
+      const sourced = all.filter(t => /\^\d+\^/.test(String(t))).slice(0,3);
+      const ul = qs("#keynums"); ul.innerHTML = "";
+      if (sourced.length) {
+        sourced.forEach(t => {
+          let txt = String(t).trim().replace(/[.。]\s*$/, "");
+          txt = caretsToSup(txt);
+          ul.appendChild(el("li", { html: txt }));
+        });
+        show(ul);
+      } else {
+        hide(ul);
+      }
     }
 
-    // ---------- bullets (only with sources) ----------
+    // ---------- bullets (top 5 + Show more) ----------
     function renderBullets(data) {
       const ul = qs("#bullets"); ul.innerHTML = "";
+      const btn = qs("#moreBtn");
       const s = data.structured || {};
       const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
@@ -126,13 +148,34 @@
 
       // keep only bullets with ^n^ markers (sourced)
       const sourced = all.filter(t => /\^\d+\^/.test(String(t)));
-      if (!sourced.length) { ul.appendChild(el("li",{class:"muted"},"No supporting detail returned.")); return; }
 
-      sourced.forEach(t => {
-        let txt = String(t).trim().replace(/[.。]\s*$/, "");  // drop final period in bullets
-        txt = caretsToSup(txt); // convert refs
-        ul.appendChild(el("li", { html: txt }));
-      });
+      if (!sourced.length) {
+        ul.appendChild(el("li",{class:"muted"},"No supporting detail returned."));
+        hide(btn);
+        return;
+      }
+
+      const MAX = 5;
+      function liHTML(t){ return caretsToSup(String(t).trim().replace(/[.。]\s*$/, "")); }
+
+      // initial render
+      sourced.slice(0, MAX).forEach(t => ul.appendChild(el("li", { html: liHTML(t) })));
+
+      if (sourced.length > MAX) {
+        // stash rest; re-render on toggle
+        btn._expanded = false;
+        btn.onclick = () => {
+          btn._expanded = !btn._expanded;
+          ul.innerHTML = "";
+          const list = btn._expanded ? sourced : sourced.slice(0, MAX);
+          list.forEach(t => ul.appendChild(el("li", { html: liHTML(t) })));
+          btn.textContent = btn._expanded ? "Show less" : "Show more";
+        };
+        btn.textContent = "Show more";
+        show(btn);
+      } else {
+        hide(btn);
+      }
     }
 
     // ---------- quotes (respondent only) ----------
@@ -141,18 +184,17 @@
       const root = qs("#quotes"); root.innerHTML = "";
       const quotes = (data.structured && Array.isArray(data.structured.quotes) ? data.structured.quotes : (data.quotes || []));
 
-      // only keep items that look like real respondent quotes
       const filtered = quotes
         .map(q => splitQuoteAndTag(q))
-        .filter(x => x.isQuoted && x.tag); // must start with quotes and have a tag
+        .filter(x => x.isQuoted && x.tag); // must look like a respondent quote
 
       if (!filtered.length) { hide(panel); return; }
       show(panel);
 
       filtered.forEach(({quote, tag}) => {
-        const qtxt = ensurePeriodInsideQuotes(quote);
-        const line = `“${qtxt}”`; // period inside
-        const html = caretsToSup(line); // refs outside (we’ll append here, since ^n^ markers are at end)
+        const qtxt = ensurePeriodInsideQuotes(quote);   // period inside
+        const line = `“${qtxt}”`;                        // close quote
+        const html = caretsToSup(line);                 // refs outside (from ^n^ markers)
         const wrap = el("div", { class: "quote-item" }, [
           el("p", { class: "quote-text", html }),
           el("div", { class: "quote-tag" }, "— " + tag)
@@ -162,93 +204,83 @@
     }
 
     // ---------- visuals ----------
-    function inferTrendFromText({ headline = "", bullets = [] }) {
-      const points = [];
+    // extract simple 2‑point trends from phrases across text
+    function findTrends(text) {
+      const out = [];
 
-      const scan = (s) => {
-        const text = String(s || "");
-        // now at 22%, up from 20% in the last wave
-        const nowPrev = /now (?:at|is)\s*(\d{1,3})%.*?\b(?:up|down)\s*(?:from|by)\s*(\d{1,3})%/i.exec(text);
-        if (nowPrev) {
-          points.push({ x: "Prev", y: Number(nowPrev[2]) });
-          points.push({ x: "Now",  y: Number(nowPrev[1]) });
-        }
-        // generic year% captures (2023 37%)
-        const re = /(\d{4}).{0,12}?(\d{1,3})%/g;
-        let m; while ((m = re.exec(text))) points.push({ x: m[1], y: Number(m[2]) });
+      // 1) “from X% to Y%”
+      const reFromTo = /from\s*(\d{1,3})%\s*to\s*(\d{1,3})%/gi;
+      let m;
+      while ((m = reFromTo.exec(text))) out.push([{x:"Prev",y:+m[1]},{x:"Now",y:+m[2]}]);
 
-        // W# hints (use as labels if mentioned)
-        const w = /W(\d+)/i.exec(text);
-        if (w && points.length) points[points.length-1].x = "W" + w[1];
-      };
+      // 2) “now/at Y%, up from X%”
+      const reNowUp = /(now|currently|at)\s*(?:is\s*)?(\d{1,3})%\D{0,30}up\s*(?:from|by)\s*(\d{1,3})%/gi;
+      while ((m = reNowUp.exec(text))) out.push([{x:"Prev",y:+m[3]},{x:"Now",y:+m[2]}]);
 
-      scan(headline);
-      bullets.forEach(scan);
+      // 3) “in 2024 … 68%”, “… 2025 … 79%”
+      const years = Array.from(text.matchAll(/(\d{4}).{0,20}?(\d{1,3})%/g))
+                         .map(mm => ({x:mm[1],y:+mm[2]}));
+      if (years.length >= 2) out.push(years);
 
-      // dedupe by label
-      const map = new Map();
-      for (const p of points) map.set(p.x, p.y);
-      const uniq = Array.from(map.entries()).map(([x,y]) => ({x,y}));
-
-      // sort: years then W#, then Prev/Now last
-      const years = uniq.filter(p => /^\d{4}$/.test(p.x)).sort((a,b)=>Number(a.x)-Number(b.x));
-      const waves = uniq.filter(p => /^W\d+$/i.test(p.x)).sort((a,b)=>Number(a.x.slice(1))-Number(b.x.slice(1)));
-      const rest  = uniq.filter(p => !/^\d{4}$/.test(p.x) && !/^W\d+$/i.test(p.x));
-      const out = years.concat(waves, rest);
-      return out.length >= 2 ? out : [];
+      return out;
     }
 
     function renderCharts(data) {
       const panel = qs("#visualsPanel");
       const grid  = qs("#charts"); grid.innerHTML = "";
 
-      // Use explicit numeric series first (if provided)
-      let series = [];
-      const visuals = Array.isArray(data.visuals) ? data.visuals : [];
-      const numeric = visuals.find(v => Array.isArray(v.points) && v.points.length >= 2);
-      if (numeric) series = numeric.points;
+      const s = data.structured || {};
+      const headP = s.headline?.paragraph || "";
+      const textParts = []
+        .concat(headP)
+        .concat(Array.isArray(s.headline?.bullets) ? s.headline.bullets : [])
+        .concat(Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : []);
+      const trends = [];
 
-      if (!series.length) {
-        const s = data.structured || {};
-        const headline = s.headline?.paragraph || "";
-        const bullets  = []
-          .concat(Array.isArray(s.headline?.bullets) ? s.headline.bullets : [])
-          .concat(Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : []);
-        series = inferTrendFromText({ headline, bullets });
+      // explicit numeric series from backend take precedence
+      const visuals = Array.isArray(data.visuals) ? data.visuals : [];
+      visuals.forEach(v => {
+        if (Array.isArray(v.points) && v.points.length >= 2) trends.push(v.points);
+      });
+
+      // try to infer from text if no explicit series found
+      if (!trends.length) {
+        textParts.forEach(t => findTrends(String(t)).forEach(series => trends.push(series)));
       }
 
-      if (!series.length) { hide(panel); return; }
+      if (!trends.length) { hide(panel); return; }
       show(panel);
 
-      const labels = series.map(p => p.x);
-      const values = series.map(p => Number(p.y));
-      const card = el("div", { class: "chart-card" }, [
-        el("h4", {}, "Satisfaction / NPS Trend"),
-        el("canvas")
-      ]);
-      grid.appendChild(card);
+      // render up to 2 compact line charts
+      trends.slice(0,2).forEach((series, idx) => {
+        const labels = series.map(p => p.x);
+        const values = series.map(p => Number(p.y));
+        const card = el("div", { class: "chart-card" }, [
+          el("h4", {}, idx === 0 ? "Trend" : "Trend (2)"),
+          el("canvas")
+        ]);
+        grid.appendChild(card);
 
-      new Chart(card.querySelector("canvas").getContext("2d"), {
-        type: "line",
-        data: { labels, datasets: [{ label: "", data: values }] },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
-          plugins: { legend: { display: false } }
-        }
+        new Chart(card.querySelector("canvas").getContext("2d"), {
+          type: "line",
+          data: { labels, datasets: [{ label: "", data: values }] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
+            plugins: { legend: { display: false } }
+          }
+        });
       });
     }
 
-    // ---------- references (bulleted, italic, not links) ----------
+    // ---------- references (ordered, italic, not links) ----------
     function renderRefs(refs = []) {
-      const ul = qs("#refs"); ul.innerHTML = "";
+      const ol = qs("#refs"); ol.innerHTML = "";
       const arr = Array.isArray(refs) ? refs : [];
-      if (!arr.length) { ul.appendChild(el("li",{class:"muted"},"No sources returned.")); return; }
+      if (!arr.length) { ol.appendChild(el("li",{class:"muted"},"No sources returned.")); return; }
       arr.forEach(r => {
-        const num = (typeof r.ref === "number" ? r.ref : null);
         const title = niceTitle(r.fileName || "Report");
-        const label = num ? `[${num}] ${title}` : title;
-        ul.appendChild(el("li", { class: "ref-li" }, label));
+        ol.appendChild(el("li", { class: "ref-li" }, title));
       });
     }
 
@@ -290,12 +322,11 @@
       }
 
       try {
-        renderHeadline(data);
+        renderHeadlineAndKeys(data);
         renderBullets(data);
         renderQuotes(data);
         renderCharts(data);
         renderRefs(data.references || data.refs || []);
-
         show(qs("#results"));
       } catch (err) {
         console.error("Render error:", err, "Raw data:", data);
