@@ -1,4 +1,4 @@
-// server.js — Diverse multi-report answering + exact-slide PNG previews + numeric citations
+// server.js — multi‑report synthesis + recency priority + exact-slide PNGs (static) + superscript refs
 
 import fs from "node:fs";
 import path from "node:path";
@@ -74,19 +74,34 @@ async function ensurePineconeIndex() {
 }
 let index;
 
-// ---------- Name cleaning ----------
+// ---------- Name/Date helpers ----------
 function cleanReportName(name) {
   if (!name) return "Untitled";
   let n = String(name).replace(/\.pdf$/i, "");
-  // strip common trailing tokens: _111324, -20250115, _Q42024, _W6, _v2, -v3, etc.
-  n = n.replace(/([_\-]\d{6,8})$/i, "");
-  n = n.replace(/([_\-]Q[1-4]\d{4})$/i, "");
-  n = n.replace(/([_\-][WV]\d{1,2})$/i, "");
-  n = n.replace(/([_\-]v\d+)$/i, "");
+  n = n.replace(/([_\-]\d{6,8})$/i, "");     // _111324, -20250115
+  n = n.replace(/([_\-]Q[1-4]\d{4})$/i, ""); // _Q42024
+  n = n.replace(/([_\-][WV]\d{1,2})$/i, ""); // _W6
+  n = n.replace(/([_\-]v\d+)$/i, "");        // _v2
   return n.trim();
 }
 
-// ---------- Page PNG preview (public, no auth header needed) ----------
+// Try to extract a date from filename; fallback to Drive modifiedTime later
+function dateFromName(name) {
+  const s = String(name || "");
+  // Patterns: 2025-06, 202506, 2025, Q42024, 092723
+  let m;
+  m = s.match(/(20\d{2})[-_ ]?(0[1-9]|1[0-2])/); // YYYYMM or YYYY-MM
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, 1).getTime();
+  m = s.match(/(20\d{2})/); // YYYY
+  if (m) return new Date(Number(m[1]), 0, 1).getTime();
+  m = s.match(/Q([1-4])\s?20(\d{2})/i); // Q42024
+  if (m) return new Date(2000 + Number(m[2]), (Number(m[1]) - 1) * 3, 1).getTime();
+  m = s.match(/(0[1-9]|1[0-2])([0-3]\d)(2\d)/); // e.g., 092723 => 2023-09-27
+  if (m) return new Date(2000 + Number(m[3]), Number(m[1]) - 1, Number(m[2])).getTime();
+  return 0;
+}
+
+// ---------- Page PNG preview (public) ----------
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createCanvas } from "canvas";
 
@@ -206,48 +221,76 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages = Inf
   }
 }
 
-// ---------- Diverse-context answering with numeric citations ----------
+// ---------- Diverse-context answering with recency priority + numeric tags ----------
 async function buildDiverseSources(matches, maxSources = 8) {
-  // Take the best match per file, keep order by score, cap to maxSources
+  // Best hit per file
   const byFile = new Map();
   for (const m of matches) {
     const fid = m.metadata?.fileId;
     if (!fid) continue;
     if (!byFile.has(fid)) byFile.set(fid, m);
   }
-  const diverse = [...byFile.values()].slice(0, maxSources);
-  // Assign ref numbers
-  return diverse.map((m, i) => ({
-    ref: i + 1,
-    fileId: m.metadata.fileId,
-    fileName: cleanReportName(m.metadata.fileName || "Untitled"),
-    page: m.metadata.page ?? m.metadata.slide,
-    text: m.metadata.text || ""
-  }));
+  let diverse = [...byFile.values()];
+
+  // Attach Drive modifiedTime + filename date; sort newest first
+  const metas = await Promise.all(
+    diverse.map(async (m) => {
+      const fid = m.metadata.fileId;
+      try {
+        const info = await drive.files.get({
+          fileId: fid,
+          fields: "id,name,modifiedTime",
+          supportsAllDrives: true
+        }).then(r => r.data);
+        const tName = dateFromName(info.name || m.metadata.fileName || "");
+        const tMod = info.modifiedTime ? new Date(info.modifiedTime).getTime() : 0;
+        const scoreTs = Math.max(tName, tMod);
+        return { match: m, sortTs: scoreTs, name: info.name || m.metadata.fileName || "" };
+      } catch {
+        const tName = dateFromName(m.metadata.fileName || "");
+        return { match: m, sortTs: tName, name: m.metadata.fileName || "" };
+      }
+    })
+  );
+
+  metas.sort((a, b) => (b.sortTs || 0) - (a.sortTs || 0));
+  diverse = metas.map(x => {
+    const m = x.match;
+    return {
+      ref: 0, // assign after slice
+      fileId: m.metadata.fileId,
+      fileName: cleanReportName(x.name || m.metadata.fileName || "Untitled"),
+      page: m.metadata.page ?? m.metadata.slide ?? 1,
+      text: m.metadata.text || ""
+    };
+  }).slice(0, maxSources);
+
+  // Assign ref numbers 1..N
+  diverse.forEach((d, i) => (d.ref = i + 1));
+  return diverse;
 }
 
 async function answerStructuredWithRefs(question, sources) {
-  const contextText = sources.map(s => `# Ref [${s.ref}]
-File: ${s.fileName}  |  Page: ${s.page ?? "?"}
+  const contextText = sources.map(s => `# Ref ${s.ref}
+File: ${s.fileName}  |  Page: ${s.page}
 ---
 ${s.text}`).join("\n\n");
 
   const prompt = `You are a pharma market-research analyst.
 Use ONLY the context refs below. Create a narrative headline + 1–5 supporting bullets.
-Cite sources by their numeric tag in square brackets, e.g., [1], [2].
-If a bullet draws on multiple refs, include multiple tags like [1][3].
+Cite sources by their numeric tag with NO brackets and NO space before the superscript (e.g., 12 for ref 1).
 
 Return STRICT JSON:
 {
-  "headline": "single or two-sentence narrative that synthesizes across all refs, with [n] tags as needed",
+  "headline": "short narrative that synthesizes recency-weighted evidence; include superscript refs like ^1^2 (I'll convert)",
   "bullets": [
-    { "text": "concise support with numbers if present and [n] tags" }
+    { "text": "concise support with numbers if present and superscript refs like ^1^ or ^1^3" }
   ]
 }
 
 Rules:
 - Do NOT invent numbers.
-- Prefer trend and comparator insights.
+- Prefer trend and comparators.
 - Keep bullets to 1–5, most decision-relevant.
 
 Question:
@@ -302,7 +345,7 @@ async function listDriveFileIds() {
 app.post("/search", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-    const { clientId = "demo", userQuery, topK = 30 } = req.body || {};
+    const { clientId = "demo", userQuery, topK = 40 } = req.body || {};
     if (!userQuery) return res.status(400).json({ error: "userQuery required" });
 
     const vector = await embedText(userQuery);
@@ -315,30 +358,29 @@ app.post("/search", async (req, res) => {
 
     const q = await index.namespace(clientId).query({
       vector,
-      topK: Number(topK) || 30,     // get more, then diversify
+      topK: Number(topK) || 40,     // pull many, then diversify by recency
       includeMetadata: true,
       filter: pineconeFilter,
     });
 
     const matches = q.matches || [];
-    // Build diverse set of sources across files (max 8 into model)
     const sources = await buildDiverseSources(matches, 8);
     const structured = await answerStructuredWithRefs(userQuery, sources);
 
-    // Build references list from sources (dedup, clean names)
+    // Build references list & visuals from recency‑ordered sources
     const references = sources.map(s => ({
       ref: s.ref,
       fileId: s.fileId,
       fileName: cleanReportName(s.fileName),
-      page: s.page
+      page: s.page || 1
     }));
 
-    // Visuals: up to 5 page PNGs using the same diverse sources
-    const visuals = [];
-    for (const s of sources.slice(0, 5)) {
-      const imageUrl = `/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page || 1)}`;
-      visuals.push({ fileId: s.fileId, fileName: s.fileName, page: s.page || 1, imageUrl });
-    }
+    const visuals = sources.slice(0, 5).map(s => ({
+      fileId: s.fileId,
+      fileName: s.fileName,
+      page: s.page || 1,
+      imageUrl: `/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page || 1)}`
+    }));
 
     res.json({ structured, references, visuals });
   } catch (e) {
@@ -346,18 +388,7 @@ app.post("/search", async (req, res) => {
   }
 });
 
-// ---------- Admin utilities ----------
-app.post("/admin/rebuild-from-drive", async (req, res) => {
-  try {
-    if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
-    const { clientId } = req.body || {};
-    if (!clientId) return res.status(400).json({ error: "clientId required" });
-    await index.namespace(clientId).deleteAll();
-    res.json({ ok: true, message: "Namespace purged. Re-ingest to rebuild." });
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
-  }
-});
+// ---------- Admin mini endpoints ----------
 app.post("/admin/ingest-list", async (req, res) => {
   try {
     const files = [];
@@ -383,6 +414,7 @@ app.post("/admin/ingest-list", async (req, res) => {
     res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
+
 app.post("/admin/ingest-one", async (req, res) => {
   try {
     if (!index) return res.status(503).json({ error: "Pinecone index not ready yet" });
@@ -398,58 +430,6 @@ app.post("/admin/ingest-one", async (req, res) => {
     res.json({ ok: true, clientId, fileId, fileName: meta.name || "Untitled" });
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
-  }
-});
-app.post("/admin/ingest-drive", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.flushHeaders?.();
-  const write = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {} };
-
-  try {
-    if (!index) { write({ level: "error", msg: "Pinecone index not ready yet" }); res.end(); return; }
-
-    write({ level: "info", msg: "Listing PDFs in Drive folder…" });
-    const files = [];
-    const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and trashed = false`;
-    let pageToken = null;
-    do {
-      const r = await drive.files.list({
-        q,
-        fields: "files(id,name,mimeType,size),nextPageToken",
-        pageSize: 1000, includeItemsFromAllDrives: true, supportsAllDrives: true, pageToken,
-      });
-      (r.data.files || []).forEach((f) => {
-        const mt = (f.mimeType || "").toLowerCase();
-        if (mt.includes("pdf")) files.push({ id: f.id, name: f.name, size: f.size ? Number(f.size) : null });
-      });
-      pageToken = r.data.nextPageToken || null;
-    } while (pageToken);
-
-    if (!files.length) { write({ level: "warn", msg: "No PDFs found." }); res.end(); return; }
-
-    write({ level: "info", msg: `Found ${files.length} PDF(s). Starting ingest…` });
-    let done = 0;
-    const clientId = req.body?.clientId || "demo";
-    for (const f of files) {
-      try {
-        write({ level: "info", fileId: f.id, fileName: f.name, msg: "Downloading…" });
-        const meta = await drive.files.get({ fileId: f.id, fields: "id,name,size", supportsAllDrives: true }).then(r => r.data);
-        write({ level: "info", fileId: f.id, fileName: f.name, size: meta.size ? Number(meta.size) : null, msg: "Parsing + embedding…" });
-        await ingestSingleDrivePdf({ clientId, fileId: f.id, fileName: f.name });
-        done++;
-        write({ level: "success", fileId: f.id, fileName: f.name, done, total: files.length, msg: "Ingested" });
-      } catch (e) {
-        write({ level: "error", fileId: f.id, fileName: f.name, msg: e?.message || String(e) });
-      }
-    }
-    write({ level: "info", msg: "All files processed." });
-  } catch (e) {
-    write({ level: "error", msg: e?.message || String(e) });
-  } finally {
-    setTimeout(() => { try { res.end(); } catch {} }, 250);
   }
 });
 
