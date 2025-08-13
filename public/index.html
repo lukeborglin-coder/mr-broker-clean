@@ -65,7 +65,6 @@
     // ---------- helpers ----------
     const qs = (s, r=document) => r.querySelector(s);
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
-    const toArr = v => Array.isArray(v) ? v : (v ? [v] : []);
 
     const show = el => el && el.classList.remove("hidden");
     const hide = el => el && el.classList.add("hidden");
@@ -85,8 +84,12 @@
       if (!s) return "";
       return String(s).trim().replace(/^["“]+/, "").replace(/["”]+$/, "");
     }
+    function stripFootnotes(s) {
+      // remove ^1^, ^23^ markers etc
+      return String(s || "").replace(/\^\d+\^/g, "");
+    }
     function splitQuoteAndTag(s) {
-      const txt = cleanOuterQuotes(s);
+      const txt = cleanOuterQuotes(stripFootnotes(s));
       const m = txt.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
       return { quote: (m ? m[1] : txt).trim(), tag: (m && m[2] ? m[2] : "").trim() };
     }
@@ -103,8 +106,8 @@
       return url;
     }
     function humanSlideLabel(ref) {
-      if (typeof ref.slideIndex === "number") return `Slide ${ref.slideIndex + 1}`;
-      if (typeof ref.page === "number" && ref.page > 1) return `p.${ref.page}`;
+      if (typeof ref?.slideIndex === "number") return `Slide ${ref.slideIndex + 1}`;
+      if (typeof ref?.page === "number" && ref.page > 1) return `p.${ref.page}`;
       return "";
     }
 
@@ -147,8 +150,11 @@
       const arr = Array.isArray(visuals) ? visuals : [];
       let drawn = 0;
 
+      // Only render if the series have numeric points; your current payload is thumbnails,
+      // so we'll skip and show the "No chartable data" message.
       arr.slice(0, maxCharts).forEach(series => {
         if (!series || !Array.isArray(series.points) || series.points.length < 2) return;
+
         const labels = series.points.map(p => p.x);
         const values = series.points.map(p => Number(p.y));
 
@@ -185,9 +191,8 @@
         const label = humanSlideLabel(r);
         const url = slideLink(r.fileUrl, r.slideIndex);
         const item = el("div", { class: "ref-item" }, [
-          el("a", { href: url, target: "_blank", rel: "noopener" }, title),
-          label ? el("div", { class: "muted" }, label) : null,
-          r.snippet ? el("div", { class: "muted" }, r.snippet) : null
+          el("a", { href: url || "#", target: "_blank", rel: "noopener" }, title),
+          label ? el("div", { class: "muted" }, label) : null
         ]);
         list.appendChild(item);
       });
@@ -215,7 +220,6 @@
           show(qs("#inlineErr"));
           return;
         }
-
         dataText = await res.text();
       } catch (err) {
         console.error("Network error:", err);
@@ -232,11 +236,21 @@
       }
 
       try {
-        const answer  = has(data,"answer")  ? data.answer  : (data.summary ?? data.result ?? "");
-        const bullets = has(data,"bullets") ? data.bullets : (data.supporting ?? data.keyFindings ?? []);
-        const quotes  = has(data,"quotes")  ? data.quotes  : (data.supportingQuotes ?? []);
-        const visuals = has(data,"visuals") ? data.visuals : (data.charts ?? []);
-        const refs    = has(data,"references") ? data.references : (data.refs ?? []);
+        // ---- NEW: map your 'structured' schema ----
+        const s = data.structured || {};
+        const headline = s.headline || {};
+        const supportingObjs = Array.isArray(s.supporting) ? s.supporting : [];
+
+        const answer  = headline.paragraph || data.answer || data.summary || data.result || "";
+        // Merge headline bullets + supporting.text into one list
+        const bullets = []
+          .concat(Array.isArray(headline.bullets) ? headline.bullets : [])
+          .concat(supportingObjs.map(o => o?.text).filter(Boolean));
+
+        // Quotes come as strings with ^n^ markers and extra quotes
+        const quotes  = Array.isArray(s.quotes) ? s.quotes : (data.quotes || []);
+        const visuals = data.visuals || data.charts || [];
+        const refs    = data.references || data.refs || [];
 
         renderAnswer(answer);
         renderBullets(bullets);
@@ -246,13 +260,13 @@
 
         show(qs("#results"));
       } catch (err) {
-        console.error("Render error:", err, "Data was:", data);
+        console.error("Render error:", err, "Raw data:", data);
         qs("#inlineErr").textContent = "There was an error rendering results. See console for details.";
         show(qs("#inlineErr"));
       }
     }
 
-    // Submit (Enter to submit; Shift+Enter makes a newline)
+    // Submit (Enter to submit; Shift+Enter adds a newline)
     document.getElementById("qform").addEventListener("submit", async (e) => {
       e.preventDefault();
       const q = document.getElementById("q").value.trim();
@@ -266,7 +280,7 @@
       }
     });
 
-    // No auto-run; panels remain hidden until a question is asked.
+    // No auto‑run; panels remain hidden until a question is asked.
   </script>
 </body>
 </html>
