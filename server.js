@@ -143,14 +143,37 @@ async function renderPdfPagePng(fileId, pageNumber) {
   return pngPath;
 }
 
+// --- replace your existing /preview/page.png route with this one ---
+
 app.get("/preview/page.png", async (req, res) => {
   try {
     const fileId = String(req.query.fileId || "");
     const page = Number(req.query.page || 1);
     if (!fileId) return res.status(400).send("fileId required");
-    const pngPath = await renderPdfPagePng(fileId, page);
-    res.type("image/png");
-    fs.createReadStream(pngPath).pipe(res);
+    try {
+      const pngPath = await renderPdfPagePng(fileId, page);
+      res.type("image/png");
+      fs.createReadStream(pngPath).pipe(res);
+      return;
+    } catch (renderErr) {
+      // Fallback: Drive thumbnail (always page 1), so at least show something
+      try {
+        const meta = await drive.files.get({
+          fileId,
+          fields: "thumbnailLink",
+          supportsAllDrives: true
+        }).then(r => r.data);
+        const url = meta?.thumbnailLink;
+        if (!url) throw new Error("No Drive thumbnail available");
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`Drive thumbnail HTTP ${r.status}`);
+        res.type("image/png");
+        r.body.pipe(res);
+        return;
+      } catch (thumbErr) {
+        throw renderErr; // bubble original error if thumbnail also fails
+      }
+    }
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
   }
@@ -461,3 +484,4 @@ app.get("/health", (req, res) => {
   }
   app.listen(PORT, () => console.log(`mr-broker running on :${PORT}`));
 })();
+
