@@ -55,6 +55,7 @@
       <section id="visualsPanel" class="panel">
         <h3>Visuals</h3>
         <div id="charts" class="charts-grid"></div>
+        <div id="tableWrap" class="table-wrap"></div>
       </section>
 
       <section class="panel">
@@ -107,6 +108,25 @@
 
     function niceTitle(s) { return (s || "").replace(/_/g, " "); }
 
+    // ---------- time parsing from report title ----------
+    // returns {year: 2025|null, quarter:1-4|null, wave:1-99|null, score} higher score = newer
+    function parseTimeFromTitle(title="") {
+      const t = String(title);
+      const year = (t.match(/(20\d{2})/) || [])[1] ? +RegExp.$1 : null;
+      const q    = (t.match(/\bQ([1-4])\b/i) || [])[1] ? +RegExp.$1 : null;
+      const w    = (t.match(/\bW(\d{1,2})\b/i) || [])[1] ? +RegExp.$1 : null;
+      // heuristic score: year major, then wave, then quarter
+      const score = (year || 0) * 100 + (w || 0) * 4 + (q || 0);
+      return { year, quarter:q, wave:w, score };
+    }
+
+    // map ref number -> {title, time}
+    function buildRefMap(refs=[]) {
+      const map = new Map();
+      (refs || []).forEach(r => map.set(r.ref, { title: niceTitle(r.fileName||"Report"), time: parseTimeFromTitle(r.fileName||"") }));
+      return map;
+    }
+
     // ---------- headline + key numbers ----------
     function renderHeadlineAndKeys(data) {
       const s = data.structured || {};
@@ -137,7 +157,7 @@
       }
     }
 
-    // ---------- bullets (top 5 + Show more) ----------
+    // ---------- bullets (chronological + Show more) ----------
     function renderBullets(data) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
@@ -149,7 +169,16 @@
       // keep only bullets with ^n^ markers (sourced)
       const sourced = all.filter(t => /\^\d+\^/.test(String(t)));
 
-      if (!sourced.length) {
+      // order by project time (old -> new) using their referenced report titles
+      const refMap = buildRefMap(data.references || []);
+      const withTime = sourced.map(t => {
+        const m = String(t).match(/\^(\d+)\^/);
+        const ref = m ? +m[1] : null;
+        const time = refMap.get(ref)?.time || {score:0};
+        return { t, ref, score: time.score };
+      }).sort((a,b)=>a.score - b.score);
+
+      if (!withTime.length) {
         ul.appendChild(el("li",{class:"muted"},"No supporting detail returned."));
         hide(btn);
         return;
@@ -159,16 +188,15 @@
       function liHTML(t){ return caretsToSup(String(t).trim().replace(/[.。]\s*$/, "")); }
 
       // initial render
-      sourced.slice(0, MAX).forEach(t => ul.appendChild(el("li", { html: liHTML(t) })));
+      withTime.slice(0, MAX).forEach(x => ul.appendChild(el("li", { html: liHTML(x.t) })));
 
-      if (sourced.length > MAX) {
-        // stash rest; re-render on toggle
+      if (withTime.length > MAX) {
         btn._expanded = false;
         btn.onclick = () => {
           btn._expanded = !btn._expanded;
           ul.innerHTML = "";
-          const list = btn._expanded ? sourced : sourced.slice(0, MAX);
-          list.forEach(t => ul.appendChild(el("li", { html: liHTML(t) })));
+          const list = btn._expanded ? withTime : withTime.slice(0, MAX);
+          list.forEach(x => ul.appendChild(el("li", { html: liHTML(x.t) })));
           btn.textContent = btn._expanded ? "Show less" : "Show more";
         };
         btn.textContent = "Show more";
@@ -203,73 +231,120 @@
       });
     }
 
-    // ---------- visuals ----------
-    // extract simple 2‑point trends from phrases across text
-    function findTrends(text) {
-      const out = [];
-
-      // 1) “from X% to Y%”
-      const reFromTo = /from\s*(\d{1,3})%\s*to\s*(\d{1,3})%/gi;
-      let m;
-      while ((m = reFromTo.exec(text))) out.push([{x:"Prev",y:+m[1]},{x:"Now",y:+m[2]}]);
-
-      // 2) “now/at Y%, up from X%”
-      const reNowUp = /(now|currently|at)\s*(?:is\s*)?(\d{1,3})%\D{0,30}up\s*(?:from|by)\s*(\d{1,3})%/gi;
-      while ((m = reNowUp.exec(text))) out.push([{x:"Prev",y:+m[3]},{x:"Now",y:+m[2]}]);
-
-      // 3) “in 2024 … 68%”, “… 2025 … 79%”
-      const years = Array.from(text.matchAll(/(\d{4}).{0,20}?(\d{1,3})%/g))
-                         .map(mm => ({x:mm[1],y:+mm[2]}));
-      if (years.length >= 2) out.push(years);
-
-      return out;
-    }
-
-    function renderCharts(data) {
-      const panel = qs("#visualsPanel");
-      const grid  = qs("#charts"); grid.innerHTML = "";
-
+    // ---------- extract Evrysdi % points with source + time ----------
+    function collectEvrysdiPoints(data) {
       const s = data.structured || {};
-      const headP = s.headline?.paragraph || "";
-      const textParts = []
-        .concat(headP)
+      const texts = []
+        .concat(s.headline?.paragraph || "")
         .concat(Array.isArray(s.headline?.bullets) ? s.headline.bullets : [])
         .concat(Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : []);
-      const trends = [];
 
-      // explicit numeric series from backend take precedence
-      const visuals = Array.isArray(data.visuals) ? data.visuals : [];
-      visuals.forEach(v => {
-        if (Array.isArray(v.points) && v.points.length >= 2) trends.push(v.points);
+      const refMap = buildRefMap(data.references || []);
+      const points = [];
+
+      texts.forEach(str => {
+        const line = String(str);
+        if (!/evrysdi/i.test(line)) return; // only keep lines that mention Evrysdi
+        // find % with a citation in the same line
+        // capture first % that looks tied to Evrysdi (heuristic)
+        const pct = (line.match(/(\d{1,3})%\b/) || [])[1];
+        const refM = line.match(/\^(\d+)\^/);
+        if (!pct || !refM) return;
+        const ref = +refM[1];
+        const refInfo = refMap.get(ref) || {};
+        const { title, time } = refInfo;
+
+        // label from report time; fallback to title
+        let label = "Study";
+        if (time.year || time.wave || time.quarter) {
+          label = [
+            time.year ? String(time.year) : null,
+            time.quarter ? ("Q" + time.quarter) : null,
+            time.wave ? ("W" + time.wave) : null
+          ].filter(Boolean).join(" ");
+        } else if (title) {
+          label = title.replace(/.*\b(20\d{2}.*)$/,'$1');
+        }
+
+        points.push({
+          x: label || "Study",
+          y: +pct,
+          ref,
+          title: title || "Report",
+          score: (time && typeof time.score === "number") ? time.score : 0
+        });
       });
 
-      // try to infer from text if no explicit series found
-      if (!trends.length) {
-        textParts.forEach(t => findTrends(String(t)).forEach(series => trends.push(series)));
+      // de‑dupe by (score,label); keep latest occurrence
+      const map = new Map();
+      points.forEach(p => map.set(p.score + "::" + p.x, p));
+      return Array.from(map.values()).sort((a,b)=>a.score - b.score); // chronological
+    }
+
+    // ---------- visuals: chart or table fallback ----------
+    function renderVisuals(data) {
+      const panel = qs("#visualsPanel");
+      const grid  = qs("#charts"); grid.innerHTML = "";
+      const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
+
+      // prefer explicit series from backend
+      const visuals = Array.isArray(data.visuals) ? data.visuals : [];
+      let series = [];
+      const numeric = visuals.find(v => Array.isArray(v.points) && v.points.length >= 2);
+      if (numeric) series = numeric.points.map(p => ({ x: p.x, y: Number(p.y) }));
+
+      // else build from text + refs in chronological order
+      if (!series.length) {
+        const pts = collectEvrysdiPoints(data);
+        series = pts.map(p => ({ x: p.x, y: p.y, ref: p.ref, title: p.title }));
+        // also prepare table rows (with source)
+        if (pts.length) {
+          const table = document.createElement("table");
+          table.className = "data-table";
+          table.innerHTML = `
+            <thead><tr><th>Study / Report</th><th>Time</th><th>Value</th><th>Source</th></tr></thead>
+            <tbody></tbody>
+          `;
+          const tb = table.querySelector("tbody");
+          pts.forEach(p => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td>${p.title}</td>
+              <td>${p.x}</td>
+              <td>${p.y}%</td>
+              <td><sup class="ref-sup">${p.ref ?? ""}</sup></td>
+            `;
+            tb.appendChild(tr);
+          });
+          tbl.appendChild(table);
+        }
       }
 
-      if (!trends.length) { hide(panel); return; }
+      if (!series.length || series.length < 2) {
+        // if we have only one row in table but no chart, still show panel; otherwise hide all
+        if (!tbl.innerHTML) { hide(panel); } else { show(panel); }
+        return;
+      }
+
       show(panel);
 
-      // render up to 2 compact line charts
-      trends.slice(0,2).forEach((series, idx) => {
-        const labels = series.map(p => p.x);
-        const values = series.map(p => Number(p.y));
-        const card = el("div", { class: "chart-card" }, [
-          el("h4", {}, idx === 0 ? "Trend" : "Trend (2)"),
-          el("canvas")
-        ]);
-        grid.appendChild(card);
+      // render compact line chart (chronological)
+      const labels = series.map(p => p.x);
+      const values = series.map(p => Number(p.y));
+      const card = el("div", { class: "chart-card" }, [
+        el("h4", {}, "Evrysdi Satisfaction / NPS Trend"),
+        el("canvas")
+      ]);
+      grid.appendChild(card);
 
-        new Chart(card.querySelector("canvas").getContext("2d"), {
-          type: "line",
-          data: { labels, datasets: [{ label: "", data: values }] },
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
-            plugins: { legend: { display: false } }
-          }
-        });
+      new Chart(card.querySelector("canvas").getContext("2d"), {
+        type: "line",
+        data: { labels, datasets: [{ label: "", data: values }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
+          plugins: { legend: { display: false } }
+        }
       });
     }
 
@@ -325,7 +400,7 @@
         renderHeadlineAndKeys(data);
         renderBullets(data);
         renderQuotes(data);
-        renderCharts(data);
+        renderVisuals(data);
         renderRefs(data.references || data.refs || []);
         show(qs("#results"));
       } catch (err) {
