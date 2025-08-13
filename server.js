@@ -1,4 +1,4 @@
-// server.js — recency‑aware synthesis + detailed headline + slide PNGs with strong fallbacks
+// server.js — recency‑aware synthesis + detailed headline + slide images with strong fallbacks (server + client)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { google } from "googleapis";
 import OpenAI from "openai";
 import { Pinecone } from "@pinecone-database/pinecone";
 
+// ---------- Env / App ----------
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 const PORT = process.env.PORT || 3000;
 
@@ -30,9 +31,11 @@ app.use(express.json({ limit: "15mb" }));
 app.use(cors());
 app.use(express.static("public"));
 
-// Google Drive
+// ---------- Google Drive ----------
 function getCredsPath() {
-  const p = (process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim() || (process.env.GOOGLE_CREDENTIALS_JSON || "").trim();
+  const p =
+    (process.env.GOOGLE_APPLICATION_CREDENTIALS || "").trim() ||
+    (process.env.GOOGLE_CREDENTIALS_JSON || "").trim();
   return p;
 }
 const CREDS_PATH = getCredsPath();
@@ -42,7 +45,7 @@ const gauth = new google.auth.GoogleAuth({
 });
 const drive = google.drive({ version: "v3", auth: gauth });
 
-// OpenAI + Pinecone
+// ---------- OpenAI + Pinecone ----------
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 
@@ -59,32 +62,32 @@ async function ensurePineconeIndex() {
   for (let i = 0; i < 30; i++) {
     const d = await pinecone.describeIndex(PINECONE_INDEX).catch(() => null);
     if (d?.status?.ready) break;
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
 }
 let index;
 
-// Helpers
+// ---------- Name / Date helpers ----------
 function cleanReportName(name) {
   if (!name) return "Untitled";
   let n = String(name).replace(/\.pdf$/i, "");
-  n = n.replace(/([_\-]\d{6,8})$/i, "");
-  n = n.replace(/([_\-]Q[1-4]\d{4})$/i, "");
-  n = n.replace(/([_\-][WV]\d{1,2})$/i, "");
-  n = n.replace(/([_\-]v\d+)$/i, "");
+  n = n.replace(/([_\-]\d{6,8})$/i, "");     // _111324, -20250115
+  n = n.replace(/([_\-]Q[1-4]\d{4})$/i, ""); // _Q42024
+  n = n.replace(/([_\-][WV]\d{1,2})$/i, ""); // _W6
+  n = n.replace(/([_\-]v\d+)$/i, "");        // _v2
   return n.trim();
 }
 function dateFromName(name) {
   const s = String(name || "");
   let m;
   m = s.match(/(20\d{2})[-_ ]?(0[1-9]|1[0-2])/); if (m) return new Date(+m[1], +m[2]-1, 1).getTime();
-  m = s.match(/Q([1-4])\s?20(\d{2})/i); if (m) return new Date(2000+ +m[2], (+m[1]-1)*3, 1).getTime();
-  m = s.match(/(20\d{2})/); if (m) return new Date(+m[1],0,1).getTime();
+  m = s.match(/Q([1-4])\s?20(\d{2})/i);        if (m) return new Date(2000+ +m[2], (+m[1]-1)*3, 1).getTime();
+  m = s.match(/(20\d{2})/);                    if (m) return new Date(+m[1], 0, 1).getTime();
   m = s.match(/(0[1-9]|1[0-2])([0-3]\d)(2\d)/); if (m) return new Date(2000+ +m[3], +m[1]-1, +m[2]).getTime();
   return 0;
 }
 
-// PDF rendering (with fallbacks)
+// ---------- Server-side PDF page → PNG (with fallbacks) ----------
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createCanvas } from "canvas";
 const PREVIEW_DIR = "/tmp/previews";
@@ -101,6 +104,7 @@ async function renderPdfPagePng(fileId, pageNumber) {
   const pageNum = Math.max(1, Number(pageNumber) || 1);
   const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
   if (fs.existsSync(pngPath)) return pngPath;
+
   const data = await downloadDriveFileBuffer(fileId);
   const pdf = await getDocument({ data, useWorker: false }).promise;
   const page = await pdf.getPage(pageNum);
@@ -108,6 +112,7 @@ async function renderPdfPagePng(fileId, pageNumber) {
   const canvas = createCanvas(viewport.width, viewport.height);
   const ctx = canvas.getContext("2d");
   await page.render({ canvasContext: ctx, viewport }).promise;
+
   await new Promise((res, rej) => {
     const out = fs.createWriteStream(pngPath);
     canvas.createPNGStream().pipe(out);
@@ -117,7 +122,7 @@ async function renderPdfPagePng(fileId, pageNumber) {
   return pngPath;
 }
 
-// PREVIEW with strong fallbacks
+// PNG route with Drive-thumbnail + blank fallbacks
 app.get("/preview/page.png", async (req, res) => {
   try {
     const fileId = String(req.query.fileId || "");
@@ -128,37 +133,54 @@ app.get("/preview/page.png", async (req, res) => {
       const png = await renderPdfPagePng(fileId, page);
       res.type("image/png"); fs.createReadStream(png).pipe(res); return;
     } catch (e1) {
-      // Fallback #1: Drive thumbnail (page 1)
-      try {
-        const meta = await drive.files.get({ fileId, fields: "thumbnailLink", supportsAllDrives:true }).then(r=>r.data);
+      try { // fallback: Drive thumbnail (page 1)
+        const meta = await drive.files.get({
+          fileId, fields: "thumbnailLink", supportsAllDrives: true
+        }).then(r => r.data);
         if (meta?.thumbnailLink) {
           const r = await fetch(meta.thumbnailLink);
           if (r.ok) { res.type("image/png"); r.body.pipe(res); return; }
         }
       } catch {}
-      // Fallback #2: 1x1 transparent PNG
+      // final fallback: transparent 1x1
       const blank = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=","base64");
-      res.type("image/png").send(blank); return;
+      res.type("image/png").send(blank);
     }
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
-// Auth guard (API)
+// Stream raw PDF for client-side pdf.js fallback
+app.get("/file/pdf", async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "");
+    if (!fileId) return res.status(400).send("fileId required");
+    const r = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+    const buf = Buffer.from(r.data || []);
+    if (!buf.length) return res.status(404).send("empty");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.end(buf);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+// ---------- Auth guard for API ----------
 app.use((req, res, next) => {
   if (!AUTH_TOKEN) return next();
   if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN) return res.status(401).json({ error: "Unauthorized" });
   next();
 });
 
-// Embedding + ingest
+// ---------- Embedding / ingest ----------
 async function embedText(text) {
   const { data } = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return data[0].embedding;
 }
 async function parsePdfPages(buffer) {
-  const mod = await import("pdf-parse/lib/pdf-parse.js").catch(()=>null);
+  const mod = await import("pdf-parse/lib/pdf-parse.js").catch(() => null);
   const fn = (mod?.default || mod) || (await import("pdf-parse")).default;
   const parsed = await fn(buffer);
   return (parsed.text || "").split("\f").map(p=>p.trim()).filter(Boolean);
@@ -179,11 +201,11 @@ async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages=Infin
   for (let p=0;p<limit;p++){const t=pages[p];if(!t)continue;const ch=chunkText(t,2000,200);await upsertChunks({clientId,fileId,fileName,chunks:ch,page:p+1});}
 }
 
-// Recency‑aware diverse sources + structured answer
+// ---------- Search helpers ----------
 async function buildDiverseSources(matches, maxSources=8){
   const byFile=new Map();
   for(const m of matches){const fid=m.metadata?.fileId;if(!fid)continue;if(!byFile.has(fid))byFile.set(fid,m);}
-  let diverse=[...byFile.values()];
+  const diverse=[...byFile.values()];
   const metas=await Promise.all(diverse.map(async m=>{
     try{
       const info=await drive.files.get({fileId:m.metadata.fileId,fields:"id,name,modifiedTime",supportsAllDrives:true}).then(r=>r.data);
@@ -195,17 +217,15 @@ async function buildDiverseSources(matches, maxSources=8){
     }
   }));
   metas.sort((a,b)=> (b.ts||0)-(a.ts||0));
-  const out=metas.slice(0,maxSources).map((x,i)=>({
-    ref:i+1,
-    fileId:x.match.metadata.fileId,
-    fileName:cleanReportName(x.name||x.match.metadata.fileName||"Untitled"),
-    page:x.match.metadata.page ?? x.match.metadata.slide ?? 1,
-    text:x.match.metadata.text || ""
+  return metas.slice(0,maxSources).map((x,i)=>({
+    ref: i+1,
+    fileId: x.match.metadata.fileId,
+    fileName: cleanReportName(x.name || x.match.metadata.fileName || "Untitled"),
+    page: x.match.metadata.page ?? x.match.metadata.slide ?? 1,
+    text: x.match.metadata.text || ""
   }));
-  return out;
 }
 
-// Headline: paragraphs + 1-3 bullets (conversational); Supporting: closer-to-source bullets
 async function answerStructured(question, sources){
   const ctx = sources.map(s=>`# Ref ${s.ref}
 File: ${s.fileName} | Page: ${s.page}
@@ -240,7 +260,6 @@ ${ctx}`;
 
   let obj={ headline:{ paragraph:"", bullets:[] }, supporting:[] };
   try{ obj=JSON.parse(r.choices?.[0]?.message?.content||"{}"); }catch{}
-  // sanitize lengths
   obj.headline = {
     paragraph: String(obj.headline?.paragraph||"").trim(),
     bullets: Array.isArray(obj.headline?.bullets)? obj.headline.bullets.slice(0,3).map(s=>String(s||"").trim()).filter(Boolean) : []
@@ -249,7 +268,7 @@ ${ctx}`;
   return obj;
 }
 
-// Live Drive allowlist
+// ---------- Drive allowlist ----------
 let _driveCache={ids:new Set(),ts:0};
 async function listDriveFileIds(){
   const now=Date.now(); if(now-_driveCache.ts<60_000 && _driveCache.ids.size>0) return _driveCache.ids;
@@ -264,8 +283,8 @@ async function listDriveFileIds(){
   _driveCache={ids,ts:now}; return ids;
 }
 
-// SEARCH
-app.post("/search", async (req,res)=>{
+// ---------- SEARCH ----------
+app.post("/search", async (req, res) => {
   try{
     if(!index) return res.status(503).json({ error:"Pinecone index not ready yet" });
     const { clientId="demo", userQuery, topK=40 } = req.body||{};
@@ -273,7 +292,10 @@ app.post("/search", async (req,res)=>{
 
     const vector=await embedText(userQuery);
     let filter;
-    if(LIVE_DRIVE_FILTER){ const live=await listDriveFileIds(); filter = live.size? { fileId:{ $in:[...live] } } : { fileId:{ $in:["__none__"] } }; }
+    if (LIVE_DRIVE_FILTER) {
+      const live=await listDriveFileIds();
+      filter = live.size ? { fileId:{ $in:[...live] } } : { fileId:{ $in:["__none__"] } };
+    }
 
     const q=await index.namespace(clientId).query({ vector, topK:Number(topK)||40, includeMetadata:true, filter });
     const matches=q.matches||[];
@@ -282,7 +304,12 @@ app.post("/search", async (req,res)=>{
     const structured=await answerStructured(userQuery, sources);
 
     const references=sources.map(s=>({ ref:s.ref, fileId:s.fileId, fileName:cleanReportName(s.fileName), page:s.page||1 }));
-    const visuals=sources.slice(0,5).map(s=>({ fileId:s.fileId, fileName:s.fileName, page:s.page||1, imageUrl:`/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page||1)}` }));
+    const visuals=sources.slice(0, 6).map(s=>({
+      fileId:s.fileId,
+      fileName:s.fileName,
+      page:s.page||1,
+      imageUrl:`/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page||1)}`
+    }));
 
     res.json({ structured, references, visuals });
   }catch(e){
@@ -290,7 +317,7 @@ app.post("/search", async (req,res)=>{
   }
 });
 
-// Boot
+// ---------- Boot ----------
 (async ()=>{
   try{ await ensurePineconeIndex(); index=pinecone.index(PINECONE_INDEX); }catch(e){ console.error("pinecone bootstrap failed",e); }
   app.listen(PORT, ()=>console.log(`mr-broker running on :${PORT}`));
