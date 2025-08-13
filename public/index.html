@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>COG‑GPT</title>
+  <title>COG GPT</title>
   <link rel="stylesheet" href="/styles.css" />
   <style>
     :root { --brand:#ff7a00; --grey:#4b4b4b; }
     body { background:#f7f7f7; }
+    sup { font-size:.6em; line-height:0; vertical-align: super; }
     .muted { color:#7a7a7a }
     .search { display:flex; gap:8px; align-items:center; }
     .search-input { flex:1 }
@@ -21,15 +22,17 @@
     /* Modernized title to match logo feel */
     .brandline { display:flex; align-items:center; gap:14px }
     .brandtitle { font-weight:900; letter-spacing:.6px; font-size:28px; }
-    .brandtitle .cog { color:var(--grey) }     /* grey COG- */
-    .brandtitle .gpt { color:var(--brand) }   /* orange GPT */
+    .brandtitle .cog { color:var(--grey) }
+    .brandtitle .gpt { color:var(--brand); font-size:.55em; font-weight:900; margin-left:2px }
     /* Hero finding card */
     .hero { background:#fff8ef; border:1px solid #ffd9b3; border-left:8px solid var(--brand); border-radius:12px; padding:18px 20px; }
-    .hero .headline { font-size:18px; line-height:1.45; margin:0 }
+    .hero .headline { font-size:18px; line-height:1.45; margin:0 0 .6rem 0 }
+    .hero ul { margin:.25rem 0 0 1.1rem }
     .hero-spacer { height:10px } /* extra space below search bar */
     .card h2 { margin-top:0 }
-    .support-item sup { font-size: 11px; color:#666; margin-left:1px }
-    /* Make last section visually lighter (no card chrome) */
+    .support-item { margin:.3rem 0 }
+    .support-item sup { margin-left:1px }
+    /* Lighter references (no card chrome) */
     .refs-wrap { margin-top:6px }
     .refs-wrap h2 { margin:0 0 8px 0 }
     .refs-wrap ol { margin:0 0 8px 1.1rem; padding:0 }
@@ -38,7 +41,7 @@
 <body>
   <div class="page">
     <header class="header brandline">
-      <div class="brandtitle"><span class="cog">COG-</span><span class="gpt">GPT</span></div>
+      <div class="brandtitle"><span class="cog">COG</span><span class="gpt">GPT</span></div>
       <img src="/assets/Cog_OUTLOOK_SIG.png" alt="Cognitive Consulting" class="logo-small" />
     </header>
 
@@ -51,7 +54,8 @@
     <div class="cards">
       <!-- HERO Finding (no title) -->
       <section class="hero">
-        <p id="headline" class="headline muted">Ask a question to see findings…</p>
+        <div id="headline" class="headline muted">Ask a question to see findings…</div>
+        <ul id="headlineBullets" class="muted"></ul>
       </section>
 
       <!-- Supporting Detail -->
@@ -67,7 +71,7 @@
         <div id="visuals" class="visuals"><div class="muted">No slides yet.</div></div>
       </section>
 
-      <!-- Report References (lighter presentation, not boxed) -->
+      <!-- Report References (lighter) -->
       <section class="refs-wrap">
         <h2>Report References</h2>
         <ol id="refs"></ol>
@@ -79,27 +83,27 @@
     const API_BASE = location.origin;
     const AUTH_TOKEN = "Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=";
 
-    // Convert any ^n^ or [n] into superscripts with NO space before it.
+    // Normalize any model tags to superscripts with NO space before them.
     function toSuperscripts(text) {
       if (!text) return "";
       // normalize "[n]" -> "^n^"
       text = text.replace(/\[(\d+)\]/g, "^$1^");
-      // strip stray carets the model might output like "12^3" -> "^1^^2^^3^"
-      // first split numbers mashed together into separate carets
-      text = text.replace(/(\d)\^(\d)/g, "$1^$2"); // ensure ^ directly precedes each number
-      // remove spaces before carets
-      text = text.replace(/\s+\^/g, "^");
-      // finally replace ^n^ with <sup>n</sup>
-      text = text.replace(/\^(\d+)\^/g, (_, n) => `<sup>${n}</sup>`);
-      // remove any remaining raw caret characters
-      return text.replace(/\^/g, "");
+      // remove spaces before and after ^n^
+      text = text.replace(/\s*\^(\d+)\^\s*/g, (_, n) => `<sup>${n}</sup>`);
+      // if model output " ... 12" try to catch ^1^2 already converted; nothing else to do
+      return text;
     }
 
-    function renderHeadline(text) {
+    function renderHeadline(obj) {
       const el = document.getElementById("headline");
-      if (!text) { el.classList.add("muted"); el.textContent = "No findings."; return; }
+      const bl = document.getElementById("headlineBullets");
+      const text = obj?.paragraph || "";
+      const bullets = Array.isArray(obj?.bullets) ? obj.bullets : [];
+      if (!text) { el.classList.add("muted"); el.textContent = "No findings."; bl.innerHTML=""; return; }
       el.classList.remove("muted");
       el.innerHTML = toSuperscripts(text);
+      bl.classList.remove("muted");
+      bl.innerHTML = bullets.slice(0,3).map(b => `<li>${toSuperscripts(b)}</li>`).join("");
     }
 
     let _allSupport = [];
@@ -119,6 +123,19 @@
       btn.onclick = () => { el.innerHTML = toHtml(_allSupport); btn.style.display = "none"; };
     }
 
+    // robust <img> error fallback (adds cache-buster then placeholder)
+    function imgOnError(img, placeholderLabel) {
+      const url = new URL(img.src, location.origin);
+      if (!url.searchParams.get("_retry")) {
+        url.searchParams.set("_retry", Date.now().toString());
+        img.src = url.toString();
+      } else {
+        img.onerror = null;
+        img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAABmJLR0QA/wD/AP+gvaeTAAAAPklEQVR4nO3BMQEAAADCoPdPbQ8HFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwG6kAAAUl7mNwAAAAASUVORK5CYII=";
+        img.alt = placeholderLabel;
+      }
+    }
+
     function renderVisuals(visuals) {
       const el = document.getElementById("visuals");
       if (!visuals || visuals.length === 0) {
@@ -132,6 +149,10 @@
           <div class="cap">${v.fileName} (p.${v.page || "?"})</div>
         </div>
       `).join("");
+      // attach onerror fallback
+      [...el.querySelectorAll("img")].forEach((img, i) => {
+        img.onerror = () => imgOnError(img, list[i].fileName);
+      });
     }
 
     function renderRefs(refs) {
@@ -142,9 +163,9 @@
     }
 
     function showThinking() {
-      const h = document.getElementById("headline");
-      h.classList.add("muted");
-      h.textContent = "Thinking…";
+      document.getElementById("headline").classList.add("muted");
+      document.getElementById("headline").textContent = "Thinking…";
+      document.getElementById("headlineBullets").innerHTML = "";
       document.getElementById("support").innerHTML = "";
       document.getElementById("showMoreBtn").style.display = "none";
       document.getElementById("visuals").innerHTML = `<div class="muted">Looking for slides…</div>`;
@@ -171,8 +192,8 @@
         if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         const data = await resp.json();
 
-        renderHeadline(data.structured?.headline || "");
-        renderSupport(data.structured?.bullets || []);
+        renderHeadline(data.structured?.headline || {});
+        renderSupport(data.structured?.supporting || []);
         renderVisuals(data.visuals || []);
         renderRefs(data.references || []);
       } catch (e) {
