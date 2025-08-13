@@ -1,5 +1,4 @@
-// server.js — recency‑aware synthesis + conversational headline + supporting detail/quotes
-// + client-side slide rendering support
+// server.js — recency/trend-aware synthesis + reliable slide preview fallbacks
 
 import fs from "node:fs";
 import path from "node:path";
@@ -87,6 +86,13 @@ function dateFromName(name) {
   m = s.match(/(0[1-9]|1[0-2])([0-3]\d)(2\d)/); if (m) return new Date(2000+ +m[3], +m[1]-1, +m[2]).getTime();
   return 0;
 }
+function fmtYMD(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = (d.getMonth()+1).toString().padStart(2,"0");
+  return `${y}-${m}`;
+}
 
 // ---------- Serve raw PDF for client-side pdf.js ----------
 app.get("/file/pdf", async (req, res) => {
@@ -99,6 +105,57 @@ app.get("/file/pdf", async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.end(buf);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+// ---------- PNG preview (server-side fallback) ----------
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { createCanvas } from "canvas";
+const PREVIEW_DIR = "/tmp/previews";
+if (!fs.existsSync(PREVIEW_DIR)) fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+
+async function downloadDriveFileBuffer(fileId) {
+  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+  const buf = Buffer.from(resp.data || []);
+  if (!buf.length) throw new Error("empty file");
+  return buf;
+}
+async function renderPdfPagePng(fileId, pageNumber) {
+  const safeId = String(fileId).replace(/[^a-zA-Z0-9_-]/g, "");
+  const pageNum = Math.max(1, Number(pageNumber) || 1);
+  const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
+  if (fs.existsSync(pngPath)) return pngPath;
+
+  const data = await downloadDriveFileBuffer(fileId);
+  const pdf = await getDocument({ data, useWorker: false }).promise;
+  const page = await pdf.getPage(pageNum);
+  const viewport = page.getViewport({ scale: 1.5 });
+  const canvas = createCanvas(viewport.width, viewport.height);
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  await new Promise((res, rej) => {
+    const out = fs.createWriteStream(pngPath);
+    canvas.createPNGStream().pipe(out);
+    out.on("finish", res);
+    out.on("error", rej);
+  });
+  return pngPath;
+}
+app.get("/preview/page.png", async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "");
+    const page = Number(req.query.page || 1);
+    if (!fileId) return res.status(400).send("fileId required");
+    try {
+      const png = await renderPdfPagePng(fileId, page);
+      res.type("image/png"); fs.createReadStream(png).pipe(res); return;
+    } catch {
+      const blank = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=","base64");
+      res.type("image/png").send(blank);
+    }
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
   }
@@ -132,14 +189,13 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   if (vectors.length) await index.namespace(clientId).upsert(vectors);
 }
 async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages=Infinity }) {
-  const buf=await downloadDriveFile();
-  async function downloadDriveFile(){const r=await drive.files.get({fileId,alt:"media"},{responseType:"arraybuffer"});return Buffer.from(r.data||[]);}
+  const buf=await downloadDriveFileBuffer(fileId);
   const pages=await parsePdfPages(buf);
   const limit=Math.min(pages.length, Number.isFinite(maxPages)?maxPages:pages.length);
   for (let p=0;p<limit;p++){const t=pages[p];if(!t)continue;const ch=chunkText(t,2000,200);await upsertChunks({clientId,fileId,fileName,chunks:ch,page:p+1});}
 }
 
-// ---------- Search helpers ----------
+// ---------- Search helpers (recency + trend metadata) ----------
 async function buildDiverseSources(matches, maxSources=8){
   const byFile=new Map();
   for(const m of matches){const fid=m.metadata?.fileId;if(!fid)continue;if(!byFile.has(fid))byFile.set(fid,m);}
@@ -149,9 +205,11 @@ async function buildDiverseSources(matches, maxSources=8){
       const info=await drive.files.get({fileId:m.metadata.fileId,fields:"id,name,modifiedTime",supportsAllDrives:true}).then(r=>r.data);
       const tName=dateFromName(info.name||m.metadata.fileName||"");
       const tMod=info.modifiedTime?new Date(info.modifiedTime).getTime():0;
-      return { match:m, name:info.name||m.metadata.fileName||"", ts:Math.max(tName,tMod) };
+      const ts=Math.max(tName,tMod);
+      return { match:m, name:info.name||m.metadata.fileName||"", ts };
     }catch{
-      return { match:m, name:m.metadata.fileName||"", ts:dateFromName(m.metadata.fileName||"") };
+      const ts=dateFromName(m.metadata.fileName||"");
+      return { match:m, name:m.metadata.fileName||"", ts };
     }
   }));
   metas.sort((a,b)=> (b.ts||0)-(a.ts||0));
@@ -160,31 +218,37 @@ async function buildDiverseSources(matches, maxSources=8){
     fileId: x.match.metadata.fileId,
     fileName: cleanReportName(x.name || x.match.metadata.fileName || "Untitled"),
     page: x.match.metadata.page ?? x.match.metadata.slide ?? 1,
-    text: x.match.metadata.text || ""
+    text: x.match.metadata.text || "",
+    ts: x.ts || 0
   }));
 }
 
 async function answerStructured(question, sources){
   const ctx = sources.map(s=>`# Ref ${s.ref}
-File: ${s.fileName} | Page: ${s.page}
+File: ${s.fileName} | Page: ${s.page} | Date: ${fmtYMD(s.ts) || "unknown"}
 ---
 ${s.text}`).join("\n\n");
 
   const prompt = `You are a pharma market-research analyst.
-Use ONLY the refs to answer. Create a conversational but precise "headline" with 2–4 sentences AND add 1–3 short bullets summarizing the main angles. Use numeric citations with NO brackets and NO space before the superscript (use ^n^ placeholders that I'll convert to superscripts).
+
+Use ONLY the refs to answer. Rules:
+- Determine the *current* metric/value (e.g., satisfaction, share, NPS) by using the *most recent* relevant reference (latest Date). 
+- If older refs contain a prior value for the same metric, compute and state the trend succinctly, e.g., "now 60%, up +10% vs 2024."
+- Prefer recent evidence; never average across waves unless explicitly stated in refs.
+- Write a concise, conversational "headline" (2–4 sentences) plus 1–3 short bullets. 
+- Then provide 3–7 Supporting Detail bullets that are close to the wording/numbers in the refs.
+- Use numeric citations with NO brackets and NO space before the superscript (use ^n^ placeholders that I'll convert to superscripts).
+- Ensure all bullet lines DO NOT end with a period.
 
 Also produce:
-- "supporting" bullets (3–7) that stay very close to the wording and numbers from the sources—use ^n^ tags to cite.
-- OPTIONAL "quotes" array: 1–4 brief verbatim snippets (<=25 words each) that directly support the headline; each must appear in the context and include a ^n^ citation.
+- OPTIONAL "quotes": 1–4 short verbatim snippets (<=25 words each) that support the headline. Place citations after the closing quotation mark; include them as part of the string like: "…quote" ^2^. Keep quotes clean (no trailing period inside the quotes).
 
 Return STRICT JSON:
 {
-  "headline": { "paragraph": "sentences with ^n^ tags", "bullets": ["bullet with ^n^"] },
-  "supporting": [ { "text": "close-to-source bullet with numbers and ^n^" } ],
-  "quotes": ["short quote with ^n^"]
+  "headline": { "paragraph": "sentences with ^n^", "bullets": ["bullet with ^n^ and no trailing period"] },
+  "supporting": [ { "text": "close-to-source bullet with numbers and ^n^ (no trailing period)" } ],
+  "quotes": ["short quote with citation after the quote like: \\"…\\" ^2^"]
 }
-
-Avoid inventing numbers. Prefer recent evidence.
 
 Question:
 ${question}
@@ -192,7 +256,8 @@ ${question}
 CONTEXT:
 ${ctx}`;
 
-  const r = await openai.chat.completions.create({
+  const r = await openai.chat.aiCompletions?.create?.({}) // guard for older SDKs (no-op)
+  const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role:"user", content: prompt }],
     temperature: 0.2,
@@ -200,7 +265,7 @@ ${ctx}`;
   });
 
   let obj={ headline:{ paragraph:"", bullets:[] }, supporting:[], quotes:[] };
-  try{ obj=JSON.parse(r.choices?.[0]?.message?.content||"{}"); }catch{}
+  try{ obj=JSON.parse(resp.choices?.[0]?.message?.content||"{}"); }catch{}
   obj.headline = {
     paragraph: String(obj.headline?.paragraph||"").trim(),
     bullets: Array.isArray(obj.headline?.bullets)? obj.headline.bullets.slice(0,3).map(s=>String(s||"").trim()).filter(Boolean) : []
@@ -246,11 +311,11 @@ app.post("/search", async (req, res) => {
     const structured=await answerStructured(userQuery, sources);
 
     const references=sources.map(s=>({ ref:s.ref, fileId:s.fileId, fileName:cleanReportName(s.fileName), page:s.page||1 }));
-    // visuals: just metadata; client renders with pdf.js using /file/pdf
     const visuals=sources.slice(0, 6).map(s=>({
       fileId:s.fileId,
       fileName:s.fileName,
       page:s.page||1,
+      // provides a PNG fallback URL that the client can try if /file/pdf render fails
       imageUrl:`/preview/page.png?fileId=${encodeURIComponent(s.fileId)}&page=${encodeURIComponent(s.page||1)}`
     }));
 
