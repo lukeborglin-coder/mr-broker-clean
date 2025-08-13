@@ -15,11 +15,7 @@ body {
 .ref-sup { font-size: 0.75em; vertical-align: super; }
 
 /* Page wrapper */
-.page {
-  max-width: 980px;
-  margin: 24px auto 60px;
-  padding: 0 16px;
-}
+.page { max-width: 980px; margin: 24px auto 60px; padding: 0 16px; }
 
 /* Header */
 .header { display:flex; align-items:center; position:relative; min-height: 40px; }
@@ -80,7 +76,7 @@ body {
   font-weight: 800;
 }
 
-/* Callout (headline) */
+/* Callout (headline + key numbers) */
 .callout {
   margin: 14px 0;
   padding: 14px 16px;
@@ -89,10 +85,20 @@ body {
   border-radius: 10px;
   box-shadow: 0 6px 18px rgba(0,0,0,.04);
 }
+.keynums { margin: 8px 0 0; padding-left: 18px; }
 
 /* Lists */
 ul { margin: 0; padding-left: 18px; }
 li { margin: 6px 0; }
+.link-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: #0b6bcb;
+  font-weight: 600;
+  padding: 6px 0 0;
+  cursor: pointer;
+}
 
 /* Visuals */
 .charts-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; }
@@ -105,6 +111,6 @@ li { margin: 6px 0; }
 #quotes .quote-text { font-style: italic; margin:0; }
 #quotes .quote-tag { margin-top:4px; font-size:0.9em; color:#333; }
 
-/* References (bulleted, italic, not links) */
-.ref-list-ul { margin: 0; padding-left: 20px; }
+/* References (ordered, italic, not links) */
+.ref-ol { margin: 0 0 0 22px; padding-left: 0; }
 .ref-li { font-style: italic; color: #1c1d1f; }
