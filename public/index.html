@@ -42,7 +42,7 @@
       </section>
 
       <section class="panel">
-        <h3>Supporting Detail</h3>
+        <h3>Additional Support</h3>
         <ul id="bullets"></ul>
         <button id="moreBtn" class="link-btn hidden" type="button">Show more</button>
       </section>
@@ -68,7 +68,6 @@
   <script>
     // ---------- helpers ----------
     const qs  = (s, r=document) => r.querySelector(s);
-    const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
     const show = el => el && el.classList.remove("hidden");
     const hide = el => el && el.classList.add("hidden");
 
@@ -109,67 +108,149 @@
     function niceTitle(s) { return (s || "").replace(/_/g, " "); }
 
     // ---------- time parsing from report title ----------
-    // returns {year: 2025|null, quarter:1-4|null, wave:1-99|null, score} higher score = newer
+    // returns {year, quarter, wave, score}
     function parseTimeFromTitle(title="") {
       const t = String(title);
-      const year = (t.match(/(20\d{2})/) || [])[1] ? +RegExp.$1 : null;
-      const q    = (t.match(/\bQ([1-4])\b/i) || [])[1] ? +RegExp.$1 : null;
-      const w    = (t.match(/\bW(\d{1,2})\b/i) || [])[1] ? +RegExp.$1 : null;
+      const yM = t.match(/(20\d{2})/);
+      const year = yM ? +yM[1] : null;
+      const qM = t.match(/\bQ([1-4])\b/i);
+      const q = qM ? +qM[1] : null;
+      const wM = t.match(/\bW(\d{1,2})\b/i);    // ATU W7, W6 Report, etc.
+      const w = wM ? +wM[1] : null;
       // heuristic score: year major, then wave, then quarter
       const score = (year || 0) * 100 + (w || 0) * 4 + (q || 0);
       return { year, quarter:q, wave:w, score };
     }
 
-    // map ref number -> {title, time}
+    // ref number -> {title, time}
     function buildRefMap(refs=[]) {
       const map = new Map();
-      (refs || []).forEach(r => map.set(r.ref, { title: niceTitle(r.fileName||"Report"), time: parseTimeFromTitle(r.fileName||"") }));
+      (refs || []).forEach(r => map.set(r.ref, {
+        title: niceTitle(r.fileName||"Report"),
+        time: parseTimeFromTitle(r.fileName||"")
+      }));
       return map;
     }
 
-    // ---------- headline + key numbers ----------
-    function renderHeadlineAndKeys(data) {
+    // ---------- gather all sourced text blobs ----------
+    function getSourcedTextBlocks(data) {
+      const s = data.structured || {};
+      const arr = [];
+      if (s.headline?.paragraph) arr.push(s.headline.paragraph);
+      if (Array.isArray(s.headline?.bullets)) arr.push(...s.headline.bullets);
+      if (Array.isArray(s.supporting)) arr.push(...s.supporting.map(x=>x.text).filter(Boolean));
+      // keep only lines with citations
+      return arr.filter(t => /\^\d+\^/.test(String(t)));
+    }
+
+    // ---------- collect metric points (Evrysdi, satisfaction/NPS only) ----------
+    function collectMetricPoints(data) {
+      const refMap = buildRefMap(data.references || []);
+      const blocks = getSourcedTextBlocks(data);
+
+      const points = [];
+      blocks.forEach(line => {
+        const text = String(line);
+        // only keep lines that mention Evrysdi AND (satisfaction|NPS|Net Promoter)
+        if (!/evrysdi/i.test(text)) return;
+        if (!/(satisfaction|NPS|net\s*promoter)/i.test(text)) return;
+
+        const refM = text.match(/\^(\d+)\^/);
+        const pctM = text.match(/(\d{1,3})%\b/);
+        if (!refM || !pctM) return;
+
+        const ref = +refM[1];
+        const y = +pctM[1];
+        const info = refMap.get(ref) || {};
+        const { title, time } = info;
+
+        // label from time; fallback to title
+        let label = "Study";
+        if (time.year || time.quarter || time.wave) {
+          label = [
+            time.year ? String(time.year) : null,
+            time.quarter ? ("Q" + time.quarter) : null,
+            time.wave ? ("W" + time.wave) : null
+          ].filter(Boolean).join(" ");
+        } else if (title) {
+          label = title.replace(/.*\b(20\d{2}.*)$/,'$1');
+        }
+
+        points.push({
+          x: label || "Study",
+          y,
+          ref,
+          title: title || "Report",
+          score: (time && typeof time.score === "number") ? time.score : 0,
+          raw: text
+        });
+      });
+
+      // de‑dupe by score+label, keep last
+      const map = new Map();
+      points.forEach(p => map.set(p.score + "::" + p.x, p));
+      return Array.from(map.values()).sort((a,b)=>a.score - b.score); // chronological
+    }
+
+    // ---------- headline + key numbers (and dedup keys from support) ----------
+    function renderHeadlineAndKeys(data, points) {
+      const answerBox = qs("#answer");
+      const keyUl = qs("#keynums");
+      keyUl.innerHTML = "";
+
+      // If we have chronological points, construct explicit sentence referencing projects
+      if (points.length) {
+        const latest = points[points.length - 1];
+        const prev1  = points[points.length - 2];
+        const prev2  = points[points.length - 3];
+
+        const parts = [];
+        parts.push(`Evrysdi satisfaction is ${latest.y}% (${latest.x})<sup class="ref-sup">${latest.ref}</sup>`);
+        if (prev1) parts.push(`up from ${prev1.y}% (${prev1.x})<sup class="ref-sup">${prev1.ref}</sup>`);
+        if (prev2) parts.push(`and ${prev2.y}% (${prev2.x})<sup class="ref-sup">${prev2.ref}</sup>`);
+
+        answerBox.innerHTML = parts.join(", ") + ".";
+
+        // Key numbers: latest + previous one or two (max 3 total)
+        const keyList = [latest, prev1, prev2].filter(Boolean);
+        keyList.forEach(p => {
+          keyUl.appendChild(el("li", { html:
+            `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>`
+          }));
+        });
+        show(keyUl);
+        return keyList.map(k => k.raw);  // return raw lines to deduplicate later
+      }
+
+      // Fallback to original headline paragraph (sourced)
       const s = data.structured || {};
       const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
       let html = caretsToSup(p);
-      // If headline has no markers, append first ref number so it's sourced
       if (!/\^(\d+)\^/.test(p) && Array.isArray(data.references) && data.references.length) {
         const num = data.references[0]?.ref;
         if (typeof num === "number") html = html.replace(/([.!?])\s*$/, `$1<sup class="ref-sup">${num}</sup>`);
       }
-      qs("#answer").innerHTML = html;
-
-      // Key Numbers: take the first 2–3 sourced bullets
-      const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
-      const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
-      const all = headBul.concat(supp);
-      const sourced = all.filter(t => /\^\d+\^/.test(String(t))).slice(0,3);
-      const ul = qs("#keynums"); ul.innerHTML = "";
-      if (sourced.length) {
-        sourced.forEach(t => {
-          let txt = String(t).trim().replace(/[.。]\s*$/, "");
-          txt = caretsToSup(txt);
-          ul.appendChild(el("li", { html: txt }));
-        });
-        show(ul);
-      } else {
-        hide(ul);
-      }
+      answerBox.innerHTML = html;
+      hide(keyUl);
+      return [];
     }
 
-    // ---------- bullets (chronological + Show more) ----------
-    function renderBullets(data) {
+    // ---------- Additional Support (chronological, top 5 + Show more, dedup against keys) ----------
+    function renderBullets(data, pointsUsedRaw) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
+
       const s = data.structured || {};
       const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
       const all = headBul.concat(supp);
 
-      // keep only bullets with ^n^ markers (sourced)
-      const sourced = all.filter(t => /\^\d+\^/.test(String(t)));
+      // keep only sourced bullets and remove any that duplicate key lines (by text match)
+      const sourced = all
+        .filter(t => /\^\d+\^/.test(String(t)))
+        .filter(t => !pointsUsedRaw.some(raw => String(raw).trim() === String(t).trim()));
 
-      // order by project time (old -> new) using their referenced report titles
+      // order by project time via first citation
       const refMap = buildRefMap(data.references || []);
       const withTime = sourced.map(t => {
         const m = String(t).match(/\^(\d+)\^/);
@@ -179,7 +260,7 @@
       }).sort((a,b)=>a.score - b.score);
 
       if (!withTime.length) {
-        ul.appendChild(el("li",{class:"muted"},"No supporting detail returned."));
+        ul.appendChild(el("li",{class:"muted"},"No additional support returned."));
         hide(btn);
         return;
       }
@@ -187,7 +268,6 @@
       const MAX = 5;
       function liHTML(t){ return caretsToSup(String(t).trim().replace(/[.。]\s*$/, "")); }
 
-      // initial render
       withTime.slice(0, MAX).forEach(x => ul.appendChild(el("li", { html: liHTML(x.t) })));
 
       if (withTime.length > MAX) {
@@ -214,15 +294,15 @@
 
       const filtered = quotes
         .map(q => splitQuoteAndTag(q))
-        .filter(x => x.isQuoted && x.tag); // must look like a respondent quote
+        .filter(x => x.isQuoted && x.tag);
 
       if (!filtered.length) { hide(panel); return; }
       show(panel);
 
       filtered.forEach(({quote, tag}) => {
-        const qtxt = ensurePeriodInsideQuotes(quote);   // period inside
-        const line = `“${qtxt}”`;                        // close quote
-        const html = caretsToSup(line);                 // refs outside (from ^n^ markers)
+        const qtxt = ensurePeriodInsideQuotes(quote);
+        const line = `“${qtxt}”`;
+        const html = caretsToSup(line);
         const wrap = el("div", { class: "quote-item" }, [
           el("p", { class: "quote-text", html }),
           el("div", { class: "quote-tag" }, "— " + tag)
@@ -231,121 +311,56 @@
       });
     }
 
-    // ---------- extract Evrysdi % points with source + time ----------
-    function collectEvrysdiPoints(data) {
-      const s = data.structured || {};
-      const texts = []
-        .concat(s.headline?.paragraph || "")
-        .concat(Array.isArray(s.headline?.bullets) ? s.headline.bullets : [])
-        .concat(Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : []);
-
-      const refMap = buildRefMap(data.references || []);
-      const points = [];
-
-      texts.forEach(str => {
-        const line = String(str);
-        if (!/evrysdi/i.test(line)) return; // only keep lines that mention Evrysdi
-        // find % with a citation in the same line
-        // capture first % that looks tied to Evrysdi (heuristic)
-        const pct = (line.match(/(\d{1,3})%\b/) || [])[1];
-        const refM = line.match(/\^(\d+)\^/);
-        if (!pct || !refM) return;
-        const ref = +refM[1];
-        const refInfo = refMap.get(ref) || {};
-        const { title, time } = refInfo;
-
-        // label from report time; fallback to title
-        let label = "Study";
-        if (time.year || time.wave || time.quarter) {
-          label = [
-            time.year ? String(time.year) : null,
-            time.quarter ? ("Q" + time.quarter) : null,
-            time.wave ? ("W" + time.wave) : null
-          ].filter(Boolean).join(" ");
-        } else if (title) {
-          label = title.replace(/.*\b(20\d{2}.*)$/,'$1');
-        }
-
-        points.push({
-          x: label || "Study",
-          y: +pct,
-          ref,
-          title: title || "Report",
-          score: (time && typeof time.score === "number") ? time.score : 0
-        });
-      });
-
-      // de‑dupe by (score,label); keep latest occurrence
-      const map = new Map();
-      points.forEach(p => map.set(p.score + "::" + p.x, p));
-      return Array.from(map.values()).sort((a,b)=>a.score - b.score); // chronological
-    }
-
-    // ---------- visuals: chart or table fallback ----------
-    function renderVisuals(data) {
+    // ---------- visuals: chart (chronological) or table fallback ----------
+    function renderVisualsFromPoints(points) {
       const panel = qs("#visualsPanel");
       const grid  = qs("#charts"); grid.innerHTML = "";
       const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
 
-      // prefer explicit series from backend
-      const visuals = Array.isArray(data.visuals) ? data.visuals : [];
-      let series = [];
-      const numeric = visuals.find(v => Array.isArray(v.points) && v.points.length >= 2);
-      if (numeric) series = numeric.points.map(p => ({ x: p.x, y: Number(p.y) }));
+      if (!points.length) { hide(panel); return; }
 
-      // else build from text + refs in chronological order
-      if (!series.length) {
-        const pts = collectEvrysdiPoints(data);
-        series = pts.map(p => ({ x: p.x, y: p.y, ref: p.ref, title: p.title }));
-        // also prepare table rows (with source)
-        if (pts.length) {
-          const table = document.createElement("table");
-          table.className = "data-table";
-          table.innerHTML = `
-            <thead><tr><th>Study / Report</th><th>Time</th><th>Value</th><th>Source</th></tr></thead>
-            <tbody></tbody>
-          `;
-          const tb = table.querySelector("tbody");
-          pts.forEach(p => {
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-              <td>${p.title}</td>
-              <td>${p.x}</td>
-              <td>${p.y}%</td>
-              <td><sup class="ref-sup">${p.ref ?? ""}</sup></td>
-            `;
-            tb.appendChild(tr);
-          });
-          tbl.appendChild(table);
-        }
-      }
+      // Build table (always)
+      const table = document.createElement("table");
+      table.className = "data-table";
+      table.innerHTML = `
+        <thead><tr><th>Study / Report</th><th>Time</th><th>Value</th><th>Source</th></tr></thead>
+        <tbody></tbody>
+      `;
+      const tb = table.querySelector("tbody");
+      points.forEach(p => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${p.title}</td>
+          <td>${p.x}</td>
+          <td>${p.y}%</td>
+          <td><sup class="ref-sup">${p.ref ?? ""}</sup></td>
+        `;
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(table);
 
-      if (!series.length || series.length < 2) {
-        // if we have only one row in table but no chart, still show panel; otherwise hide all
-        if (!tbl.innerHTML) { hide(panel); } else { show(panel); }
-        return;
+      // Chart if we have ≥2 points
+      if (points.length >= 2) {
+        const labels = points.map(p => p.x);
+        const values = points.map(p => Number(p.y));
+        const card = el("div", { class: "chart-card" }, [
+          el("h4", {}, "Evrysdi Satisfaction / NPS Trend"),
+          el("canvas")
+        ]);
+        grid.appendChild(card);
+
+        new Chart(card.querySelector("canvas").getContext("2d"), {
+          type: "line",
+          data: { labels, datasets: [{ label: "", data: values }] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
+            plugins: { legend: { display: false } }
+          }
+        });
       }
 
       show(panel);
-
-      // render compact line chart (chronological)
-      const labels = series.map(p => p.x);
-      const values = series.map(p => Number(p.y));
-      const card = el("div", { class: "chart-card" }, [
-        el("h4", {}, "Evrysdi Satisfaction / NPS Trend"),
-        el("canvas")
-      ]);
-      grid.appendChild(card);
-
-      new Chart(card.querySelector("canvas").getContext("2d"), {
-        type: "line",
-        data: { labels, datasets: [{ label: "", data: values }] },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
-          plugins: { legend: { display: false } }
-        }
-      });
     }
 
     // ---------- references (ordered, italic, not links) ----------
@@ -397,11 +412,13 @@
       }
 
       try {
-        renderHeadlineAndKeys(data);
-        renderBullets(data);
-        renderQuotes(data);
-        renderVisuals(data);
+        const points = collectMetricPoints(data);              // chronological, sourced, Evrysdi + satisfaction/NPS only
+        const usedRaw = renderHeadlineAndKeys(data, points);   // headline with project refs + key numbers
+        renderBullets(data, usedRaw);                          // additional support (deduped)
+        renderQuotes(data);                                    // respondent quotes only
+        renderVisualsFromPoints(points);                       // chart + table fallback
         renderRefs(data.references || data.refs || []);
+
         show(qs("#results"));
       } catch (err) {
         console.error("Render error:", err, "Raw data:", data);
