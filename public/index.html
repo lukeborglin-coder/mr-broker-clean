@@ -33,7 +33,7 @@
       <div id="inlineErr" class="muted hidden"></div>
     </section>
 
-    <!-- Results (hidden until we have results) -->
+    <!-- Results -->
     <div id="results" class="results hidden">
 
       <section class="callout" aria-live="polite">
@@ -78,25 +78,17 @@
         else if (k === "html") node.innerHTML = v;
         else node.setAttribute(k, v);
       }
-      [].concat(children).forEach(c => {
-        if (c === null || c === undefined) return;
-        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-      });
+      [].concat(children).forEach(c => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
       return node;
     }
 
-    // ^2^ -> <sup>2</sup> (no brackets, no leading space)
-    function caretsToSup(s) {
-      return String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
-    }
+    // ^2^ -> <sup>2</sup>
+    const caretsToSup = s => String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
 
-    // ensure period inside quotes; ref superscripts remain outside
     function ensurePeriodInsideQuotes(txt) {
       const t = String(txt || "").trim();
       return /[.!?]$/.test(t) ? t : (t + ".");
     }
-
-    // must look like a real respondent quote: starts with quote and has a trailing tag “— Tag”
     function splitQuoteAndTag(raw) {
       const text = String(raw || "").trim();
       const startsWithQuote = /^["“]/.test(text);
@@ -104,56 +96,72 @@
       const m = inner.match(/^(.*?)(?:\s*[–—-]\s*(.+))?$/);
       return { isQuoted: startsWithQuote, quote: (m ? m[1] : inner).trim(), tag: (m && m[2] ? m[2] : "").trim() };
     }
-
-    function niceTitle(s) { return (s || "").replace(/_/g, " "); }
+    const niceTitle = s => (s || "").replace(/_/g, " ");
 
     // ---------- time parsing from report title ----------
-    // returns {year, quarter, wave, score}
     function parseTimeFromTitle(title="") {
       const t = String(title);
-      const yM = t.match(/(20\d{2})/);
-      const year = yM ? +yM[1] : null;
-      const qM = t.match(/\bQ([1-4])\b/i);
-      const q = qM ? +qM[1] : null;
-      const wM = t.match(/\bW(\d{1,2})\b/i);    // ATU W7, W6 Report, etc.
-      const w = wM ? +wM[1] : null;
-      // heuristic score: year major, then wave, then quarter
-      const score = (year || 0) * 100 + (w || 0) * 4 + (q || 0);
-      return { year, quarter:q, wave:w, score };
+      const year = (t.match(/(20\d{2})/) || [])[1] ? +RegExp.$1 : null;
+      const quarter = (t.match(/\bQ([1-4])\b/i) || [])[1] ? +RegExp.$1 : null;
+      const wave = (t.match(/\bW(\d{1,2})\b/i) || [])[1] ? +RegExp.$1 : null;
+      const isATU = /ATU/i.test(t);
+      const score = (year || 0) * 100 + (wave || 0) * 4 + (quarter || 0);
+      let parts = [];
+      if (wave) parts.push(`W${wave}${isATU ? " ATU" : ""}`);
+      if (year) parts.push(String(year));
+      if (!parts.length && year) parts = [String(year)];
+      return { year, quarter, wave, isATU, score, label: parts.join(", ") || "Study" };
     }
-
-    // ref number -> {title, time}
     function buildRefMap(refs=[]) {
       const map = new Map();
       (refs || []).forEach(r => map.set(r.ref, {
-        title: niceTitle(r.fileName||"Report"),
+        title: niceTitle(r.fileName || "Report"),
         time: parseTimeFromTitle(r.fileName||"")
       }));
       return map;
     }
 
-    // ---------- gather all sourced text blobs ----------
+    // ---------- gather sourced text ----------
     function getSourcedTextBlocks(data) {
       const s = data.structured || {};
       const arr = [];
       if (s.headline?.paragraph) arr.push(s.headline.paragraph);
       if (Array.isArray(s.headline?.bullets)) arr.push(...s.headline.bullets);
       if (Array.isArray(s.supporting)) arr.push(...s.supporting.map(x=>x.text).filter(Boolean));
-      // keep only lines with citations
-      return arr.filter(t => /\^\d+\^/.test(String(t)));
+      return arr.filter(t => /\^\d+\^/.test(String(t))); // only sourced
     }
 
-    // ---------- collect metric points (Evrysdi, satisfaction/NPS only) ----------
-    function collectMetricPoints(data) {
+    // ---------- brands & topic routing ----------
+    const BRANDS = ["Evrysdi","Spinraza","Zolgensma","Nusinersen","Risdiplam"];
+    function detectBrands(text) {
+      const found = new Set();
+      BRANDS.forEach(b => { if (new RegExp("\\b" + b + "\\b", "i").test(text)) found.add(b); });
+      // possessive heuristic (e.g., "Spinraza's share")
+      const poss = text.match(/\b([A-Z][a-zA-Z]+)'s\b/g) || [];
+      poss.forEach(p => found.add(p.replace(/'s$/,'')));
+      return Array.from(found);
+    }
+    function isMarketShareQuery(userQuery, blocks) {
+      const q = String(userQuery||"");
+      const joined = (blocks||[]).join(" ");
+      const txt = (q + " " + joined).toLowerCase();
+      return /\bmarket share|share\b/.test(txt);
+    }
+    function isTrendMetric(blocks) {
+      const txt = (blocks||[]).join(" ").toLowerCase();
+      return /\bsatisfaction\b|\bnps\b|\bnet\s*promoter\b/.test(txt);
+    }
+
+    // ---------- collect points: satisfaction/NPS (chronological) ----------
+    function collectTrendPoints(data) {
       const refMap = buildRefMap(data.references || []);
       const blocks = getSourcedTextBlocks(data);
-
       const points = [];
+
       blocks.forEach(line => {
         const text = String(line);
-        // only keep lines that mention Evrysdi AND (satisfaction|NPS|Net Promoter)
         if (!/evrysdi/i.test(text)) return;
-        if (!/(satisfaction|NPS|net\s*promoter)/i.test(text)) return;
+        if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
 
         const refM = text.match(/\^(\d+)\^/);
         const pctM = text.match(/(\d{1,3})%\b/);
@@ -163,80 +171,128 @@
         const y = +pctM[1];
         const info = refMap.get(ref) || {};
         const { title, time } = info;
-
-        // label from time; fallback to title
-        let label = "Study";
-        if (time.year || time.quarter || time.wave) {
-          label = [
-            time.year ? String(time.year) : null,
-            time.quarter ? ("Q" + time.quarter) : null,
-            time.wave ? ("W" + time.wave) : null
-          ].filter(Boolean).join(" ");
-        } else if (title) {
-          label = title.replace(/.*\b(20\d{2}.*)$/,'$1');
-        }
+        const label = time.label || "Study";
 
         points.push({
-          x: label || "Study",
-          y,
-          ref,
+          x: label, y, ref,
           title: title || "Report",
-          score: (time && typeof time.score === "number") ? time.score : 0,
+          score: time.score || 0,
           raw: text
         });
       });
 
-      // de‑dupe by score+label, keep last
       const map = new Map();
       points.forEach(p => map.set(p.score + "::" + p.x, p));
-      return Array.from(map.values()).sort((a,b)=>a.score - b.score); // chronological
+      return Array.from(map.values()).sort((a,b)=>a.score - b.score);
     }
 
-    // ---------- headline + key numbers (and dedup keys from support) ----------
-    function renderHeadlineAndKeys(data, points) {
-      const answerBox = qs("#answer");
-      const keyUl = qs("#keynums");
-      keyUl.innerHTML = "";
+    // ---------- collect market-share snapshot(s) ----------
+    function collectSharePoints(data) {
+      const refMap = buildRefMap(data.references || []);
+      const blocks = getSourcedTextBlocks(data);
+      const rows = [];
 
-      // If we have chronological points, construct explicit sentence referencing projects
-      if (points.length) {
-        const latest = points[points.length - 1];
-        const prev1  = points[points.length - 2];
-        const prev2  = points[points.length - 3];
+      blocks.forEach(line => {
+        const text = String(line);
+        if (!/\bshare\b/i.test(text)) return;
+        const refM = text.match(/\^(\d+)\^/);
+        if (!refM) return;
+        const ref = +refM[1];
+        const info = refMap.get(ref) || {};
+        const { title, time } = info;
 
-        const parts = [];
-        parts.push(`Evrysdi satisfaction is ${latest.y}% (${latest.x})<sup class="ref-sup">${latest.ref}</sup>`);
-        if (prev1) parts.push(`up from ${prev1.y}% (${prev1.x})<sup class="ref-sup">${prev1.ref}</sup>`);
-        if (prev2) parts.push(`and ${prev2.y}% (${prev2.x})<sup class="ref-sup">${prev2.ref}</sup>`);
+        const brands = detectBrands(text);
+        const percents = Array.from(text.matchAll(/(\d{1,3})%\b/g)).map(m => +m[1]);
 
-        answerBox.innerHTML = parts.join(", ") + ".";
+        // Heuristic: if multiple brands mentioned and multiple %'s, pair them in order
+        if (brands.length && percents.length) {
+          const n = Math.min(brands.length, percents.length);
+          for (let i=0;i<n;i++){
+            rows.push({
+              brand: brands[i],
+              value: percents[i],
+              ref,
+              title: title || "Report",
+              time: time,
+              timeLabel: time.label || "Study",
+              score: time.score || 0,
+              raw: text
+            });
+          }
+        } else if (brands.length === 1 && percents.length >= 1) {
+          rows.push({
+            brand: brands[0],
+            value: percents[0],
+            ref,
+            title: title || "Report",
+            time: time,
+            timeLabel: time.label || "Study",
+            score: time.score || 0,
+            raw: text
+          });
+        }
+      });
 
-        // Key numbers: latest + previous one or two (max 3 total)
-        const keyList = [latest, prev1, prev2].filter(Boolean);
-        keyList.forEach(p => {
-          keyUl.appendChild(el("li", { html:
-            `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>`
-          }));
-        });
-        show(keyUl);
-        return keyList.map(k => k.raw);  // return raw lines to deduplicate later
-      }
-
-      // Fallback to original headline paragraph (sourced)
-      const s = data.structured || {};
-      const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
-      let html = caretsToSup(p);
-      if (!/\^(\d+)\^/.test(p) && Array.isArray(data.references) && data.references.length) {
-        const num = data.references[0]?.ref;
-        if (typeof num === "number") html = html.replace(/([.!?])\s*$/, `$1<sup class="ref-sup">${num}</sup>`);
-      }
-      answerBox.innerHTML = html;
-      hide(keyUl);
-      return [];
+      return rows;
     }
 
-    // ---------- Additional Support (chronological, top 5 + Show more, dedup against keys) ----------
-    function renderBullets(data, pointsUsedRaw) {
+    // ---------- headline + key numbers ----------
+    function headlineFromTrend(points) {
+      const latest = points[points.length - 1];
+      const prev1  = points[points.length - 2];
+      const prev2  = points[points.length - 3];
+
+      const parts = [];
+      parts.push(`Evrysdi satisfaction is ${latest.y}% (${latest.x})<sup class="ref-sup">${latest.ref}</sup>`);
+      if (prev1) parts.push(`up from ${prev1.y}% (${prev1.x})<sup class="ref-sup">${prev1.ref}</sup>`);
+      if (prev2) parts.push(`and ${prev2.y}% (${prev2.x})<sup class="ref-sup">${prev2.ref}</sup>`);
+      return parts.join(", ") + ".";
+    }
+    function headlineFromShare(latestSnapshotByBrand) {
+      // prioritize Evrysdi if present
+      const ev = latestSnapshotByBrand.find(r => /evrysdi/i.test(r.brand));
+      const label = ev ? ev.timeLabel : (latestSnapshotByBrand[0]?.timeLabel || "Study");
+      const topLine = ev
+        ? `Evrysdi's current market share is ${ev.value}% (${label})<sup class="ref-sup">${ev.ref}</sup>.`
+        : `Current market share snapshot (${label}) is available.<sup class="ref-sup">${latestSnapshotByBrand[0].ref}</sup>`;
+
+      // append a short compare sentence (Spinraza / Zolgensma if present)
+      const others = latestSnapshotByBrand.filter(r => !/evrysdi/i.test(r.brand)).slice(0,2);
+      const comps = others.map(o => `${o.brand}: ${o.value}%<sup class="ref-sup">${o.ref}</sup>`).join(", ");
+      return comps ? `${topLine} ${comps}.` : topLine;
+    }
+
+    // ---------- render headline & key numbers (+return raw lines to dedup) ----------
+    function renderHeadlineAndKeys_Trend(points) {
+      const answer = qs("#answer");
+      const keyUl = qs("#keynums"); keyUl.innerHTML = "";
+      const line = headlineFromTrend(points);
+      answer.innerHTML = line;
+
+      // Key numbers: latest, prev1, prev2 (max 3)
+      [points[points.length-1], points[points.length-2], points[points.length-3]]
+        .filter(Boolean)
+        .forEach(p => keyUl.appendChild(el("li", { html: `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>` })));
+      show(keyUl);
+      return [points[points.length-1]?.raw, points[points.length-2]?.raw, points[points.length-3]?.raw].filter(Boolean);
+    }
+    function renderHeadlineAndKeys_Share(latestSnapshotByBrand) {
+      const answer = qs("#answer");
+      const keyUl = qs("#keynums"); keyUl.innerHTML = "";
+
+      answer.innerHTML = headlineFromShare(latestSnapshotByBrand);
+
+      // Key numbers: list the top 3 brands in that snapshot
+      latestSnapshotByBrand.slice(0,3).forEach(r => {
+        keyUl.appendChild(el("li", { html: `${r.brand}: ${r.value}% (${r.timeLabel})<sup class="ref-sup">${r.ref}</sup>` }));
+      });
+      show(keyUl);
+      // return the raw lines used to dedup
+      return latestSnapshotByBrand.slice(0,3).map(r => r.raw);
+    }
+
+    // ---------- Additional Support (chronological, top 5 + Show more, dedup) ----------
+    function renderAdditionalSupport(data, usedRaw) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
 
@@ -245,12 +301,11 @@
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
       const all = headBul.concat(supp);
 
-      // keep only sourced bullets and remove any that duplicate key lines (by text match)
+      // keep only sourced bullets and remove any that duplicate key lines (by exact text)
       const sourced = all
         .filter(t => /\^\d+\^/.test(String(t)))
-        .filter(t => !pointsUsedRaw.some(raw => String(raw).trim() === String(t).trim()));
+        .filter(t => !usedRaw.some(raw => String(raw).trim() === String(t).trim()));
 
-      // order by project time via first citation
       const refMap = buildRefMap(data.references || []);
       const withTime = sourced.map(t => {
         const m = String(t).match(/\^(\d+)\^/);
@@ -266,7 +321,7 @@
       }
 
       const MAX = 5;
-      function liHTML(t){ return caretsToSup(String(t).trim().replace(/[.。]\s*$/, "")); }
+      const liHTML = t => caretsToSup(String(t).trim().replace(/[.。]\s*$/, ""));
 
       withTime.slice(0, MAX).forEach(x => ul.appendChild(el("li", { html: liHTML(x.t) })));
 
@@ -292,10 +347,7 @@
       const root = qs("#quotes"); root.innerHTML = "";
       const quotes = (data.structured && Array.isArray(data.structured.quotes) ? data.structured.quotes : (data.quotes || []));
 
-      const filtered = quotes
-        .map(q => splitQuoteAndTag(q))
-        .filter(x => x.isQuoted && x.tag);
-
+      const filtered = quotes.map(q => splitQuoteAndTag(q)).filter(x => x.isQuoted && x.tag);
       if (!filtered.length) { hide(panel); return; }
       show(panel);
 
@@ -311,15 +363,15 @@
       });
     }
 
-    // ---------- visuals: chart (chronological) or table fallback ----------
-    function renderVisualsFromPoints(points) {
+    // ---------- visuals ----------
+    function renderTrendVisual(points) {
       const panel = qs("#visualsPanel");
       const grid  = qs("#charts"); grid.innerHTML = "";
       const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
 
       if (!points.length) { hide(panel); return; }
 
-      // Build table (always)
+      // Table
       const table = document.createElement("table");
       table.className = "data-table";
       table.innerHTML = `
@@ -329,26 +381,17 @@
       const tb = table.querySelector("tbody");
       points.forEach(p => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${p.title}</td>
-          <td>${p.x}</td>
-          <td>${p.y}%</td>
-          <td><sup class="ref-sup">${p.ref ?? ""}</sup></td>
-        `;
+        tr.innerHTML = `<td>${p.title}</td><td>${p.x}</td><td>${p.y}%</td><td><sup class="ref-sup">${p.ref}</sup></td>`;
         tb.appendChild(tr);
       });
       tbl.appendChild(table);
 
-      // Chart if we have ≥2 points
+      // Chart if ≥2
       if (points.length >= 2) {
         const labels = points.map(p => p.x);
-        const values = points.map(p => Number(p.y));
-        const card = el("div", { class: "chart-card" }, [
-          el("h4", {}, "Evrysdi Satisfaction / NPS Trend"),
-          el("canvas")
-        ]);
+        const values = points.map(p => p.y);
+        const card = el("div", { class: "chart-card" }, [ el("h4", {}, "Evrysdi Satisfaction / NPS Trend"), el("canvas") ]);
         grid.appendChild(card);
-
         new Chart(card.querySelector("canvas").getContext("2d"), {
           type: "line",
           data: { labels, datasets: [{ label: "", data: values }] },
@@ -359,27 +402,76 @@
           }
         });
       }
-
       show(panel);
     }
 
-    // ---------- references (ordered, italic, not links) ----------
+    function renderShareVisual(rows) {
+      const panel = qs("#visualsPanel");
+      const grid  = qs("#charts"); grid.innerHTML = "";
+      const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
+      if (!rows.length) { hide(panel); return; }
+
+      // 1) Latest snapshot by time (max score)
+      const byTime = new Map();
+      rows.forEach(r => {
+        const k = r.score;
+        if (!byTime.has(k)) byTime.set(k, []);
+        byTime.get(k).push(r);
+      });
+      const latestScore = Math.max(...Array.from(byTime.keys()));
+      const latest = byTime.get(latestScore);
+
+      // bar chart for latest time
+      const labels = latest.map(r => r.brand);
+      const values = latest.map(r => r.value);
+      const timeLabel = latest[0]?.timeLabel || "Study";
+
+      const card = el("div", { class: "chart-card" }, [ el("h4", {}, `Market Share Snapshot — ${timeLabel}`), el("canvas") ]);
+      grid.appendChild(card);
+      new Chart(card.querySelector("canvas").getContext("2d"), {
+        type: "bar",
+        data: { labels, datasets: [{ label: "", data: values }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
+          plugins: { legend: { display: false } }
+        }
+      });
+
+      // 2) Table of all rows (chronological)
+      const all = rows.sort((a,b)=>a.score - b.score);
+      const table = document.createElement("table");
+      table.className = "data-table";
+      table.innerHTML = `
+        <thead><tr><th>Study / Report</th><th>Time</th><th>Brand</th><th>Share</th><th>Source</th></tr></thead>
+        <tbody></tbody>
+      `;
+      const tb = table.querySelector("tbody");
+      all.forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${r.title}</td><td>${r.timeLabel}</td><td>${r.brand}</td><td>${r.value}%</td><td><sup class="ref-sup">${r.ref}</sup></td>`;
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(table);
+
+      show(panel);
+      return latest; // return latest snapshot for headline usage
+    }
+
+    // ---------- references ----------
     function renderRefs(refs = []) {
       const ol = qs("#refs"); ol.innerHTML = "";
       const arr = Array.isArray(refs) ? refs : [];
       if (!arr.length) { ol.appendChild(el("li",{class:"muted"},"No sources returned.")); return; }
-      arr.forEach(r => {
-        const title = niceTitle(r.fileName || "Report");
-        ol.appendChild(el("li", { class: "ref-li" }, title));
-      });
+      arr.forEach(r => ol.appendChild(el("li", { class: "ref-li" }, niceTitle(r.fileName || "Report"))));
     }
 
-    // ---------- fetch/search ----------
+    // ---------- MAIN ----------
     async function runQuery(userQuery) {
       hide(qs("#inlineErr"));
 
       const token = document.querySelector('meta[name="auth-token"]')?.content || window.AUTH_TOKEN || "";
-      const payload = { clientId: "genentech", userQuery, topK: 6 };
+      const payload = { clientId: "genentech", userQuery, topK: 8 };
 
       let dataText = "";
       try {
@@ -388,7 +480,6 @@
           headers: { "Content-Type": "application/json", "x-auth-token": token },
           body: JSON.stringify(payload)
         });
-
         if (!res.ok) {
           const body = await res.text().catch(()=>"");
           console.error("Search failed:", res.status, res.statusText, body);
@@ -405,29 +496,59 @@
       }
 
       let data = {};
-      try { data = dataText ? JSON.parse(dataText) : {}; }
-      catch (e) {
-        console.warn("Non‑JSON /search response:", dataText);
-        data = {};
-      }
+      try { data = dataText ? JSON.parse(dataText) : {}; } catch { data = {}; }
 
       try {
-        const points = collectMetricPoints(data);              // chronological, sourced, Evrysdi + satisfaction/NPS only
-        const usedRaw = renderHeadlineAndKeys(data, points);   // headline with project refs + key numbers
-        renderBullets(data, usedRaw);                          // additional support (deduped)
-        renderQuotes(data);                                    // respondent quotes only
-        renderVisualsFromPoints(points);                       // chart + table fallback
+        const blocks = getSourcedTextBlocks(data);
+        const isShare = isMarketShareQuery(userQuery, blocks);
+        const isTrend = isTrendMetric(blocks);
+
+        let usedRaw = [];
+        if (isShare) {
+          // market share path
+          const rows = collectSharePoints(data);
+          const latest = renderShareVisual(rows) || [];
+          if (latest.length) {
+            usedRaw = renderHeadlineAndKeys_Share(latest);
+          } else {
+            // fallback: still try to craft a headline from any rows
+            const any = rows.slice(0,3);
+            if (any.length) usedRaw = renderHeadlineAndKeys_Share(any);
+          }
+        } else if (isTrend) {
+          // satisfaction/NPS trend
+          const points = collectTrendPoints(data);
+          renderTrendVisual(points);
+          if (points.length) usedRaw = renderHeadlineAndKeys_Trend(points);
+        } else {
+          // unknown → fall back to original paragraph (but still try to render any trend)
+          const s = data.structured || {};
+          const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
+          let html = caretsToSup(p);
+          if (!/\^(\d+)\^/.test(p) && Array.isArray(data.references) && data.references.length) {
+            const num = data.references[0]?.ref;
+            if (typeof num === "number") html = html.replace(/([.!?])\s*$/, `$1<sup class="ref-sup">${num}</sup>`);
+          }
+          qs("#answer").innerHTML = html;
+          hide(qs("#keynums"));
+          // also try trend visuals as a bonus
+          const points = collectTrendPoints(data);
+          renderTrendVisual(points);
+        }
+
+        renderAdditionalSupport(data, usedRaw);
+        renderQuotes(data);
         renderRefs(data.references || data.refs || []);
 
         show(qs("#results"));
       } catch (err) {
-        console.error("Render error:", err, "Raw data:", data);
+        console.error("Render error:", err);
         qs("#inlineErr").textContent = "There was an error rendering results. See console for details.";
         show(qs("#inlineErr"));
       }
     }
 
-    // Submit (Enter submits; Shift+Enter makes newline)
+    // Submit (Enter submits; Shift+Enter newline)
     document.getElementById("qform").addEventListener("submit", async (e) => {
       e.preventDefault();
       const q = document.getElementById("q").value.trim();
