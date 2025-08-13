@@ -1,4 +1,5 @@
-// server.js — recency‑aware synthesis + detailed headline + slide images with strong fallbacks (server + client)
+// server.js — recency‑aware synthesis + conversational headline + supporting detail/quotes
+// + client-side slide rendering support
 
 import fs from "node:fs";
 import path from "node:path";
@@ -87,71 +88,7 @@ function dateFromName(name) {
   return 0;
 }
 
-// ---------- Server-side PDF page → PNG (with fallbacks) ----------
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { createCanvas } from "canvas";
-const PREVIEW_DIR = "/tmp/previews";
-if (!fs.existsSync(PREVIEW_DIR)) fs.mkdirSync(PREVIEW_DIR, { recursive: true });
-
-async function downloadDriveFileBuffer(fileId) {
-  const resp = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
-  const buf = Buffer.from(resp.data || []);
-  if (!buf.length) throw new Error("empty file");
-  return buf;
-}
-async function renderPdfPagePng(fileId, pageNumber) {
-  const safeId = String(fileId).replace(/[^a-zA-Z0-9_-]/g, "");
-  const pageNum = Math.max(1, Number(pageNumber) || 1);
-  const pngPath = path.join(PREVIEW_DIR, `${safeId}_p${pageNum}.png`);
-  if (fs.existsSync(pngPath)) return pngPath;
-
-  const data = await downloadDriveFileBuffer(fileId);
-  const pdf = await getDocument({ data, useWorker: false }).promise;
-  const page = await pdf.getPage(pageNum);
-  const viewport = page.getViewport({ scale: 1.5 });
-  const canvas = createCanvas(viewport.width, viewport.height);
-  const ctx = canvas.getContext("2d");
-  await page.render({ canvasContext: ctx, viewport }).promise;
-
-  await new Promise((res, rej) => {
-    const out = fs.createWriteStream(pngPath);
-    canvas.createPNGStream().pipe(out);
-    out.on("finish", res);
-    out.on("error", rej);
-  });
-  return pngPath;
-}
-
-// PNG route with Drive-thumbnail + blank fallbacks
-app.get("/preview/page.png", async (req, res) => {
-  try {
-    const fileId = String(req.query.fileId || "");
-    const page = Number(req.query.page || 1);
-    if (!fileId) return res.status(400).send("fileId required");
-
-    try {
-      const png = await renderPdfPagePng(fileId, page);
-      res.type("image/png"); fs.createReadStream(png).pipe(res); return;
-    } catch (e1) {
-      try { // fallback: Drive thumbnail (page 1)
-        const meta = await drive.files.get({
-          fileId, fields: "thumbnailLink", supportsAllDrives: true
-        }).then(r => r.data);
-        if (meta?.thumbnailLink) {
-          const r = await fetch(meta.thumbnailLink);
-          if (r.ok) { res.type("image/png"); r.body.pipe(res); return; }
-        }
-      } catch {}
-      // final fallback: transparent 1x1
-      const blank = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=","base64");
-      res.type("image/png").send(blank);
-    }
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
-  }
-});
-
-// Stream raw PDF for client-side pdf.js fallback
+// ---------- Serve raw PDF for client-side pdf.js ----------
 app.get("/file/pdf", async (req, res) => {
   try {
     const fileId = String(req.query.fileId || "");
@@ -195,7 +132,8 @@ async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
   if (vectors.length) await index.namespace(clientId).upsert(vectors);
 }
 async function ingestSingleDrivePdf({ clientId, fileId, fileName, maxPages=Infinity }) {
-  const buf=await downloadDriveFileBuffer(fileId);
+  const buf=await downloadDriveFile();
+  async function downloadDriveFile(){const r=await drive.files.get({fileId,alt:"media"},{responseType:"arraybuffer"});return Buffer.from(r.data||[]);}
   const pages=await parsePdfPages(buf);
   const limit=Math.min(pages.length, Number.isFinite(maxPages)?maxPages:pages.length);
   for (let p=0;p<limit;p++){const t=pages[p];if(!t)continue;const ch=chunkText(t,2000,200);await upsertChunks({clientId,fileId,fileName,chunks:ch,page:p+1});}
@@ -233,14 +171,17 @@ File: ${s.fileName} | Page: ${s.page}
 ${s.text}`).join("\n\n");
 
   const prompt = `You are a pharma market-research analyst.
-Use ONLY the refs to answer. Create a conversational but precise "headline" with 2–4 sentences AND add 1–3 short bullets that summarize the main angles. Use numeric citations with NO brackets and NO space before the superscript (use ^n^ placeholders that I'll convert to superscripts).
+Use ONLY the refs to answer. Create a conversational but precise "headline" with 2–4 sentences AND add 1–3 short bullets summarizing the main angles. Use numeric citations with NO brackets and NO space before the superscript (use ^n^ placeholders that I'll convert to superscripts).
 
-Also produce "supporting" bullets (3–7) that stay very close to the wording and numbers from the sources—again using ^n^ tags to cite. Each bullet should generally come from a single ref; if two refs support it, use both like ^1^^3^.
+Also produce:
+- "supporting" bullets (3–7) that stay very close to the wording and numbers from the sources—use ^n^ tags to cite.
+- OPTIONAL "quotes" array: 1–4 brief verbatim snippets (<=25 words each) that directly support the headline; each must appear in the context and include a ^n^ citation.
 
 Return STRICT JSON:
 {
   "headline": { "paragraph": "sentences with ^n^ tags", "bullets": ["bullet with ^n^"] },
-  "supporting": [ { "text": "close-to-source bullet with numbers and ^n^" } ]
+  "supporting": [ { "text": "close-to-source bullet with numbers and ^n^" } ],
+  "quotes": ["short quote with ^n^"]
 }
 
 Avoid inventing numbers. Prefer recent evidence.
@@ -258,13 +199,14 @@ ${ctx}`;
     response_format: { type:"json_object" }
   });
 
-  let obj={ headline:{ paragraph:"", bullets:[] }, supporting:[] };
+  let obj={ headline:{ paragraph:"", bullets:[] }, supporting:[], quotes:[] };
   try{ obj=JSON.parse(r.choices?.[0]?.message?.content||"{}"); }catch{}
   obj.headline = {
     paragraph: String(obj.headline?.paragraph||"").trim(),
     bullets: Array.isArray(obj.headline?.bullets)? obj.headline.bullets.slice(0,3).map(s=>String(s||"").trim()).filter(Boolean) : []
   };
   obj.supporting = Array.isArray(obj.supporting)? obj.supporting.slice(0,7).map(b=>({ text:String(b?.text||"").trim() })).filter(b=>b.text) : [];
+  obj.quotes = Array.isArray(obj.quotes)? obj.quotes.slice(0,4).map(q=>String(q||"").trim()).filter(Boolean) : [];
   return obj;
 }
 
@@ -304,6 +246,7 @@ app.post("/search", async (req, res) => {
     const structured=await answerStructured(userQuery, sources);
 
     const references=sources.map(s=>({ ref:s.ref, fileId:s.fileId, fileName:cleanReportName(s.fileName), page:s.page||1 }));
+    // visuals: just metadata; client renders with pdf.js using /file/pdf
     const visuals=sources.slice(0, 6).map(s=>({
       fileId:s.fileId,
       fileName:s.fileName,
