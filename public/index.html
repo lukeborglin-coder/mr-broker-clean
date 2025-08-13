@@ -5,22 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>COGgpt — Research Q&A</title>
 
-  <!-- Password prompt: asks for password before loading the page -->
+  <!-- Client-side password prompt -->
   <script>
     (function() {
       const correctPassword = 'coggpt25';
       const userPassword = prompt('Please enter the password:');
       if (userPassword !== correctPassword) {
-        // Show a simple message and stop rendering the rest of the page
         document.documentElement.innerHTML = '<h1 style="text-align:center;margin-top:50px;">Access denied</h1>';
       }
     })();
   </script>
 
   <link rel="stylesheet" href="/styles.css" />
-  <meta name="auth-token" 
-content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
-
+  <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -32,8 +29,7 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
 
     <section class="search">
       <form id="qform" autocomplete="off">
-        <textarea id="q" rows="3"
-          placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”"></textarea>
+        <textarea id="q" rows="3" placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”"></textarea>
         <button id="ask" type="submit" title="Ask">Ask</button>
       </form>
       <div id="inlineErr" class="muted hidden"></div>
@@ -60,6 +56,12 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
         <h3>Visuals</h3>
         <div id="charts" class="charts-grid"></div>
         <div id="tableWrap" class="table-wrap"></div>
+      </section>
+
+      <!-- Secondary Resources collapsible panel -->
+      <section class="panel">
+        <h3 id="secondaryHeader" class="collapsible">Secondary Resources</h3>
+        <div id="secondaryContent" class="secondary hidden"></div>
       </section>
 
       <section class="panel">
@@ -89,9 +91,8 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       return node;
     }
 
-    // ^2^ -> <sup>2</sup>
-    const caretsToSup = s => String(s || "").replace(/\s*\^(\d+)\^\s*/g,
-    (_m, n) => `<sup class="ref-sup">${n}</sup>`);
+    // Superscript citations (e.g. ^2^ -> <sup>2</sup>)
+    const caretsToSup = s => String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
 
     function ensurePeriodInsideQuotes(txt) {
       const t = String(txt || "").trim();
@@ -127,8 +128,7 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       }));
       return map;
     }
-    const sortRefsAsc = refs =>
-      [...(refs||[])].sort((a,b)=>parseTimeFromTitle(a.fileName).score - parseTimeFromTitle(b.fileName).score);
+    const sortRefsAsc = refs => [...(refs||[])].sort((a,b)=>parseTimeFromTitle(a.fileName).score - parseTimeFromTitle(b.fileName).score);
     const sortRefsDesc = refs => sortRefsAsc(refs).reverse();
 
     // ---------- gather all possible lines (supporting + bullets + paragraph) ----------
@@ -171,13 +171,9 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
 
       const points = [];
       lines.forEach(text => {
-        // must be satisfaction or NPS line
         if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
-
-        // pull all % on this line
         const pcts = Array.from(String(text).matchAll(/(\d{1,3})%\b/g)).map(m => +m[1]);
         if (!pcts.length) return;
-
         const mapped = mapPercentsToRefs(pcts, refsDesc, text);
         mapped.forEach(({value, ref}) => {
           const info = refMap.get(ref) || {};
@@ -193,7 +189,6 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
         });
       });
 
-      // de‑dupe by ref (keep one value per report, prefer last mention)
       const byRef = new Map();
       points.forEach(p => byRef.set(p.ref, p));
       return Array.from(byRef.values()).sort((a,b)=>a.score - b.score);
@@ -204,7 +199,6 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       const latest = points[points.length - 1];
       const prev1  = points[points.length - 2];
       const prev2  = points[points.length - 3];
-
       const parts = [];
       parts.push(`Evrysdi satisfaction is ${latest.y}% (${latest.x})<sup class="ref-sup">${latest.ref}</sup>`);
       if (prev1) parts.push(`up from ${prev1.y}% (${prev1.x})<sup class="ref-sup">${prev1.ref}</sup>`);
@@ -215,19 +209,15 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
     function renderHeadlineAndKeys(points) {
       const answer = qs("#answer");
       const keyUl = qs("#keynums"); keyUl.innerHTML = "";
-
       if (points.length) {
         const line = headlineFromTrend(points);
         answer.innerHTML = line;
-
         [points[points.length-1], points[points.length-2], points[points.length-3]]
           .filter(Boolean)
           .forEach(p => keyUl.appendChild(el("li", { html: `${p.title} — ${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>` })));
         show(keyUl);
         return [points[points.length-1]?.raw, points[points.length-2]?.raw, points[points.length-3]?.raw].filter(Boolean);
       }
-
-      // fallback: paragraph
       const s = (window.__DATA__?.structured) || {};
       const p = s.headline?.paragraph || window.__DATA__?.answer || window.__DATA__?.summary || window.__DATA__?.result || "";
       answer.innerHTML = caretsToSup(p);
@@ -239,19 +229,14 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
     function renderAdditionalSupport(data, usedRaw, pointsForBullets) {
       const ul = qs("#bullets"); ul.innerHTML = "";
       const btn = qs("#moreBtn");
-
-      // generated bullets (ensure superscripts)
       const gen = (pointsForBullets || []).map(p => `${p.x}: ${p.y}% ^${p.ref}^`);
-
       const s = data.structured || {};
       const headBul = Array.isArray(s.headline?.bullets) ? s.headline.bullets : [];
       const supp = Array.isArray(s.supporting) ? s.supporting.map(x=>x.text).filter(Boolean) : [];
       const modelLines = headBul.concat(supp)
-        .filter(t => /%/.test(String(t))) // must include a %
+        .filter(t => /%/.test(String(t)))
         .filter(t => !usedRaw.some(raw => String(raw).trim() === String(t).trim()));
-
       const all = gen.concat(modelLines);
-
       const refMap = buildRefMap(data.references || []);
       const withTime = all.map(t => {
         const m = String(t).match(/\^(\d+)\^/);
@@ -259,18 +244,14 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
         const time = refMap.get(ref)?.time || {score:0};
         return { t, ref, score: time.score };
       }).sort((a,b)=>a.score - b.score);
-
       if (!withTime.length) {
         ul.appendChild(el("li",{class:"muted"},"No additional support returned."));
         hide(btn);
         return;
       }
-
       const MAX = 5;
       const liHTML = t => caretsToSup(String(t).trim().replace(/[.。]\s*$/, ""));
-
       withTime.slice(0, MAX).forEach(x => ul.appendChild(el("li", { html: liHTML(x.t) })));
-
       if (withTime.length > MAX) {
         btn._expanded = false;
         btn.onclick = () => {
@@ -292,11 +273,9 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       const panel = qs("#quotesPanel");
       const root = qs("#quotes"); root.innerHTML = "";
       const quotes = (data.structured && Array.isArray(data.structured.quotes) ? data.structured.quotes : (data.quotes ||  []));
-
       const filtered = quotes.map(q => splitQuoteAndTag(q)).filter(x => x.isQuoted && x.tag);
       if (!filtered.length) { hide(panel); return; }
       show(panel);
-
       filtered.forEach(({quote, tag}) => {
         const qtxt = ensurePeriodInsideQuotes(quote);
         const line = `“${qtxt}”`;
@@ -309,15 +288,15 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       });
     }
 
-    // ---------- visuals (trend) ----------
+    // ---------- visuals (trend and page previews) ----------
     function renderTrendVisual(points) {
       const panel = qs("#visualsPanel");
       const grid  = qs("#charts"); grid.innerHTML = "";
       const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
-
-      if (!points.length) { hide(panel); return; }
-
-      // table (always)
+      if (!points.length) {
+        hide(panel);
+        return;
+      }
       const table = document.createElement("table");
       table.className = "data-table";
       table.innerHTML = `
@@ -331,8 +310,6 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
         tb.appendChild(tr);
       });
       tbl.appendChild(table);
-
-      // line chart if ≥2 points
       if (points.length >= 2) {
         const labels = points.map(p => p.x);
         const values = points.map(p => p.y);
@@ -342,7 +319,8 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
           type: "line",
           data: { labels, datasets: [{ label: "", data: values }] },
           options: {
-            responsive: true, maintainAspectRatio: false,
+            responsive: true,
+            maintainAspectRatio: false,
             scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } },
             plugins: { legend: { display: false } }
           }
@@ -351,21 +329,41 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       show(panel);
     }
 
+    // Show preview images when available
+    function renderPreviews(visuals) {
+      const panel = qs("#visualsPanel");
+      panel.querySelectorAll("img.preview-img")?.forEach(img => img.remove());
+      if (Array.isArray(visuals) && visuals.length) {
+        visuals.forEach(v => {
+          const img = document.createElement("img");
+          img.src = v.imageUrl;
+          img.alt = `${v.fileName} page ${v.page}`;
+          img.className = "preview-img";
+          img.addEventListener("click", () => {
+            window.open(`/file/pdf?fileId=${encodeURIComponent(v.fileId)}`, "_blank");
+          });
+          panel.appendChild(img);
+        });
+        show(panel);
+      }
+    }
+
     // ---------- references ----------
     function renderRefs(refs = []) {
       const ol = qs("#refs"); ol.innerHTML = "";
       const arr = Array.isArray(refs) ? refs : [];
-      if (!arr.length) { ol.appendChild(el("li",{class:"muted"},"No sources returned.")); return; }
+      if (!arr.length) {
+        ol.appendChild(el("li",{class:"muted"},"No sources returned."));
+        return;
+      }
       arr.forEach(r => ol.appendChild(el("li", { class: "ref-li" }, niceTitle(r.fileName || "Report"))));
     }
 
     // ---------- MAIN ----------
     async function runQuery(userQuery) {
       hide(qs("#inlineErr"));
-
       const token = document.querySelector('meta[name="auth-token"]')?.content || window.AUTH_TOKEN || "";
       const payload = { clientId: "genentech", userQuery, topK: 8 };
-
       let dataText = "";
       try {
         const res = await fetch("/search", {
@@ -391,12 +389,10 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       let data = {};
       try { data = dataText ? JSON.parse(dataText) : {}; } catch { data = {}; }
       window.__DATA__ = data;
-
       try {
         const trendIntent = isTrendIntent(userQuery, data);
         let usedRaw = [];
         let points = [];
-
         if (trendIntent) {
           points = collectTrendPoints(data);
           renderTrendVisual(points);
@@ -408,11 +404,16 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
           qs("#answer").innerHTML = caretsToSup(p);
           hide(qs("#keynums"));
           renderAdditionalSupport(data, [], []);
+          renderPreviews(data.visuals);
         }
-
         renderQuotes(data);
         renderRefs(data.references || data.refs || []);
         show(qs("#results"));
+        if (trendIntent) renderPreviews(data.visuals);
+        // Populate Secondary Resources (placeholder)
+        const secContent = qs("#secondaryContent");
+        secContent.innerHTML = "<p>No secondary resources available yet.</p>";
+        hide(secContent);
       } catch (err) {
         console.error("Render error:", err);
         qs("#inlineErr").textContent = "There was an error rendering results. See console for details.";
@@ -431,6 +432,18 @@ content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         document.getElementById("qform").dispatchEvent(new Event("submit"));
+      }
+    });
+
+    // Secondary resources toggle
+    document.getElementById("secondaryHeader").addEventListener("click", () => {
+      const hdr = qs("#secondaryHeader");
+      const content = qs("#secondaryContent");
+      hdr.classList.toggle("expanded");
+      if (content.classList.contains("hidden")) {
+        content.classList.remove("hidden");
+      } else {
+        content.classList.add("hidden");
       }
     });
   </script>
