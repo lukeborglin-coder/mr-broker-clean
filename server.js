@@ -1,5 +1,5 @@
 // server.js — login/session + Google Drive client libraries + RAG search
-// NEW: /admin/ingest-client — crawl Drive (Docs/Slides/PDFs/basic Sheets), chunk, embed, upsert to Pinecone.
+// Deploy-safe: no static import of pdf-parse (PDFs are optional via dynamic import).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -10,7 +10,6 @@ import session from "express-session";
 import bcrypt from "bcryptjs";
 import OpenAI from "openai";
 import { google } from "googleapis";
-import pdf from "pdf-parse";
 
 // -------------------- Environment --------------------
 const envPath = path.resolve(process.cwd(), ".env");
@@ -70,9 +69,7 @@ function readJSON(p, fallback) {
   try { if (!fs.existsSync(p)) return fallback; return JSON.parse(fs.readFileSync(p, "utf8") || "null") ?? fallback; }
   catch { return fallback; }
 }
-function writeJSON(p, obj) {
-  try { fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8"); } catch {}
-}
+function writeJSON(p, obj) { try { fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8"); } catch {} }
 (function upsertInternalUser() {
   const usersDoc = readJSON(USERS_PATH, { users: [] });
   const passwordHash = INTERNAL_PASSWORD_HASH || bcrypt.hashSync(INTERNAL_PASSWORD, 10);
@@ -85,9 +82,23 @@ function writeJSON(p, obj) {
 // -------------------- Google APIs --------------------
 function getAuth() {
   if (GOOGLE_CREDENTIALS_JSON) {
-    return new google.auth.GoogleAuth({ credentials: JSON.parse(GOOGLE_CREDENTIALS_JSON), scopes: ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/presentations.readonly", "https://www.googleapis.com/auth/spreadsheets.readonly"] });
+    return new google.auth.GoogleAuth({
+      credentials: JSON.parse(GOOGLE_CREDENTIALS_JSON),
+      scopes: [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/presentations.readonly",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+      ],
+    });
   } else if (GOOGLE_KEYFILE) {
-    return new google.auth.GoogleAuth({ keyFile: GOOGLE_KEYFILE, scopes: ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/presentations.readonly", "https://www.googleapis.com/auth/spreadsheets.readonly"] });
+    return new google.auth.GoogleAuth({
+      keyFile: GOOGLE_KEYFILE,
+      scopes: [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/presentations.readonly",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+      ],
+    });
   }
   throw new Error("Google credentials missing");
 }
@@ -102,7 +113,7 @@ async function listClientFolders() {
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
     const r = await drive.files.list({ q, fields: "files(id,name)", pageSize: 200, supportsAllDrives:true, includeItemsFromAllDrives:true });
     return (r.data.files || []).map(f => ({ id:f.id, name:f.name }));
-  } catch (e) { console.error(e); return []; }
+  } catch { return []; }
 }
 async function driveFolderExists(folderId) {
   const list = await listClientFolders();
@@ -155,7 +166,7 @@ async function extractTextFromFile(file) {
     }
     return out.join("\n\n");
   }
-  // Google Sheets (basic) → read first N rows from each sheet
+  // Google Sheets (basic): read first ~100 rows per sheet, up to 3 sheets
   if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
     const s = await sheets.spreadsheets.get({ spreadsheetId: file.id });
     const sheetsList = s.data.sheets || [];
@@ -165,16 +176,28 @@ async function extractTextFromFile(file) {
     const blocks = (vals.data.valueRanges || []).map(v => (v.values || []).map(row => row.join(", ")).join("\n"));
     return blocks.filter(Boolean).join("\n\n");
   }
-  // PDFs (download then pdf-parse)
-  if (file.mimeType === "application/pdf") {
+
+  // PDFs are handled in the ingestion loop using a dynamic import (optional).
+  return "";
+}
+
+// Optional PDF extractor (dynamic import)
+async function tryExtractPdfText(file) {
+  try {
+    const { default: pdfParse } = await import("pdf-parse"); // only works if dependency is present
+    const drive = getDrive();
     const r = await drive.files.get({ fileId: file.id, alt: "media" }, { responseType: "arraybuffer" });
     const buf = Buffer.from(r.data);
-    const parsed = await pdf(buf);
+    const parsed = await pdfParse(buf);
     return parsed.text || "";
+  } catch (e) {
+    // If pdf-parse is missing or fails, surface a clean message to caller
+    const msg = String(e?.message || e);
+    if (msg.includes("Cannot find package 'pdf-parse'")) {
+      throw new Error("PDF support disabled (pdf-parse not installed).");
+    }
+    throw e;
   }
-
-  // Unsupported types for now
-  return "";
 }
 
 function chunkText(txt, maxLen = 1800) {
@@ -187,6 +210,7 @@ function chunkText(txt, maxLen = 1800) {
   return out;
 }
 
+// -------------------- RAG Helpers --------------------
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 async function embedTexts(texts) {
   if (!texts?.length) return [];
@@ -283,7 +307,7 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
   }catch(e){ res.status(500).json({ error:"Failed to create user" }); }
 });
 
-// NEW: Ingest entire client library from Drive
+// NEW: Ingest entire client library from Drive (Docs/Slides/Sheets; PDFs optional)
 app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = req.body?.clientId || req.session.activeClientId;
@@ -293,6 +317,7 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
     const files = await listAllFilesUnder(clientId);
     const supported = [];
     const skipped = [];
+
     for (const f of files) {
       if ([
         "application/vnd.google-apps.document",
@@ -300,14 +325,26 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
         "application/vnd.google-apps.spreadsheet",
         "application/pdf"
       ].includes(f.mimeType)) supported.push(f);
-      else skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType });
+      else skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"unsupported type" });
     }
 
     let totalChunks = 0, upserted = 0, errors = [];
     for (const f of supported) {
       try{
-        const text = (await extractTextFromFile(f)) || "";
+        let text = "";
+        if (f.mimeType === "application/pdf") {
+          try {
+            text = await tryExtractPdfText(f);
+          } catch (e) {
+            skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:String(e?.message||e) });
+            continue;
+          }
+        } else {
+          text = (await extractTextFromFile(f)) || "";
+        }
+
         if (!text.trim()) { skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"no text" }); continue; }
+
         const chunks = chunkText(text, 1800).map((t,i)=>({ idSuffix:i, text:t }));
         totalChunks += chunks.length;
 
@@ -337,7 +374,6 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
 });
 
 // -------------------- Search --------------------
-const openaiClient = new OpenAI({ apiKey: OPENAI_API_KEY });
 app.post("/search", requireSession, async (req,res)=>{
   try{
     const headerToken = req.get("x-auth-token");
@@ -377,7 +413,8 @@ app.post("/search", requireSession, async (req,res)=>{
     const ctx = refs.map((r,i)=>`[${i+1}] (${r.study || r.fileName} ${r.date||""}) ${r.textSnippet}`).join("\n\n");
     const prompt = `Question: ${userQuery}\n\nContext:\n${ctx}\n\nWrite a 4–7 sentence answer summarizing the most relevant facts, with [#] citations.`;
 
-    const chat = await openaiClient.chat.completions.create({ model: ANSWER_MODEL, messages:[{role:"system",content:sys},{role:"user",content:prompt}], temperature:0.2 });
+    const ai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const chat = await ai.chat.completions.create({ model: ANSWER_MODEL, messages:[{role:"system",content:sys},{role:"user",content:prompt}], temperature:0.2 });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "I don't have enough information.";
 
     res.json({ answer, references:{ chunks: refs }, visuals:[] });
