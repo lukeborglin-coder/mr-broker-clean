@@ -1,4 +1,4 @@
-// server.js — ES module, previews + search + secondary resources
+// server.js — ES modules; previews + search + secondary resources + robust quoting
 
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +16,7 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 
 const PORT = process.env.PORT || 3000;
 
-// Optional server-side basic auth (off by default to avoid double prompts)
+// Optional server-side basic auth (leave false if you prefer the front-end prompt)
 const ENABLE_BASIC_AUTH = String(process.env.ENABLE_BASIC_AUTH || "false").toLowerCase() === "true";
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "coggpt25";
 
@@ -195,7 +195,7 @@ app.get("/preview/page.png", async (req, res) => {
   }
 });
 
-// ---------- API auth guard (for /search, /secondary, etc.) ----------
+// ---------- API auth guard ----------
 app.use((req, res, next) => {
   if (!AUTH_TOKEN) return next();
   if ((req.get("x-auth-token") || "").trim() !== AUTH_TOKEN)
@@ -211,15 +211,6 @@ async function embedText(text) {
   });
   return data[0].embedding;
 }
-async function parsePdfPages(buffer) {
-  const mod = await import("pdf-parse/lib/pdf-parse.js").catch(() => null);
-  const fn = mod?.default || mod || (await import("pdf-parse")).default;
-  const parsed = await fn(buffer);
-  return (parsed.text || "")
-    .split("\f")
-    .map((p) => p.trim())
-    .filter(Boolean);
-}
 function chunkText(str, chunk = 2000, overlap = 200) {
   const out = [];
   let i = 0;
@@ -228,25 +219,6 @@ function chunkText(str, chunk = 2000, overlap = 200) {
     i += Math.max(1, chunk - overlap);
   }
   return out;
-}
-async function upsertChunks({ clientId, fileId, fileName, chunks, page }) {
-  const vectors = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const values = await embedText(chunks[i]);
-    vectors.push({
-      id: `${fileId}_${page ?? 0}_${i}_${Date.now()}`,
-      values,
-      metadata: {
-        clientId,
-        fileId,
-        fileName,
-        page,
-        text: chunks[i],
-        sourceType: "report",
-      },
-    });
-  }
-  if (vectors.length) await index.namespace(clientId).upsert(vectors);
 }
 
 // ---------- Search helpers ----------
@@ -313,6 +285,8 @@ Use ONLY the refs to answer. Rules:
 - Then provide 3–7 Supporting Detail bullets close to ref wording/numbers.
 - Use numeric citations via ^n^ placeholders; do not invent refs.
 
+- Quotes: provide 0–3 short (<= 20 words) verbatim snippets that appear in the CONTEXT text, each with a ^n^ that points to the correct reference. If no clear short quotes are present, return an empty list.
+
 STRICT JSON:
 {
   "headline": { "paragraph": "text with ^n^", "bullets": ["bullet ^n^"] },
@@ -326,7 +300,6 @@ ${question}
 CONTEXT:
 ${ctx}`;
 
-  await openai.chat.aiCompletions?.create?.({}); // guard for older SDKs
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [{ role: "user", content: prompt }],
@@ -348,7 +321,7 @@ ${ctx}`;
     ? obj.supporting.slice(0, 7).map((b) => ({ text: String(b?.text || "").trim() })).filter((b) => b.text)
     : [];
   obj.quotes = Array.isArray(obj.quotes)
-    ? obj.quotes.slice(0, 4).map((q) => String(q || "").trim()).filter(Boolean)
+    ? obj.quotes.slice(0, 3).map((q) => String(q || "").trim()).filter(Boolean)
     : [];
   return obj;
 }
