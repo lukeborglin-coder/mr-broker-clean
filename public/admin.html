@@ -6,24 +6,26 @@
   <title>Admin — COGgpt</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0b0e; color:#e9eef7; margin:0; }
-    header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid #22252b; }
+    :root { --line:#e9edf2; --muted:#5f6570; --brand:#ff7a00; --ink:#111; }
+    body { background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); }
     h1 { font-size:1.1rem; margin:0; }
-    main { padding:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-    section { background:#111317; border:1px solid #23262d; border-radius:16px; padding:16px; }
-    label { display:block; font-size:.9rem; color:#b6bcc6; margin:8px 0 6px; }
-    input, select, textarea { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3a; background:#0d0f14; color:#eee; outline:none; }
-    button { padding:10px 14px; border-radius:10px; background:#ff7a00; color:#111; border:0; font-weight:700; cursor:pointer; }
+    main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+    section { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; }
+    label { display:block; font-size:.9rem; color:var(--muted); margin:8px 0 6px; }
+    input, select, textarea { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--ink); outline:none; }
+    button { padding:10px 14px; border-radius:10px; background:var(--brand); color:#111; border:0; font-weight:700; cursor:pointer; }
     table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
-    td, th { border-bottom:1px solid #23262d; padding:8px 6px; text-align:left; }
-    .muted { color:#9aa0a6; }
+    td, th { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; }
+    .muted { color:var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Admin — Create Client Accounts</h1>
+    <h1>Admin</h1>
     <div>
-      <a href="/" style="margin-right:10px; color:#e9eef7; text-decoration:none;">Back</a>
+      <a href="/" style="margin-right:10px; color:var(--ink); text-decoration:none;">Back</a>
       <button id="logoutBtn">Log out</button>
     </div>
   </header>
@@ -49,11 +51,21 @@
     </section>
 
     <section>
-      <h3>Existing Users</h3>
+      <h3>Update Client Library</h3>
+      <div class="muted">This crawls the selected Drive client folder (and subfolders), extracts text from Google Docs, Google Slides, PDFs, and basic Sheets, then embeds to Pinecone.</div>
+      <label style="margin-top:10px;">Client library</label>
+      <select id="ingest_client"></select>
+      <div style="margin-top:10px;">
+        <button id="ingestBtn">Update Client Library</button>
+      </div>
+      <label style="margin-top:12px;">Result</label>
+      <textarea id="ingest_out" class="mono" rows="10" readonly></textarea>
+
+      <h3 style="margin-top:24px;">Existing Users</h3>
       <table id="usersTable"><tbody></tbody></table>
 
       <h3 style="margin-top:20px;">Available Client Libraries</h3>
-      <div class="muted">These are folders under your secure Drive root. Add a new folder there and it will appear here on refresh.</div>
+      <div class="muted">These are folders under your secure Drive root.</div>
       <table id="clientsTable"><tbody></tbody></table>
     </section>
   </main>
@@ -63,19 +75,16 @@ async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(
 async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
 async function load() {
-  // users
   const users = await jget('/admin/users/list');
   const ut = document.querySelector('#usersTable tbody');
   ut.innerHTML = '<tr><th>Username</th><th>Role</th><th>Client Library</th></tr>' + users.map(u => `<tr><td>${u.username}</td><td>${u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
 
-  // drive client folders
   const clients = await jget('/clients/drive-folders');
   const ct = document.querySelector('#clientsTable tbody');
   ct.innerHTML = '<tr><th>Name</th><th>Folder ID</th></tr>' + clients.map(c => `<tr><td>${c.name}</td><td class="muted">${c.id}</td></tr>`).join('');
 
-  // fill the select
-  const sel = document.getElementById('u_client');
-  sel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  document.getElementById('u_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  document.getElementById('ingest_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
 }
 
 document.getElementById('createUserBtn').onclick = async () => {
@@ -87,7 +96,18 @@ document.getElementById('createUserBtn').onclick = async () => {
     await jpost('/admin/users/create', { username, password, confirmPassword, clientFolderId });
     await load();
     alert('User created');
+  } catch (e) { alert('Failed: ' + e); }
+};
+
+document.getElementById('ingestBtn').onclick = async () => {
+  const clientId = document.getElementById('ingest_client').value;
+  document.getElementById('ingest_out').value = 'Ingesting... this can take several minutes for large libraries.';
+  try {
+    const res = await jpost('/admin/ingest-client', { clientId });
+    document.getElementById('ingest_out').value = JSON.stringify(res, null, 2);
+    alert('Update complete');
   } catch (e) {
+    document.getElementById('ingest_out').value = String(e);
     alert('Failed: ' + e);
   }
 };
