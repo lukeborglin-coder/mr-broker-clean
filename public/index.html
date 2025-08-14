@@ -222,5 +222,6 @@ document.getElementById('ask').onclick = doAsk;
 document.getElementById('q').addEventListener('keypress', e => { if (e.key === 'Enter' && !document.getElementById('ask').disabled) doAsk(); });
 document.getElementById('logoutBtn').onclick = async () => { await jpost('/auth/logout', {}); location.href = '/login.html'; };
 </script>
+<script src="/app.js" defer></script>
 </body>
 </html>
