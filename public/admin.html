@@ -4,17 +4,22 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Admin — COGgpt</title>
+  <link rel="stylesheet" href="/styles.css"/>
   <style>
-    :root { --line:#e9edf2; --muted:#5f6570; --brand:#ff7a00; --ink:#111; }
+    :root { --line:#e9edf2; --muted:#5f6570; --brand:#ff7a00; --ink:#111; --good:#0a7c2f; --bad:#a50e0e; }
     body { background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; }
     header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); }
-    h1 { font-size:1.1rem; margin:0; }
+    .brand { display:flex; align-items:baseline; gap:6px; font-weight:800; letter-spacing:.1px; }
+    .beta { font-size:.9rem; color:#9aa2ad; font-weight:700; letter-spacing:.06em; }
     main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1.6fr 1fr; gap:20px; }
     section { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; }
-    label { display:block; font-size:.9rem; color:var(--muted); margin:8px 0 6px; }
+    h3 { margin:0 0 10px; }
+    label { display:block; font-size:.85rem; color:var(--muted); margin:8px 0 6px; }
     input, select { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:#222; outline:none; }
-    button, .btn { padding:10px 14px; border-radius:10px; background:#fff; color:#111; border:1px solid var(--line); font-weight:700; cursor:pointer; }
-    button:hover, .btn:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
+    .btn, button { padding:10px 14px; border-radius:10px; background:#fff; color:#111; border:1px solid var(--line); font-weight:700; cursor:pointer; transition:all .12s ease; }
+    .btn:hover, button:hover { background:var(--brand); border-color:var(--brand); color:#fff; transform: translateY(-1px); }
+    .btn.sm { padding:8px 12px; border-radius:10px; font-size:.9rem; }
+    .rows { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
     table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
     th, td { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top; }
     th { color:var(--muted); font-weight:600; }
@@ -23,29 +28,45 @@
     .ok { background:#ecfdf5; border-color:#bbf7d0; }
     .err { background:#fee2e2; border-color:#fecaca; }
     .hidden { display:none; }
-    .uppercase { text-transform:uppercase; }
+    .status-good { color: var(--good); font-style: italic; }
+    .status-bad { color: var(--bad); font-style: italic; }
+    .smalltext { font-size: .9rem; color: var(--muted); }
   </style>
 </head>
 <body>
   <header>
-    <h1>Admin</h1>
-    <div>
-      <a href="/" class="btn" style="margin-right:10px;">Back</a>
+    <div class="brand">
+      <span style="font-weight:800;">COGgpt</span>
+      <span class="beta">(BETA)</span>
+    </div>
+    <div class="rows">
+      <a href="/" class="btn">Back</a>
       <button id="logoutBtn" class="btn">Sign out</button>
     </div>
   </header>
 
   <main>
-    <!-- LEFT: Update Client LIBRARY -->
+    <!-- LEFT: Update Client Library -->
     <section>
-      <h3>Update Client <span class="uppercase">Library</span></h3>
-      <div class="muted">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs (if enabled) into Pinecone.</div>
+      <h3>Update Client Library</h3>
+      <div class="smalltext">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs into Pinecone.</div>
+
       <label style="margin-top:10px;">Client Library</label>
-      <select id="ingest_client"></select>
+      <select id="ingest_client">
+        <option value="" selected disabled>Select a client</option>
+      </select>
+
+      <div id="libQuick" class="muted" style="margin-top:10px; display:none;">
+        <div><strong>Files in Library:</strong> <span id="libCount">—</span></div>
+        <div id="libStatus" class="status-good hidden"></div>
+      </div>
+
       <div style="margin-top:10px;">
         <button id="ingestBtn" class="btn">Update Client Library</button>
       </div>
+
       <div id="ingest_summary" style="margin-top:14px;"></div>
+
       <table id="ingest_table" style="display:none;">
         <thead>
           <tr>
@@ -61,28 +82,41 @@
       </table>
     </section>
 
-    <!-- RIGHT: Create Client User (toggleable) -->
+    <!-- RIGHT: Existing Accounts (with Add Account button) -->
     <section>
-      <h3>Create Client User</h3>
-      <button id="toggleUserForm" class="btn">Open Form</button>
-      <div id="userForm" class="hidden">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <h3 style="margin:0;">Existing Accounts</h3>
+        <button id="addAccountBtn" class="btn sm">Add Account</button>
+      </div>
+
+      <div id="addForm" class="hidden" style="margin-top:10px;">
         <label>Username</label>
-        <input id="u_username" placeholder="e.g., genentech_user" autocomplete="new-username"/>
+        <input id="u_username" placeholder="e.g., client.user@company.com" autocomplete="new-username"/>
         <label>Password</label>
         <input id="u_password" type="password" placeholder="Set a password" autocomplete="new-password"/>
         <label>Confirm Password</label>
         <input id="u_confirm" type="password" placeholder="Re-enter password" autocomplete="new-password"/>
-        <label>Client <span class="uppercase">Library</span> (Drive folder)</label>
+        <label>Role</label>
+        <select id="u_role">
+          <option value="client" selected>Client</option>
+          <option value="admin">Admin</option>
+        </select>
+        <label>Client Library</label>
         <select id="u_client" size="6"></select>
-        <div style="margin-top:12px;">
-          <button id="createUserBtn" class="btn">Create User</button>
+        <div style="margin-top:10px; display:flex; gap:8px;">
+          <button id="createUserBtn" class="btn">Create Account</button>
+          <button id="cancelUserBtn" class="btn">Cancel</button>
         </div>
       </div>
-      <h3 style="margin-top:24px;">Existing Users</h3>
-      <table id="usersTable"><tbody></tbody></table>
-      <h3 style="margin-top:20px;">Available Client Libraries</h3>
+
+      <table id="usersTable" style="margin-top:12px;"><tbody></tbody></table>
+    </section>
+
+    <!-- RIGHT: Available Client Libraries -->
+    <section>
+      <h3 style="margin:0;">Available Client Libraries</h3>
       <div class="muted">Folders under your secure Drive root.</div>
-      <table id="clientsTable"><tbody></tbody></table>
+      <table id="clientsTable" style="margin-top:10px;"><tbody></tbody></table>
     </section>
   </main>
 
@@ -90,23 +124,58 @@
 async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
+function setStatus(el, text, good){
+  el.className = good ? "status-good" : "status-bad";
+  el.textContent = text;
+  el.classList.remove("hidden");
+}
+
 async function load() {
+  // Users
   const users = await jget('/admin/users/list');
   document.querySelector('#usersTable tbody').innerHTML =
     '<tr><th>Username</th><th>Role</th><th>Client Library</th></tr>' +
-    users.map(u => `<tr><td>${u.username}</td><td>${u.role==='internal'?'admin':u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
+    users.map(u => `<tr><td>${u.username}</td><td>${u.role === 'internal' ? 'admin' : u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
+
+  // Clients
   const clients = await jget('/clients/drive-folders');
-  document.querySelector('#clientsTable tbody').innerHTML =
-    '<tr><th>Name</th><th>Folder ID</th></tr>' +
-    clients.map(c => `<tr><td>${c.name}</td><td class="muted">${c.id}</td></tr>`).join('');
-  document.getElementById('u_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  document.getElementById('ingest_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+
+  // Fill selects (with placeholder on ingest_client)
+  const ingestSel = document.getElementById('ingest_client');
+  ingestSel.innerHTML = '<option value="" selected disabled>Select a client</option>' +
+    clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+
+  const userClientSel = document.getElementById('u_client');
+  userClientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+
+  // Populate right-hand libraries table with counts + status
+  const tbody = document.querySelector('#clientsTable tbody');
+  tbody.innerHTML = '<tr><th>Name</th><th>Files in Library</th><th>Status</th></tr>';
+
+  for (const c of clients) {
+    let filesCount = '—', status = '—', statusClass = '';
+    try {
+      const s = await jget(`/admin/library-stats?clientId=${encodeURIComponent(c.id)}`);
+      filesCount = typeof s.libraryCount === 'number' ? s.libraryCount : '—';
+      if (typeof s.driveCount === 'number' && typeof s.libraryCount === 'number') {
+        const upToDate = s.driveCount <= s.libraryCount;
+        status = upToDate ? 'Files up to date.' : 'Files ready to be uploaded';
+        statusClass = upToDate ? 'status-good' : 'status-bad';
+      }
+    } catch {}
+    tbody.innerHTML += `<tr>
+      <td>${c.name}</td>
+      <td>${filesCount}</td>
+      <td class="${statusClass}"><em>${status}</em></td>
+    </tr>`;
+  }
 }
 
-document.getElementById('toggleUserForm').onclick = () => {
-  const form = document.getElementById('userForm');
-  form.classList.toggle('hidden');
-  document.getElementById('toggleUserForm').textContent = form.classList.contains('hidden') ? 'Open Form' : 'Close Form';
+document.getElementById('addAccountBtn').onclick = () => {
+  document.getElementById('addForm').classList.remove('hidden');
+};
+document.getElementById('cancelUserBtn').onclick = () => {
+  document.getElementById('addForm').classList.add('hidden');
 };
 
 document.getElementById('createUserBtn').onclick = async () => {
@@ -114,9 +183,11 @@ document.getElementById('createUserBtn').onclick = async () => {
   const password = document.getElementById('u_password').value;
   const confirmPassword = document.getElementById('u_confirm').value;
   const clientFolderId = document.getElementById('u_client').value;
+  const role = document.getElementById('u_role').value; // 'admin' or 'client'
   try {
-    await jpost('/admin/users/create', { username, password, confirmPassword, clientFolderId });
-    await load(); alert('User created');
+    await jpost('/admin/users/create', { username, password, confirmPassword, clientFolderId, role });
+    document.getElementById('addForm').classList.add('hidden');
+    await load(); alert('Account created');
   } catch (e) { alert('Failed: ' + e); }
 };
 
@@ -125,13 +196,21 @@ document.getElementById('ingestBtn').onclick = async () => {
   const summary = document.getElementById('ingest_summary');
   const table = document.getElementById('ingest_table');
   const tbody = table.querySelector('tbody');
+  const libQuick = document.getElementById('libQuick');
+  const libCountEl = document.getElementById('libCount');
+  const libStatusEl = document.getElementById('libStatus');
+
+  if (!clientId) { alert('Select a client'); return; }
+
   summary.textContent = 'Ingesting… this can take several minutes.';
   table.style.display = 'none';
   tbody.innerHTML = '';
+
   try {
     const res = await jpost('/admin/ingest-client', { clientId });
     const s = res.summary || {};
     summary.innerHTML = `<strong>Done.</strong> Files scanned: ${s.filesSeen || 0}. Ingested: ${s.ingestedCount || 0}. Skipped: ${s.skippedCount || 0}. Errors: ${s.errorsCount || 0}. Total chunks upserted: ${s.upserted || 0}. ${typeof s.namespaceVectorCount==='number' ? 'Namespace vectors: ' + s.namespaceVectorCount + '.' : ''}`;
+
     const rows = (res.ingested || []).map(f => `
       <tr>
         <td>${f.name}</td>
@@ -143,10 +222,45 @@ document.getElementById('ingestBtn').onclick = async () => {
       </tr>`).join('');
     tbody.innerHTML = rows;
     table.style.display = 'table';
+
+    // Refresh quick snapshot after ingest
+    try {
+      const stats = await jget(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
+      libCountEl.textContent = (typeof stats.libraryCount === 'number') ? stats.libraryCount : '—';
+      if (typeof stats.driveCount === 'number' && typeof stats.libraryCount === 'number') {
+        const upToDate = stats.driveCount <= stats.libraryCount;
+        setStatus(libStatusEl, upToDate ? 'Files up to date.' : 'Files ready to be uploaded', upToDate);
+      }
+      libQuick.style.display = 'block';
+    } catch {}
   } catch (e) {
     summary.innerHTML = '<span class="pill err">Failed</span> ' + String(e);
   }
 };
+
+document.getElementById('ingest_client').addEventListener('change', async (e) => {
+  const clientId = e.target.value;
+  const libQuick = document.getElementById('libQuick');
+  const libCountEl = document.getElementById('libCount');
+  const libStatusEl = document.getElementById('libStatus');
+  libQuick.style.display = 'none';
+  libCountEl.textContent = '—';
+  libStatusEl.textContent = '';
+  libStatusEl.classList.add('hidden');
+
+  if (!clientId) return;
+  try {
+    const stats = await jget(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
+    libCountEl.textContent = (typeof stats.libraryCount === 'number') ? stats.libraryCount : '—';
+    if (typeof stats.driveCount === 'number' && typeof stats.libraryCount === 'number') {
+      const upToDate = stats.driveCount <= stats.libraryCount;
+      setStatus(libStatusEl, upToDate ? 'Files up to date.' : 'Files ready to be uploaded', upToDate);
+    }
+    libQuick.style.display = 'block';
+  } catch {
+    libQuick.style.display = 'block';
+  }
+});
 
 document.getElementById('logoutBtn').onclick = async () => {
   await jpost('/auth/logout', {});
