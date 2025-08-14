@@ -1,183 +1,153 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Research Q&A</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Admin — COGgpt</title>
+  <style>
+    :root { --line:#e9edf2; --muted:#5f6570; --brand:#ff7a00; --ink:#111; }
+    body { background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); }
+    h1 { font-size:1.1rem; margin:0; }
+    main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1fr 1.6fr; gap:20px; }
+    section { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; }
+    label { display:block; font-size:.9rem; color:var(--muted); margin:8px 0 6px; }
+    input, select { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:#222; outline:none; }
+    button { padding:10px 14px; border-radius:10px; background:var(--brand); color:#111; border:0; font-weight:700; cursor:pointer; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
+    th, td { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    .muted { color:var(--muted); }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; border:1px solid var(--line); }
+    .ok { background:#ecfdf5; border-color:#bbf7d0; }
+    .err { background:#fee2e2; border-color:#fecaca; }
+  </style>
 </head>
 <body>
-  <div class="page">
-    <header class="header">
-      <h1 class="title">Research Q&amp;A <span class="beta">(BETA)</span></h1>
-      <div class="header-right">
-        <a class="btn ghost" href="/admin.html">Admin</a>
-        <button class="btn ghost" id="signOutBtn" type="button">Sign out</button>
-      </div>
-    </header>
-
-    <!-- Hero / Instructions with left accent -->
-    <section class="card accent">
-      <div class="space-between">
-        <h2 class="card-title">Ask a question grounded in your LIBRARY</h2>
-        <span class="badge">Secure area</span>
-      </div>
-      <p class="small">Enter a clear question. We’ll return key findings, citations, and related slides when available.</p>
-    </section>
-
-    <!-- Query form -->
-    <section class="card mt-12">
-      <div class="grid-2">
-        <div>
-          <label class="label">Client Library</label>
-          <select id="clientLibrary" class="select text-sm" autocomplete="off">
-            <option value="" disabled selected>Select…</option>
-          </select>
-        </div>
-        <div>
-          <label class="label">Question</label>
-          <form id="qForm" class="row" autocomplete="off">
-            <input type="text" id="qInput" class="input" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?" />
-            <button class="btn" type="submit">Ask</button>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <!-- Results (hidden until a question is asked) -->
-    <section id="results" class="hidden mt-16">
-      <div class="card">
-        <h3 class="card-title">Answer</h3>
-        <div id="answer"></div>
-      </div>
-      <div class="grid-2 mt-12">
-        <div class="card">
-          <h3 class="card-title">References</h3>
-          <div id="references"></div>
-        </div>
-        <div class="card">
-          <h3 class="card-title">Report Slides</h3>
-          <div id="slides"></div>
-        </div>
-      </div>
-    </section>
-  </div>
-
-  <!-- Simple password gate (client-side) -->
-  <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
-    <div class="panel">
-      <h3>Enter Access Password</h3>
-      <p class="small mb-0">This page is gated. Contact your admin if you don’t have access.</p>
-      <form id="gateForm" class="mt-12" autocomplete="off">
-        <!-- dummy fields to confuse autofill -->
-        <input type="text" class="hidden" aria-hidden="true">
-        <input type="password" class="hidden" aria-hidden="true">
-        <label class="label">Password</label>
-        <input id="gatePwd" class="input readonly" type="password" inputmode="text" autocomplete="new-password" placeholder="Password" />
-        <button class="btn block mt-12" type="submit">Continue</button>
-        <div class="hint">Tip: This is a UI gate only. For real security, enforce auth in <code>server.js</code>.</div>
-      </form>
+  <header>
+    <h1>Admin</h1>
+    <div>
+      <a href="/" style="margin-right:10px; color:var(--ink); text-decoration:none;">Back</a>
+      <button id="logoutBtn">Log out</button>
     </div>
-  </div>
+  </header>
 
-  <script>
-    // ---- tiny helper
-    const $ = (sel) => document.querySelector(sel);
+  <main>
+    <section>
+      <h3>Create Client User</h3>
+      <label>Username</label>
+      <input id="u_username" placeholder="e.g., genentech_user"/>
+      <label>Password</label>
+      <input id="u_password" type="password" placeholder="Set a password"/>
+      <label>Confirm Password</label>
+      <input id="u_confirm" type="password" placeholder="Re-enter password"/>
+      <label>Client library (Drive folder)</label>
+      <select id="u_client" size="6"></select>
+      <div style="margin-top:12px;">
+        <button id="createUserBtn">Create User</button>
+      </div>
 
-    // ---- password gate (per-session)
-    const GATE_KEY = "cg_gate_ok_v1";
-    function showGate() { $("#gate").classList.remove("hidden"); }
-    function hideGate() { $("#gate").classList.add("hidden"); }
-    function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
-    function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
+      <h3 style="margin-top:24px;">Existing Users</h3>
+      <table id="usersTable"><tbody></tbody></table>
 
-    function setupGate() {
-      // Prevent autofill tricks
-      const pwd = $("#gatePwd");
-      pwd.setAttribute("readonly", "readonly");
-      pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
+      <h3 style="margin-top:20px;">Available Client Libraries</h3>
+      <div class="muted">Folders under your secure Drive root.</div>
+      <table id="clientsTable"><tbody></tbody></table>
+    </section>
 
-      $("#gateForm").addEventListener("submit", (e) => {
-        e.preventDefault();
-        const val = pwd.value.trim();
-        if (val === "coggpt25") {
-          markGateOk();
-          hideGate();
-        } else {
-          alert("Incorrect password");
-        }
-      });
+    <section>
+      <h3>Update Client Library</h3>
+      <div class="muted">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs (if enabled) into Pinecone.</div>
+      <label style="margin-top:10px;">Client library</label>
+      <select id="ingest_client"></select>
+      <div style="margin-top:10px;">
+        <button id="ingestBtn">Update Client Library</button>
+      </div>
 
-      if (!gateOk()) showGate();
-    }
-    setupGate();
+      <div id="ingest_summary" style="margin-top:14px;"></div>
 
-    // ---- sign out clears the gate
-    $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
+      <table id="ingest_table" style="display:none;">
+        <thead>
+          <tr>
+            <th style="width:34%;">File</th>
+            <th style="width:10%;">Type</th>
+            <th style="width:36%;">Status</th>
+            <th style="width:7%;">Month</th>
+            <th style="width:7%;">Year</th>
+            <th style="width:6%;">Report</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
 
-    // ---- populate client library (expects backend to serve list at /clients or /admin/clients)
-    async function loadLibraries() {
-      const sel = $("#clientLibrary");
-      try {
-        // try common endpoints; fallback stays empty so you can select later
-        const endpoints = ["/clients", "/admin/clients", "/api/clients"];
-        let data = null;
-        for (const ep of endpoints) {
-          try {
-            const r = await fetch(ep);
-            if (r.ok) { data = await r.json(); break; }
-          } catch (_) { /* ignore */ }
-        }
-        if (Array.isArray(data)) {
-          for (const name of data) {
-            const opt = document.createElement("option");
-            opt.value = name; opt.textContent = name;
-            sel.appendChild(opt);
-          }
-        }
-      } catch (e) { /* silent */ }
-    }
-    loadLibraries();
+<script>
+async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
-    // ---- ask
-    $("#qForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const lib = $("#clientLibrary").value;
-      const q = $("#qInput").value.trim();
-      if (!lib || !q) { alert("Choose a Library and enter a question"); return; }
+async function load() {
+  const users = await jget('/admin/users/list');
+  document.querySelector('#usersTable tbody').innerHTML =
+    '<tr><th>Username</th><th>Role</th><th>Client Library</th></tr>' +
+    users.map(u => `<tr><td>${u.username}</td><td>${u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
 
-      // Reveal results container immediately (empty state) and then fill
-      $("#results").classList.remove("hidden");
-      $("#answer").textContent = "Thinking…";
-      $("#references").innerHTML = "";
-      $("#slides").innerHTML = "";
+  const clients = await jget('/clients/drive-folders');
+  document.querySelector('#clientsTable tbody').innerHTML =
+    '<tr><th>Name</th><th>Folder ID</th></tr>' +
+    clients.map(c => `<tr><td>${c.name}</td><td class="muted">${c.id}</td></tr>`).join('');
 
-      try {
-        const r = await fetch("/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId: lib, userQuery: q, topK: 6 })
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data?.error || "Search failed");
+  document.getElementById('u_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  document.getElementById('ingest_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+}
 
-        $("#answer").textContent = data?.answer || "No answer.";
-        const refs = data?.references || {};
-        const visuals = data?.visuals || [];
+document.getElementById('createUserBtn').onclick = async () => {
+  const username = document.getElementById('u_username').value.trim();
+  const password = document.getElementById('u_password').value;
+  const confirmPassword = document.getElementById('u_confirm').value;
+  const clientFolderId = document.getElementById('u_client').value;
+  try {
+    await jpost('/admin/users/create', { username, password, confirmPassword, clientFolderId });
+    await load(); alert('User created');
+  } catch (e) { alert('Failed: ' + e); }
+};
 
-        // references
-        const refList = Object.entries(refs).map(([k, v]) => `<div class="small">• <strong>${k}</strong> — ${v}</div>`).join("");
-        $("#references").innerHTML = refList || "<span class='small'>None</span>";
+document.getElementById('ingestBtn').onclick = async () => {
+  const clientId = document.getElementById('ingest_client').value;
+  const summary = document.getElementById('ingest_summary');
+  const table = document.getElementById('ingest_table');
+  const tbody = table.querySelector('tbody');
+  summary.textContent = 'Ingesting… this can take several minutes.';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
 
-        // slides (limit 6)
-        const max = 6;
-        const imgs = (visuals || []).slice(0, max).map(src => `<img src="${src}" alt="slide" style="width:100%; border-radius:10px; border:1px solid var(--line); margin-bottom:8px;"/>`).join("");
-        $("#slides").innerHTML = imgs || "<span class='small'>No slides available</span>";
-      } catch (err) {
-        $("#answer").textContent = "I don't have enough information.";
-        console.error(err);
-      }
-    });
-  </script>
+  try {
+    const res = await jpost('/admin/ingest-client', { clientId });
+    const s = res.summary || {};
+    summary.innerHTML = `<strong>Done.</strong> Files scanned: ${s.filesSeen || 0}. Ingested: ${s.ingestedCount || 0}. Skipped: ${s.skippedCount || 0}. Errors: ${s.errorsCount || 0}. Total chunks upserted: ${s.upserted || 0}. ${typeof s.namespaceVectorCount==='number' ? 'Namespace vectors: ' + s.namespaceVectorCount + '.' : ''}`;
+
+    const rows = (res.ingested || []).map(f => `
+      <tr>
+        <td>${f.name}</td>
+        <td class="muted">${f.mimeType}</td>
+        <td>${f.status === 'complete' ? '<span class="pill ok">complete</span>' : '<span class="pill err">'+(f.status||'error')+'</span>'}</td>
+        <td>${f.monthTag || '—'}</td>
+        <td>${f.yearTag || '—'}</td>
+        <td>${f.reportTag || '—'}</td>
+      </tr>`).join('');
+    tbody.innerHTML = rows;
+    table.style.display = 'table';
+  } catch (e) {
+    summary.innerHTML = '<span class="pill err">Failed</span> ' + String(e);
+  }
+};
+
+document.getElementById('logoutBtn').onclick = async () => {
+  await jpost('/auth/logout', {});
+  location.href = '/login.html';
+};
+
+load().catch(err => alert('Failed to load admin: ' + err));
+</script>
 </body>
 </html>
