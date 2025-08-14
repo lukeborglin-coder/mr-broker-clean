@@ -66,13 +66,13 @@ body {
   color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px;
 }
 
-/* Right-side header actions (Admin/Sign out) */
+/* Right-side header actions */
 .header-actions { display:flex; align-items:center; gap:8px; }
 
 /* =========================
    Buttons (white base, orange hover)
    ========================= */
-.btn {
+.cg-btn {
   appearance: none;
   border: 1px solid var(--border);
   background: #fff;
@@ -83,10 +83,10 @@ body {
   cursor: pointer;
   transition: all .12s ease;
 }
-.btn:hover { background: var(--orange); border-color: var(--orange); color: #fff; transform: translateY(-1px); }
-.btn.block { width: 100%; }
-.btn.ghost { background: transparent; color: #1c1d1f; }
-.btn.ghost:hover { color: #fff; }
+.cg-btn:hover { background: var(--orange); border-color: var(--orange); color: #fff; transform: translateY(-1px); }
+.cg-btn.block { width: 100%; }
+.cg-btn.ghost { background: transparent; color: #1c1d1f; }
+.cg-btn.ghost:hover { color: #fff; }
 
 /* Keep your original orange Ask button for #qform */
 .btn-ask {
@@ -189,10 +189,11 @@ details.panel[open] > summary::after { transform: rotate(180deg); }
   margin: 14px 0;
   padding: 14px 16px;
   background: #fff7ef;
-  border-left: 6px solid var(--orange-dark); /* darker left accent */
+  border-left: 6px solid var(--orange); /* default */
   border-radius: 10px;
   box-shadow: var(--shadow);
 }
+.cg-dark-accent { border-left-color: var(--orange-dark) !important; }
 .keynums { margin: 8px 0 0; padding-left: 18px; }
 
 /* =========================
@@ -257,24 +258,25 @@ li { margin: 6px 0; }
 /* =========================
    Simple password gate (client-side UI)
    ========================= */
-.gate { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index: 999; }
-.gate .panel {
-  width: 92%; max-width: 420px;
-  background: var(--panel);
-  border:1px solid #eceff3;
-  border-radius: 16px;
-  padding: 18px;
-  box-shadow: var(--shadow);
+.cg-gate { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index: 999; }
+.cg-gate.open { display:flex; }
+.cg-gate .cg-panel {
+  width: 92%; max-width: 420px; background: #fff; border:1px solid #eceff3;
+  border-radius: 16px; padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.06);
 }
+.cg-gate h3 { margin: 0 0 6px; }
+.cg-gate .cg-hint { color:#666; font-size:12px; margin-top: 8px; }
 
 /* =========================
-   Admin page layout
+   Admin page layout (non-breaking)
    ========================= */
-.admin-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
-@media (min-width: 960px) { .admin-grid { grid-template-columns: 1.1fr .9fr; } }
-.panel-toggle { margin-top: 8px; }
-.form-grid { display:grid; grid-template-columns: 1fr; gap: 10px; }
+.cg-admin-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 960px) { .cg-admin-grid { grid-template-columns: 1.1fr .9fr; } }
+.cg-panel-toggle { margin-top: 8px; display:none; }
+.cg-panel-toggle.open { display:block; }
+.cg-label { display:block; font-size:12px; color:#666; text-transform: uppercase; letter-spacing:.5px; margin-bottom:6px; }
+.cg-readonly { caret-color: transparent; }
 
-/* Make the Library dropdown label look smaller */
-.label + .select.text-sm,
-.label + .input.text-sm { font-size: 12px; }
+/* Make the Library dropdown smaller only on the main page control */
+#clientLibrary { font-size: 12px; }
+label[for="clientLibrary"] { font-size: 12px; }
