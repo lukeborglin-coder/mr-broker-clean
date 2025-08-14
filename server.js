@@ -1,7 +1,5 @@
-// server.js — Express app with login, sessions, Google Drive client folders, and RAG search
-// IMPORTANT: This version UPDATES (upserts) the internal user on every boot.
-// Set INTERNAL_PASSWORD in your environment to control the password (defaults to "coggpt25").
-// The login page has only username/password. Client selection is shown AFTER login on the main page.
+// server.js — login/session + Google Drive client libraries + RAG search
+// NEW: /admin/ingest-client — crawl Drive (Docs/Slides/PDFs/basic Sheets), chunk, embed, upsert to Pinecone.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -12,35 +10,28 @@ import session from "express-session";
 import bcrypt from "bcryptjs";
 import OpenAI from "openai";
 import { google } from "googleapis";
+import pdf from "pdf-parse";
 
 // -------------------- Environment --------------------
 const envPath = path.resolve(process.cwd(), ".env");
 dotenv.config({ path: envPath, override: true });
 
 const PORT = process.env.PORT || 3000;
-
-// Auth / security
 const SESSION_SECRET = process.env.SESSION_SECRET || "change-me";
-const AUTH_TOKEN = process.env.AUTH_TOKEN || "dev-auth-token"; // header-based token for ingestion if desired
+const AUTH_TOKEN = process.env.AUTH_TOKEN || "dev-auth-token";
 
-// RAG config
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-large";
 const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-4o-mini";
 const DEFAULT_TOPK = Number(process.env.DEFAULT_TOPK || 6);
 
-// Pinecone (using REST)
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY || "";
-const PINECONE_INDEX_HOST = process.env.PINECONE_INDEX_HOST || ""; // e.g., https://XXXX-XXXX.svc.YYYY-1.pinecone.io
+const PINECONE_INDEX_HOST = process.env.PINECONE_INDEX_HOST || "";
 
-// Google Drive Root (top-level secure library folder)
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || "";
-
-// Google auth (either a keyfile path or raw JSON)
 const GOOGLE_KEYFILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || "";
 
-// Internal account config
 const INTERNAL_USERNAME = "cognitive_internal";
 const INTERNAL_PASSWORD =
   process.env.INTERNAL_PASSWORD && String(process.env.INTERNAL_PASSWORD).trim()
@@ -51,13 +42,11 @@ const INTERNAL_PASSWORD_HASH =
     ? String(process.env.INTERNAL_PASSWORD_HASH).trim()
     : null;
 
-// -------------------- App Setup --------------------
+// -------------------- App --------------------
 const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
-app.use(express.json({ limit: "15mb" }));
-
-// Sessions (MemoryStore is OK for testing; swap to Redis for production)
+app.use(express.json({ limit: "20mb" }));
 app.use(
   session({
     secret: SESSION_SECRET,
@@ -67,115 +56,165 @@ app.use(
       httpOnly: true,
       sameSite: "lax",
       secure: !!process.env.NODE_ENV && process.env.NODE_ENV !== "development",
-      maxAge: 1000 * 60 * 60 * 8, // 8 hours
+      maxAge: 1000 * 60 * 60 * 8,
     },
   })
 );
-
-// Static files
 app.use(express.static("public"));
 
-// -------------------- Lightweight JSON "DB" --------------------
+// -------------------- Users JSON store --------------------
 const CONFIG_DIR = path.resolve(process.cwd(), "config");
 const USERS_PATH = path.join(CONFIG_DIR, "users.json");
-
-function ensureConfigDir() {
-  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-}
+if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
 function readJSON(p, fallback) {
-  try {
-    if (!fs.existsSync(p)) return fallback;
-    const data = fs.readFileSync(p, "utf8");
-    return (data && JSON.parse(data)) ?? fallback;
-  } catch (e) {
-    console.error("[json] read error:", e?.message || e);
-    return fallback;
-  }
+  try { if (!fs.existsSync(p)) return fallback; return JSON.parse(fs.readFileSync(p, "utf8") || "null") ?? fallback; }
+  catch { return fallback; }
 }
 function writeJSON(p, obj) {
-  try {
-    fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8");
-  } catch (e) {
-    console.error("[json] write error:", e?.message || e);
-  }
+  try { fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8"); } catch {}
 }
-
-/** Upsert (create or update) the internal account on every boot. */
 (function upsertInternalUser() {
-  ensureConfigDir();
   const usersDoc = readJSON(USERS_PATH, { users: [] });
-
-  // Choose the hash: explicit hash wins; else hash the plain password from env (or default).
   const passwordHash = INTERNAL_PASSWORD_HASH || bcrypt.hashSync(INTERNAL_PASSWORD, 10);
-
-  const idx = usersDoc.users.findIndex((u) => u.username === INTERNAL_USERNAME);
-  if (idx === -1) {
-    usersDoc.users.push({
-      username: INTERNAL_USERNAME,
-      passwordHash,
-      role: "internal",
-      allowedClients: "*",
-    });
-    console.log("[auth] created internal user");
-  } else {
-    usersDoc.users[idx].passwordHash = passwordHash;
-    usersDoc.users[idx].role = "internal";
-    usersDoc.users[idx].allowedClients = "*";
-    console.log("[auth] updated internal user");
-  }
+  const idx = usersDoc.users.findIndex(u => u.username === INTERNAL_USERNAME);
+  if (idx === -1) usersDoc.users.push({ username: INTERNAL_USERNAME, passwordHash, role: "internal", allowedClients: "*" });
+  else { usersDoc.users[idx].passwordHash = passwordHash; usersDoc.users[idx].role="internal"; usersDoc.users[idx].allowedClients="*"; }
   writeJSON(USERS_PATH, usersDoc);
 })();
 
-// -------------------- Google Drive Helpers --------------------
-function getDrive() {
-  let auth;
+// -------------------- Google APIs --------------------
+function getAuth() {
   if (GOOGLE_CREDENTIALS_JSON) {
-    const creds = JSON.parse(GOOGLE_CREDENTIALS_JSON);
-    auth = new google.auth.GoogleAuth({
-      credentials: creds,
-      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-    });
+    return new google.auth.GoogleAuth({ credentials: JSON.parse(GOOGLE_CREDENTIALS_JSON), scopes: ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/presentations.readonly", "https://www.googleapis.com/auth/spreadsheets.readonly"] });
   } else if (GOOGLE_KEYFILE) {
-    auth = new google.auth.GoogleAuth({
-      keyFile: GOOGLE_KEYFILE,
-      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-    });
-  } else {
-    throw new Error(
-      "Missing Google credentials. Set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CREDENTIALS_JSON."
-    );
+    return new google.auth.GoogleAuth({ keyFile: GOOGLE_KEYFILE, scopes: ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/presentations.readonly", "https://www.googleapis.com/auth/spreadsheets.readonly"] });
   }
-  return google.drive({ version: "v3", auth });
+  throw new Error("Google credentials missing");
 }
+function getDrive() { return google.drive({ version: "v3", auth: getAuth() }); }
+function getSlides() { return google.slides({ version: "v1", auth: getAuth() }); }
+function getSheets() { return google.sheets({ version: "v4", auth: getAuth() }); }
 
-/** Lists direct subfolders under the DRIVE_ROOT_FOLDER_ID; each is a "client library". */
 async function listClientFolders() {
   if (!DRIVE_ROOT_FOLDER_ID) return [];
   try {
     const drive = getDrive();
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-    const r = await drive.files.list({
-      q,
-      fields: "files(id, name)",
-      pageSize: 200,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
-    return (r.data.files || []).map((f) => ({ id: f.id, name: f.name }));
-  } catch (e) {
-    console.error("[drive] listClientFolders:", e?.message || e);
-    return [];
-  }
+    const r = await drive.files.list({ q, fields: "files(id,name)", pageSize: 200, supportsAllDrives:true, includeItemsFromAllDrives:true });
+    return (r.data.files || []).map(f => ({ id:f.id, name:f.name }));
+  } catch (e) { console.error(e); return []; }
 }
 async function driveFolderExists(folderId) {
-  if (!folderId) return false;
   const list = await listClientFolders();
-  return list.some((f) => f.id === folderId);
+  return list.some(x => x.id === folderId);
 }
 
-// -------------------- Middleware --------------------
+// Recursively list files inside a client folder
+async function listAllFilesUnder(folderId) {
+  const drive = getDrive();
+  const folders = [folderId];
+  const files = [];
+  while (folders.length) {
+    const cur = folders.pop();
+    const r = await drive.files.list({
+      q: `'${cur}' in parents and trashed=false`,
+      fields: "files(id,name,mimeType,webViewLink,modifiedTime)",
+      pageSize: 1000,
+      supportsAllDrives:true, includeItemsFromAllDrives:true
+    });
+    for (const f of r.data.files || []) {
+      if (f.mimeType === "application/vnd.google-apps.folder") folders.push(f.id);
+      else files.push(f);
+    }
+  }
+  return files;
+}
+
+// Extract text from Google file types
+async function extractTextFromFile(file) {
+  const drive = getDrive();
+  const slides = getSlides();
+  const sheets = getSheets();
+
+  // Google Docs
+  if (file.mimeType === "application/vnd.google-apps.document") {
+    const r = await drive.files.export({ fileId: file.id, mimeType: "text/plain" }, { responseType: "arraybuffer" });
+    return Buffer.from(r.data).toString("utf8");
+  }
+  // Google Slides → use Slides API to read text elements
+  if (file.mimeType === "application/vnd.google-apps.presentation") {
+    const p = await slides.presentations.get({ presentationId: file.id });
+    const pages = p.data.slides || [];
+    let out = [];
+    for (const page of pages) {
+      for (const el of page.pageElements || []) {
+        const text = el.shape?.text?.textElements || [];
+        const s = text.map(t => t.textRun?.content || "").join("");
+        if (s.trim()) out.push(s.trim());
+      }
+    }
+    return out.join("\n\n");
+  }
+  // Google Sheets (basic) → read first N rows from each sheet
+  if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
+    const s = await sheets.spreadsheets.get({ spreadsheetId: file.id });
+    const sheetsList = s.data.sheets || [];
+    const ranges = sheetsList.slice(0, 3).map(sh => `'${sh.properties.title}'!A1:Z100`);
+    if (!ranges.length) return "";
+    const vals = await sheets.spreadsheets.values.batchGet({ spreadsheetId: file.id, ranges });
+    const blocks = (vals.data.valueRanges || []).map(v => (v.values || []).map(row => row.join(", ")).join("\n"));
+    return blocks.filter(Boolean).join("\n\n");
+  }
+  // PDFs (download then pdf-parse)
+  if (file.mimeType === "application/pdf") {
+    const r = await drive.files.get({ fileId: file.id, alt: "media" }, { responseType: "arraybuffer" });
+    const buf = Buffer.from(r.data);
+    const parsed = await pdf(buf);
+    return parsed.text || "";
+  }
+
+  // Unsupported types for now
+  return "";
+}
+
+function chunkText(txt, maxLen = 1800) {
+  const out = [];
+  let i = 0;
+  while (i < txt.length) {
+    out.push(txt.slice(i, i + maxLen));
+    i += maxLen;
+  }
+  return out;
+}
+
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+async function embedTexts(texts) {
+  if (!texts?.length) return [];
+  const resp = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: texts });
+  return resp.data.map(d => d.embedding);
+}
+async function pineconeUpsert(vectors, namespace) {
+  const r = await fetch(`${PINECONE_INDEX_HOST}/vectors/upsert`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
+    body: JSON.stringify({ vectors, namespace })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function pineconeQuery(vector, namespace, topK = DEFAULT_TOPK) {
+  const r = await fetch(`${PINECONE_INDEX_HOST}/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
+    body: JSON.stringify({ vector, topK, includeMetadata: true, namespace })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+const sanitize = s => String(s||"").replace(/[^\w\-:.]/g, "_").slice(0,128);
+
+// -------------------- Auth Helpers --------------------
 function requireSession(req, res, next) {
-  // Permit header token for ingestion only
   const token = req.get("x-auth-token");
   if (token && token === AUTH_TOKEN) return next();
   if (req.session?.user) return next();
@@ -188,330 +227,169 @@ function requireInternal(req, res, next) {
 }
 
 // -------------------- Pages --------------------
-app.get("/", (req, res) => {
-  if (!req.session?.user) return res.redirect("/login.html");
-  res.sendFile(path.resolve("public/index.html"));
-});
-app.get("/admin", (req, res) => {
-  if (!req.session?.user) return res.redirect("/login.html");
-  if (req.session.user.role !== "internal") return res.redirect("/");
-  res.sendFile(path.resolve("public/admin.html"));
-});
+app.get("/", (req,res)=>{ if(!req.session?.user) return res.redirect("/login.html"); res.sendFile(path.resolve("public/index.html")); });
+app.get("/admin", (req,res)=>{ if(!req.session?.user) return res.redirect("/login.html"); if(req.session.user.role!=="internal") return res.redirect("/"); res.sendFile(path.resolve("public/admin.html")); });
 
 // -------------------- Auth APIs --------------------
-app.post("/auth/login", async (req, res) => {
-  try {
-    const { username, password /* selectedClientId (unused in new UI) */ } = req.body || {};
-    const usersDoc = readJSON(USERS_PATH, { users: [] });
-    const found = usersDoc.users.find((u) => u.username === username);
+app.post("/auth/login", async (req,res)=>{
+  try{
+    const { username, password } = req.body || {};
+    const users = readJSON(USERS_PATH, { users: [] }).users;
+    const found = users.find(u => u.username === username);
     if (!found) return res.status(401).json({ error: "Invalid credentials" });
-
-    const ok = await bcrypt.compare(String(password || ""), String(found.passwordHash || ""));
+    const ok = await bcrypt.compare(String(password||""), String(found.passwordHash||""));
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
-
-    req.session.user = {
-      username: found.username,
-      role: found.role,
-      allowed: found.allowedClients,
-    };
-
-    // Pick an active client for the session:
+    req.session.user = { username: found.username, role: found.role, allowed: found.allowedClients };
     if (found.role === "internal") {
       const folders = await listClientFolders();
-      req.session.activeClientId = folders[0]?.id || null; // choose first available
+      req.session.activeClientId = folders[0]?.id || null;
     } else {
       const allowed = found.allowedClients;
       req.session.activeClientId = Array.isArray(allowed) ? allowed[0] : allowed || null;
     }
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("[auth/login] error:", e?.message || e);
-    res.status(500).json({ error: "Login failed" });
-  }
+    res.json({ ok:true });
+  } catch(e){ res.status(500).json({ error:"Login failed" }); }
 });
-
-app.post("/auth/logout", (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
+app.post("/auth/logout",(req,res)=>{ req.session.destroy(()=>res.json({ok:true})); });
+app.get("/me", async (req,res)=>{
+  if(!req.session?.user) return res.status(401).json({ error:"Not signed in" });
+  const clients = await listClientFolders();
+  res.json({ user:req.session.user, activeClientId:req.session.activeClientId||null, clients });
 });
-
-app.get("/me", async (req, res) => {
-  if (!req.session?.user) return res.status(401).json({ error: "Not signed in" });
-  try {
-    const clients = await listClientFolders();
-    res.json({
-      user: req.session.user,
-      activeClientId: req.session.activeClientId || null,
-      clients,
-    });
-  } catch (e) {
-    res.status(200).json({
-      user: req.session.user,
-      activeClientId: req.session.activeClientId || null,
-      clients: [],
-      warning: "Could not list Drive folders. Check DRIVE_ROOT_FOLDER_ID and credentials.",
-    });
-  }
-});
-
-// Internal users can switch the active client
-app.post("/auth/switch-client", requireSession, requireInternal, async (req, res) => {
+app.post("/auth/switch-client", requireSession, requireInternal, async (req,res)=>{
   const { clientId } = req.body || {};
-  if (!(await driveFolderExists(clientId))) {
-    return res.status(400).json({ error: "Unknown clientId (not found under Drive root)" });
-  }
+  if (!(await driveFolderExists(clientId))) return res.status(400).json({ error:"Unknown clientId" });
   req.session.activeClientId = clientId;
-  res.json({ ok: true });
+  res.json({ ok:true });
 });
+app.get("/clients/drive-folders", async (_req,res)=>{ res.json(await listClientFolders()); });
 
-// Public helper to show available client libraries on login if needed elsewhere
-app.get("/clients/drive-folders", async (_req, res) => {
-  const folders = await listClientFolders();
-  res.json(folders);
-});
-
-// -------------------- Admin APIs (internal only) --------------------
-// List users (scrub hash)
-app.get("/admin/users/list", requireSession, requireInternal, (_req, res) => {
+// -------------------- Admin APIs --------------------
+app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
   const usersDoc = readJSON(USERS_PATH, { users: [] });
-  const scrubbed = usersDoc.users.map((u) => ({
-    username: u.username,
-    role: u.role,
-    allowedClients: u.allowedClients,
-  }));
-  res.json(scrubbed);
+  res.json(usersDoc.users.map(u => ({ username:u.username, role:u.role, allowedClients:u.allowedClients })));
 });
-
-// Create client user with username/password/confirm + clientFolderId
-app.post("/admin/users/create", requireSession, requireInternal, async (req, res) => {
-  try {
+app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
+  try{
     const { username, password, confirmPassword, clientFolderId } = req.body || {};
-    if (!username || !password || !confirmPassword || !clientFolderId) {
-      return res
-        .status(400)
-        .json({ error: "username, password, confirmPassword, and clientFolderId are required" });
-    }
-    if (password !== confirmPassword) {
-      return res.status(400).json({ error: "Passwords do not match" });
-    }
-    if (!(await driveFolderExists(clientFolderId))) {
-      return res.status(400).json({ error: "Unknown client folder under Drive root" });
-    }
-
+    if (!username || !password || !confirmPassword || !clientFolderId) return res.status(400).json({ error:"username, password, confirmPassword, clientFolderId required" });
+    if (password !== confirmPassword) return res.status(400).json({ error:"Passwords do not match" });
+    if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
     const usersDoc = readJSON(USERS_PATH, { users: [] });
-    if (usersDoc.users.some((u) => u.username === username)) {
-      return res.status(400).json({ error: "Username already exists" });
-    }
-
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    usersDoc.users.push({
-      username,
-      passwordHash,
-      role: "client",
-      allowedClients: clientFolderId,
-    });
+    if (usersDoc.users.some(u => u.username === username)) return res.status(400).json({ error:"Username exists" });
+    usersDoc.users.push({ username, passwordHash: await bcrypt.hash(String(password),10), role:"client", allowedClients: clientFolderId });
     writeJSON(USERS_PATH, usersDoc);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("[admin/users/create] error:", e?.message || e);
-    res.status(500).json({ error: "Failed to create user" });
-  }
+    res.json({ ok:true });
+  }catch(e){ res.status(500).json({ error:"Failed to create user" }); }
 });
 
-// -------------------- RAG Helpers --------------------
-if (!OPENAI_API_KEY) console.warn("[warn] OPENAI_API_KEY not set");
-if (!PINECONE_API_KEY) console.warn("[warn] PINECONE_API_KEY not set");
-if (!PINECONE_INDEX_HOST) console.warn("[warn] PINECONE_INDEX_HOST not set");
-if (!DRIVE_ROOT_FOLDER_ID) console.warn("[warn] DRIVE_ROOT_FOLDER_ID not set");
+// NEW: Ingest entire client library from Drive
+app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res)=>{
+  try{
+    const clientId = req.body?.clientId || req.session.activeClientId;
+    if (!clientId) return res.status(400).json({ error:"clientId required" });
+    if (!(await driveFolderExists(clientId))) return res.status(400).json({ error:"Unknown clientId" });
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-async function embedTexts(texts) {
-  if (!texts?.length) return [];
-  const resp = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: texts,
-  });
-  return resp.data.map((d) => d.embedding);
-}
-
-async function pineconeUpsert(vectors, namespace) {
-  const r = await fetch(`${PINECONE_INDEX_HOST}/vectors/upsert`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
-    body: JSON.stringify({ vectors, namespace }),
-  });
-  if (!r.ok) {
-    const detail = await r.text();
-    throw new Error(`Pinecone upsert failed: ${r.status} ${r.statusText} — ${detail}`);
-  }
-  return r.json();
-}
-
-async function pineconeQuery(vector, namespace, topK = DEFAULT_TOPK) {
-  const r = await fetch(`${PINECONE_INDEX_HOST}/query`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
-    body: JSON.stringify({
-      vector,
-      topK,
-      includeMetadata: true,
-      namespace,
-    }),
-  });
-  if (!r.ok) {
-    const detail = await r.text();
-    throw new Error(`Pinecone query failed: ${r.status} ${r.statusText} — ${detail}`);
-  }
-  return r.json();
-}
-
-function sanitizeIdPart(s) {
-  return String(s || "").replace(/[^\w\-:.]/g, "_").slice(0, 128);
-}
-
-// -------------------- Ingestion --------------------
-app.post("/upsert-chunks", requireSession, async (req, res) => {
-  const headerToken = req.get("x-auth-token");
-  const isInternal = req.session?.user?.role === "internal";
-  if (!isInternal && headerToken !== AUTH_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  try {
-    const { clientId, fileName, fileUrl, study, date, chunks } = req.body || {};
-    if (!clientId || !Array.isArray(chunks) || !chunks.length) {
-      return res.status(400).json({ error: "clientId and chunks[] are required" });
-    }
-    // Confirm clientId maps to a Drive client folder (prevents typos creating stray namespaces)
-    if (!(await driveFolderExists(clientId))) {
-      return res.status(400).json({ error: "Unknown clientId (not a Drive client folder)" });
+    const files = await listAllFilesUnder(clientId);
+    const supported = [];
+    const skipped = [];
+    for (const f of files) {
+      if ([
+        "application/vnd.google-apps.document",
+        "application/vnd.google-apps.presentation",
+        "application/vnd.google-apps.spreadsheet",
+        "application/pdf"
+      ].includes(f.mimeType)) supported.push(f);
+      else skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType });
     }
 
-    const texts = chunks.map((c) => String(c.text || ""));
-    const embs = await embedTexts(texts);
+    let totalChunks = 0, upserted = 0, errors = [];
+    for (const f of supported) {
+      try{
+        const text = (await extractTextFromFile(f)) || "";
+        if (!text.trim()) { skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"no text" }); continue; }
+        const chunks = chunkText(text, 1800).map((t,i)=>({ idSuffix:i, text:t }));
+        totalChunks += chunks.length;
 
-    const vectors = embs.map((vec, i) => ({
-      id: `${sanitizeIdPart(clientId)}:${sanitizeIdPart(fileName || "file")}:${sanitizeIdPart(
-        chunks[i].idSuffix ?? i
-      )}`,
-      values: vec,
-      metadata: {
-        clientId,
-        fileName: fileName || "",
-        fileUrl: fileUrl || "",
-        study: study || "",
-        date: date || "",
-        chunkIndex: String(chunks[i].idSuffix ?? i),
-        text: texts[i].slice(0, 4000),
-      },
-    }));
+        const embeddings = await embedTexts(chunks.map(c=>c.text));
+        const vectors = embeddings.map((vec,i)=>({
+          id: `${sanitize(clientId)}:${sanitize(f.name)}:${sanitize(chunks[i].idSuffix)}`,
+          values: vec,
+          metadata: {
+            clientId,
+            fileName: f.name,
+            fileUrl: f.webViewLink || "",
+            study: f.name,
+            date: f.modifiedTime || "",
+            chunkIndex: String(chunks[i].idSuffix),
+            text: chunks[i].text.slice(0,4000)
+          }
+        }));
+        await pineconeUpsert(vectors, clientId);
+        upserted += vectors.length;
+      }catch(e){ errors.push({ file:f.name, msg: String(e?.message||e) }); }
+    }
 
-    const up = await pineconeUpsert(vectors, clientId);
-    res.json({ ok: true, upserted: up });
-  } catch (e) {
-    console.error("[upsert-chunks] error:", e?.message || e);
-    res.status(500).json({ error: "Failed to upsert", detail: String(e?.message || e) });
+    res.json({ ok:true, filesSeen: files.length, filesIngested: supported.length, totalChunks, upserted, skipped, errors });
+  }catch(e){
+    res.status(500).json({ error:"Failed to ingest", detail:String(e?.message||e) });
   }
 });
 
 // -------------------- Search --------------------
-app.post("/search", requireSession, async (req, res) => {
-  try {
+const openaiClient = new OpenAI({ apiKey: OPENAI_API_KEY });
+app.post("/search", requireSession, async (req,res)=>{
+  try{
     const headerToken = req.get("x-auth-token");
     const usingToken = headerToken && headerToken === AUTH_TOKEN;
 
     const user = req.session?.user;
     const body = req.body || {};
+    const clientId = body.clientId || req.session.activeClientId || null;
+    if (!clientId) return res.status(400).json({ error:"clientId missing" });
 
-    // Determine namespace (client library)
-    let clientId = body.clientId || req.session?.activeClientId || null;
-    if (!clientId) return res.status(400).json({ error: "clientId missing" });
-
-    // Enforce client-user restrictions (internal can access any)
     if (!usingToken && user?.role !== "internal") {
       const usersDoc = readJSON(USERS_PATH, { users: [] });
-      const u = usersDoc.users.find((x) => x.username === user.username);
+      const u = usersDoc.users.find(x => x.username === user.username);
       const allowed = u?.allowedClients;
-      const permitted =
-        allowed === "*" ||
-        (Array.isArray(allowed) && allowed.includes(clientId)) ||
-        allowed === clientId;
-      if (!permitted) return res.status(403).json({ error: "Client not allowed" });
+      const permitted = allowed === "*" || (Array.isArray(allowed) && allowed.includes(clientId)) || allowed === clientId;
+      if (!permitted) return res.status(403).json({ error:"Client not allowed" });
     }
 
     const userQuery = String(body.userQuery || "").trim();
-    if (!userQuery) return res.status(400).json({ error: "userQuery required" });
+    if (!userQuery) return res.status(400).json({ error:"userQuery required" });
 
-    // Embed query -> Pinecone similarity
     const [qEmb] = await embedTexts([userQuery]);
     const out = await pineconeQuery(qEmb, clientId, DEFAULT_TOPK);
     const matches = Array.isArray(out.matches) ? out.matches : [];
 
-    const refs = matches.map((m) => ({
+    const refs = matches.map(m => ({
       id: m.id,
       score: m.score,
       fileName: m.metadata?.fileName || "",
       fileUrl: m.metadata?.fileUrl || "",
       study: m.metadata?.study || "",
       date: m.metadata?.date || "",
-      textSnippet: (m.metadata?.text || "").slice(0, 500),
+      textSnippet: (m.metadata?.text || "").slice(0, 500)
     }));
 
-    // Build concise, cited answer
-    const sys =
-      "You are a pharma market research assistant. Answer strictly from the provided context. Use bracketed numeric citations like [1], [2] that map to the order of provided references. Be concise and factual.";
-    const contextBlocks = refs
-      .map(
-        (r, i) => `[${i + 1}] (${r.study || r.fileName} ${r.date || ""}) ${r.textSnippet}`
-      )
-      .join("\n\n");
-    const prompt = `Question: ${userQuery}
+    const sys = "You are a pharma market research assistant. Answer strictly from the provided context. Use bracketed numeric citations like [1], [2] mapping to references order.";
+    const ctx = refs.map((r,i)=>`[${i+1}] (${r.study || r.fileName} ${r.date||""}) ${r.textSnippet}`).join("\n\n");
+    const prompt = `Question: ${userQuery}\n\nContext:\n${ctx}\n\nWrite a 4–7 sentence answer summarizing the most relevant facts, with [#] citations.`;
 
-Context:
-${contextBlocks}
-
-Write a 4–7 sentence answer summarizing the most relevant facts, with [#] citations. If the context is insufficient, say so.`.trim();
-
-    const chat = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.2,
-    });
-
+    const chat = await openaiClient.chat.completions.create({ model: ANSWER_MODEL, messages:[{role:"system",content:sys},{role:"user",content:prompt}], temperature:0.2 });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "I don't have enough information.";
 
-    res.json({
-      answer,
-      references: { chunks: refs },
-      visuals: [],
-    });
-  } catch (e) {
-    console.error("[search] error:", e?.message || e);
-    res.status(500).json({ error: "Search failed", detail: String(e?.message || e) });
+    res.json({ answer, references:{ chunks: refs }, visuals:[] });
+  }catch(e){
+    res.status(500).json({ error:"Search failed", detail:String(e?.message||e) });
   }
 });
 
-// -------------------- Health & Errors --------------------
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// -------------------- Health --------------------
+app.get("/health", (_req,res)=>res.json({ok:true}));
 
-// 404
-app.use((_req, res) => {
-  res.status(404).json({ error: "Not found" });
-});
-
-// Error handler
-// eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
-  console.error("[unhandled]", err?.stack || err);
-  res.status(500).json({ error: "Internal error" });
-});
-
-// -------------------- Start --------------------
-app.listen(PORT, () => {
+app.listen(PORT, ()=>{
   console.log(`mr-broker running on :${PORT}`);
   if (!OPENAI_API_KEY) console.warn("[boot] OPENAI_API_KEY missing");
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
