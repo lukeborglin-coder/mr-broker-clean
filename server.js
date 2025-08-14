@@ -1,6 +1,6 @@
 // server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
-// Fixes: defines chunkText() and uses it correctly (resolves "chunkText is not defined")
-// Adds: auto-tagging (month/year/report) on ingest; friendly ingest response; recency-aware result sorting.
+// Adds: "Secondary Information" web search results in /search; maps 'internal' -> 'admin' in /me
+// Fixes: defines chunkText() and uses it correctly; robust ingest + tags (month/year/report)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -382,11 +382,21 @@ app.post("/auth/login", async (req,res)=>{
   }
 });
 app.post("/auth/logout",(req,res)=>{ req.session.destroy(()=>res.json({ok:true})); });
+
+// NOTE: Map 'internal' -> 'admin' in the /me response for the UI label
 app.get("/me", async (req,res)=>{
   if(!req.session?.user) return res.status(401).json({ error:"Not signed in" });
   const clients = await listClientFolders();
-  res.json({ user:req.session.user, activeClientId:req.session.activeClientId||null, clients });
+  const me = req.session.user;
+  const roleLabel = me.role === "internal" ? "admin" : me.role;
+  // Return a clean user object (avoid leaking 'allowed' etc.)
+  res.json({
+    user: { username: me.username, role: roleLabel },
+    activeClientId: req.session.activeClientId || null,
+    clients
+  });
 });
+
 app.post("/auth/switch-client", requireSession, requireInternal, async (req,res)=>{
   const { clientId } = req.body || {};
   if (!(await driveFolderExists(clientId))) return res.status(400).json({ error:"Unknown clientId" });
@@ -513,6 +523,53 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
   }
 });
 
+// -------------------- Secondary search (no API key) --------------------
+// Focuses on reputable medical/public-health domains
+async function fetchSecondaryInfo(query, max = 5) {
+  const whitelist =
+    "site:fda.gov OR site:ncbi.nlm.nih.gov OR site:who.int OR site:cdc.gov OR site:nejm.org OR site:bmj.com OR site:nature.com OR site:thelancet.com";
+  const url = "https://duckduckgo.com/html/?q=" + encodeURIComponent(`${query} ${whitelist}`);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari",
+      },
+      redirect: "follow",
+    });
+    const html = await res.text();
+
+    const items = [];
+    const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    const snipRe = /<a[^>]*class="[^"]*result__snippet"[^>]*>([\s\S]*?)<\/a>|<a[^>]*>[\s\S]*?<\/a>\s*-\s*<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
+
+    let m;
+    const links = [];
+    while ((m = linkRe.exec(html)) && links.length < max * 2) {
+      const url = m[1].replace(/&amp;/g, "&");
+      const title = m[2].replace(/<[^>]+>/g, "").trim();
+      if (url && title) links.push({ url, title });
+    }
+
+    const snippets = [];
+    let s;
+    while ((s = snipRe.exec(html)) && snippets.length < links.length) {
+      const snippet = (s[1] || s[2] || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      if (snippet) snippets.push(snippet);
+    }
+
+    const out = [];
+    for (let i = 0; i < links.length && out.length < max; i++) {
+      out.push({ title: links[i].title, url: links[i].url, snippet: snippets[i] || "" });
+    }
+    return out;
+  } catch (e) {
+    console.error("[secondary] failed:", e);
+    return [];
+  }
+}
+
 // -------------------- Search --------------------
 app.post("/search", requireSession, async (req,res)=>{
   try{
@@ -528,10 +585,13 @@ app.post("/search", requireSession, async (req,res)=>{
 
     const result = await pineconeQuery(vec, clientId, DEFAULT_TOPK);
     let matches = Array.isArray(result.matches) ? result.matches : [];
-    if (!matches.length) return res.json({ answer:"", references:{ chunks:[] }, visuals:[] });
+    if (!matches.length) {
+      // Still attach secondary (web) results for context
+      const secondary = await fetchSecondaryInfo(q, 5);
+      return res.json({ answer:"", references:{ chunks:[] }, visuals:[], secondary });
+    }
 
     // Recency-aware sort (use tags if present)
-    const now = Date.now();
     const maxEpoch = Math.max(...matches.map(m => Number(m.metadata?.recencyEpoch || 0)), 0);
     matches = matches
       .map(m => {
@@ -567,7 +627,10 @@ app.post("/search", requireSession, async (req,res)=>{
     });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "";
 
-    res.json({ answer, references: { chunks: refs }, visuals: [] });
+    // NEW: add secondary web info (up to 5)
+    const secondary = await fetchSecondaryInfo(q, 5);
+
+    res.json({ answer, references: { chunks: refs }, visuals: [], secondary });
   }catch(e){
     res.status(500).json({ error:"Search failed", detail:String(e?.message||e) });
   }
