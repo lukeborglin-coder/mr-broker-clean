@@ -1,0 +1,10 @@
+{
+  "users": [
+    {
+      "username": "cognitive_internal",
+      "passwordHash": "$2b$10$d4Ulzzx9nGf/ClBCgQTW6.12lZAtiwvTuKgA3BBVnSe6onWG6Nvpe",
+      "role": "internal",
+      "allowedClients": "*"
+    }
+  ]
+}
