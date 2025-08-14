@@ -6,7 +6,7 @@
   <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-    :root { --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; }
+    :root { --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; --soft:#fff7ed; --soft-border:#ffead6; }
     *{box-sizing:border-box}
     body { margin:0; background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
 
@@ -16,23 +16,22 @@
     .brand { font-weight:800; letter-spacing:.1px; }
     .beta { font-size:.9rem; color:var(--muted); font-weight:500; margin-left:6px; }
     .nav { display:flex; align-items:center; gap:10px; }
+    #who { color:var(--muted); }
 
     /* Buttons */
     .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:10px; font-weight:700; cursor:pointer; text-decoration:none; }
     .btn.small { padding:10px 14px; font-size:.92rem; line-height:1; height:40px; }
-    /* Admin + Sign out: white boxes, orange on hover */
     .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
     .btn.ghost:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
-    /* Ask button: orange with white text */
     .btn.primary { background:var(--brand); color:#fff; border:0; padding:16px 22px; border-radius:18px; }
 
-    /* Page layout */
+    /* Layout */
     main { max-width:960px; margin: 56px auto; padding: 0 16px; }
     .hero { text-align:center; margin: 8px 0 8px; }
     .hero h1 { font-size:34px; margin:0 0 6px 0; }
     .hero p { margin:0; color:var(--muted); }
 
-    /* Client selector (no surrounding box) */
+    /* Client selector (between title & prompt) */
     .client-wrap { display:none; text-align:center; margin: 16px 0 6px; }
     .client-wrap label { display:block; font-size:0.95rem; color:var(--muted); margin-bottom:6px; }
     select { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:12px; padding:10px 12px; min-width:260px; font-size:1rem; }
@@ -41,10 +40,18 @@
     .askbox { display:flex; gap:12px; width:100%; margin:18px auto 0; }
     .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#f6faff; color:var(--ink); }
 
-    /* Results */
+    /* Panels */
     .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
+    .panel h3 { margin:0 0 8px 0; font-size:0.95rem; color:var(--muted); font-weight:600; }
+
+    /* Orange "Answer" box */
+    .answer-panel { background:var(--soft); border-color:var(--soft-border); }
+    .answer-body { white-space:pre-wrap; line-height:1.55; font-size:1.02rem; }
+
+    /* Supporting refs grid */
     .refs { display:grid; gap:10px; }
-    .ref { border:1px solid var(--line); border-radius:12px; padding:10px; }
+    .ref { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; }
+    .ref small { color:var(--muted); }
     a.link { color:#0b57d0; text-decoration:none; }
     .muted { color:var(--muted); }
 
@@ -61,7 +68,7 @@
         <span class="brand">COGgpt</span><span class="beta">(BETA)</span>
       </div>
       <div class="nav">
-        <div id="who" class="muted"></div>
+        <div id="who"></div>
         <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
         <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
       </div>
@@ -74,7 +81,7 @@
       <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
     </div>
 
-    <!-- Client dropdown (between title and prompt) -->
+    <!-- Client dropdown -->
     <div class="client-wrap" id="clientWrap">
       <label for="client">Client library</label>
       <select id="client"></select>
@@ -88,12 +95,13 @@
     <div id="msg" class="msg"></div>
 
     <div id="out" style="display:none;">
-      <div class="panel">
-        <div class="muted" style="margin-bottom:6px;">Answer</div>
-        <div id="answer" style="white-space:pre-wrap; line-height:1.5;"></div>
+      <div id="answerPanel" class="panel answer-panel" style="display:none;">
+        <h3>Answer</h3>
+        <div id="answer" class="answer-body"></div>
       </div>
-      <div class="panel">
-        <div class="muted" style="margin-bottom:6px;">References</div>
+
+      <div id="supportPanel" class="panel" style="display:none;">
+        <h3>Supporting passages</h3>
         <div id="refs" class="refs"></div>
       </div>
     </div>
@@ -111,12 +119,9 @@ async function boot() {
     location.href = '/login.html'; return;
   }
   const { user, activeClientId, clients } = me;
-
-  // username, then Admin, then Sign out
   document.getElementById('who').textContent = user.username + (user.role==='internal'?' (internal)':'');
   if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline-flex';
 
-  // Populate client dropdown and show only for internal
   const wrap = document.getElementById('clientWrap');
   const clientSel = document.getElementById('client');
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
@@ -135,6 +140,33 @@ function showError(m){ const el = document.getElementById('msg'); el.className =
 function showInfo(m){ const el = document.getElementById('msg'); el.className = 'msg info'; el.textContent = m; }
 function clearMsg(){ const el = document.getElementById('msg'); el.className = 'msg'; el.textContent = ''; }
 
+function renderResults(resp){
+  const refs = resp.references?.chunks || [];
+  const answer = (resp.answer || '').trim();
+  document.getElementById('out').style.display = 'block';
+
+  // Show/hide answer
+  if (answer) {
+    document.getElementById('answer').textContent = answer;
+    document.getElementById('answerPanel').style.display = 'block';
+  } else {
+    document.getElementById('answerPanel').style.display = 'none';
+  }
+
+  // Supporting passages
+  if (refs.length) {
+    document.getElementById('supportPanel').style.display = 'block';
+    document.getElementById('refs').innerHTML = refs.map((r,i) => `
+      <div class="ref">
+        <div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div>
+        <small>${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">open source</a>`:''}</small>
+        <div class="muted" style="margin-top:6px">${r.textSnippet||''}</div>
+      </div>`).join('');
+  } else {
+    document.getElementById('supportPanel').style.display = 'none';
+  }
+}
+
 async function doAsk() {
   clearMsg();
   const q = document.getElementById('q').value.trim();
@@ -147,24 +179,19 @@ async function doAsk() {
   try {
     const resp = await jpost('/search', body);
     const refs = resp.references?.chunks || [];
-    if (!refs.length) {
+    if (!refs.length && !resp.answer) {
       const suffix = (me?.user?.role === 'internal')
         ? " Try Admin → Update Client Library to ingest files from Drive, then ask again."
         : "";
       showInfo("No matching passages found." + suffix);
+    } else {
+      clearMsg();
     }
-    document.getElementById('out').style.display = 'block';
-    document.getElementById('answer').textContent = resp.answer || 'No answer';
-    document.getElementById('refs').innerHTML = refs.map((r,i) => `
-      <div class="ref">
-        <div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div>
-        <div class="muted" style="margin-top:4px">${r.textSnippet||''}</div>
-        <div style="margin-top:6px">${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">Open source</a>`:''}</div>
-      </div>`).join('');
+    renderResults(resp);
   } catch (e) {
     const msg = String(e);
     if (msg.includes('/query') && msg.toLowerCase().includes('parse url')) {
-      showError("Search failed: your Pinecone host is not a full https URL. In Pinecone → your index → Connection details, copy the Host value into the PINECONE_INDEX_HOST environment variable, then redeploy.");
+      showError("Search failed: your Pinecone host is not a full https URL. Set PINECONE_INDEX_HOST to the full https host and redeploy.");
     } else {
       showError('Search failed: ' + msg);
     }
