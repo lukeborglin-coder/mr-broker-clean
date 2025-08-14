@@ -1,0 +1,14 @@
+{
+  "clients": [
+    {
+      "id": "demo",
+      "name": "Demo Client",
+      "driveFolderId": "",
+      "subfolders": {
+        "reports": "",
+        "dataFiles": "",
+        "qnrs": ""
+      }
+    }
+  ]
+}
