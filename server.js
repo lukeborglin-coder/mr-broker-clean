@@ -1,5 +1,9 @@
 // server.js — login/session + Google Drive client libraries + RAG search
-// IMPORTANT: If no Pinecone matches are found, we DO NOT generate an answer.
+// Changes:
+// - Default EMBEDDING_MODEL -> text-embedding-3-small (1536)
+// - Internal users NO LONGER get an auto-selected client
+// - /admin/ingest-client returns friendly per-file lists (ingested/skipped/errors) and a summary
+// - Optional PDF support via dynamic import (no static pdf-parse import)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +24,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || "change-me";
 const AUTH_TOKEN = process.env.AUTH_TOKEN || "dev-auth-token";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-large";
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536 dims
 const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-4o-mini";
 const DEFAULT_TOPK = Number(process.env.DEFAULT_TOPK || 6);
 
@@ -147,12 +151,10 @@ async function extractTextFromFile(file) {
   const slides = getSlides();
   const sheets = getSheets();
 
-  // Google Docs
   if (file.mimeType === "application/vnd.google-apps.document") {
     const r = await drive.files.export({ fileId: file.id, mimeType: "text/plain" }, { responseType: "arraybuffer" });
     return Buffer.from(r.data).toString("utf8");
   }
-  // Google Slides → use Slides API to read text elements
   if (file.mimeType === "application/vnd.google-apps.presentation") {
     const p = await slides.presentations.get({ presentationId: file.id });
     const pages = p.data.slides || [];
@@ -166,7 +168,6 @@ async function extractTextFromFile(file) {
     }
     return out.join("\n\n");
   }
-  // Google Sheets (basic): read first ~100 rows per sheet, up to 3 sheets
   if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
     const s = await sheets.spreadsheets.get({ spreadsheetId: file.id });
     const sheetsList = s.data.sheets || [];
@@ -176,23 +177,37 @@ async function extractTextFromFile(file) {
     const blocks = (vals.data.valueRanges || []).map(v => (v.values || []).map(row => row.join(", ")).join("\n"));
     return blocks.filter(Boolean).join("\n\n");
   }
-  // PDFs are optional (skipped here to keep deploy simple)
   return "";
+}
+
+// Optional PDF extractor (dynamic import)
+async function tryExtractPdfText(file) {
+  try {
+    const { default: pdfParse } = await import("pdf-parse");
+    const drive = getDrive();
+    const r = await drive.files.get({ fileId: file.id, alt: "media" }, { responseType: "arraybuffer" });
+    const buf = Buffer.from(r.data);
+    const parsed = await pdfParse(buf);
+    return parsed.text || "";
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (msg.includes("Cannot find package 'pdf-parse'")) {
+      throw new Error("PDF support disabled (pdf-parse not installed).");
+    }
+    throw e;
+  }
 }
 
 function chunkText(txt, maxLen = 1800) {
   const out = [];
   let i = 0;
-  while (i < txt.length) {
-    out.push(txt.slice(i, i + maxLen));
-    i += maxLen;
-  }
+  while (i < txt.length) { out.push(txt.slice(i, i + maxLen)); i += maxLen; }
   return out;
 }
 
-// -------------------- RAG Helpers --------------------
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// -------------------- Pinecone helpers --------------------
 async function embedTexts(texts) {
+  const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
   if (!texts?.length) return [];
   const resp = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: texts });
   return resp.data.map(d => d.embedding);
@@ -215,9 +230,18 @@ async function pineconeQuery(vector, namespace, topK = DEFAULT_TOPK) {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
+async function pineconeDescribe() {
+  const r = await fetch(`${PINECONE_INDEX_HOST}/describe_index_stats`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
+    body: JSON.stringify({})
+  });
+  if (!r.ok) return {};
+  return r.json();
+}
 const sanitize = s => String(s||"").replace(/[^\w\-:.]/g, "_").slice(0,128);
 
-// -------------------- Auth Helpers --------------------
+// -------------------- Auth & pages --------------------
 function requireSession(req, res, next) {
   const token = req.get("x-auth-token");
   if (token && token === AUTH_TOKEN) return next();
@@ -230,11 +254,10 @@ function requireInternal(req, res, next) {
   return res.status(403).json({ error: "Forbidden" });
 }
 
-// -------------------- Pages --------------------
 app.get("/", (req,res)=>{ if(!req.session?.user) return res.redirect("/login.html"); res.sendFile(path.resolve("public/index.html")); });
 app.get("/admin", (req,res)=>{ if(!req.session?.user) return res.redirect("/login.html"); if(req.session.user.role!=="internal") return res.redirect("/"); res.sendFile(path.resolve("public/admin.html")); });
 
-// -------------------- Auth APIs --------------------
+// Login: DO NOT auto-select a client for internal users
 app.post("/auth/login", async (req,res)=>{
   try{
     const { username, password } = req.body || {};
@@ -244,28 +267,31 @@ app.post("/auth/login", async (req,res)=>{
     const ok = await bcrypt.compare(String(password||""), String(found.passwordHash||""));
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
     req.session.user = { username: found.username, role: found.role, allowed: found.allowedClients };
-    if (found.role === "internal") {
-      const folders = await listClientFolders();
-      req.session.activeClientId = folders[0]?.id || null;
-    } else {
+    if (found.role !== "internal") {
       const allowed = found.allowedClients;
       req.session.activeClientId = Array.isArray(allowed) ? allowed[0] : allowed || null;
+    } else {
+      req.session.activeClientId = null; // internal: must choose
     }
     res.json({ ok:true });
   } catch(e){ res.status(500).json({ error:"Login failed" }); }
 });
+
 app.post("/auth/logout",(req,res)=>{ req.session.destroy(()=>res.json({ok:true})); });
+
 app.get("/me", async (req,res)=>{
   if(!req.session?.user) return res.status(401).json({ error:"Not signed in" });
   const clients = await listClientFolders();
   res.json({ user:req.session.user, activeClientId:req.session.activeClientId||null, clients });
 });
+
 app.post("/auth/switch-client", requireSession, requireInternal, async (req,res)=>{
   const { clientId } = req.body || {};
   if (!(await driveFolderExists(clientId))) return res.status(400).json({ error:"Unknown clientId" });
   req.session.activeClientId = clientId;
   res.json({ ok:true });
 });
+
 app.get("/clients/drive-folders", async (_req,res)=>{ res.json(await listClientFolders()); });
 
 // -------------------- Admin APIs --------------------
@@ -273,6 +299,7 @@ app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
   const usersDoc = readJSON(USERS_PATH, { users: [] });
   res.json(usersDoc.users.map(u => ({ username:u.username, role:u.role, allowedClients:u.allowedClients })));
 });
+
 app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
   try{
     const { username, password, confirmPassword, clientFolderId } = req.body || {};
@@ -287,7 +314,7 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
   }catch(e){ res.status(500).json({ error:"Failed to create user" }); }
 });
 
-// Ingest entire client library from Drive (Docs/Slides/Sheets)
+// Ingest entire client library from Drive (Docs/Slides/Sheets + PDFs optional)
 app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = req.body?.clientId || req.session.activeClientId;
@@ -295,30 +322,39 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
     if (!(await driveFolderExists(clientId))) return res.status(400).json({ error:"Unknown clientId" });
 
     const files = await listAllFilesUnder(clientId);
-    const supported = [];
+    const supportedTypes = new Set([
+      "application/vnd.google-apps.document",
+      "application/vnd.google-apps.presentation",
+      "application/vnd.google-apps.spreadsheet",
+      "application/pdf",
+    ]);
+
+    const ingested = [];
     const skipped = [];
+    const errors = [];
+    let totalChunks = 0, upserted = 0;
 
     for (const f of files) {
-      if ([
-        "application/vnd.google-apps.document",
-        "application/vnd.google-apps.presentation",
-        "application/vnd.google-apps.spreadsheet"
-      ].includes(f.mimeType)) supported.push(f);
-      else skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"unsupported type" });
-    }
+      if (!supportedTypes.has(f.mimeType)) {
+        skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"unsupported type" });
+        continue;
+      }
 
-    let totalChunks = 0, upserted = 0, errors = [];
-    for (const f of supported) {
       try{
-        const text = (await extractTextFromFile(f)) || "";
+        let text = "";
+        if (f.mimeType === "application/pdf") {
+          try { text = await tryExtractPdfText(f); }
+          catch (e) { skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:String(e?.message||e) }); continue; }
+        } else {
+          text = (await extractTextFromFile(f)) || "";
+        }
         if (!text.trim()) { skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"no text" }); continue; }
 
         const chunks = chunkText(text, 1800).map((t,i)=>({ idSuffix:i, text:t }));
         totalChunks += chunks.length;
-
         const embeddings = await embedTexts(chunks.map(c=>c.text));
         const vectors = embeddings.map((vec,i)=>({
-          id: `${sanitize(clientId)}:${sanitize(f.name)}:${sanitize(chunks[i].idSuffix)}`,
+          id: `${String(clientId).replace(/[^\w\-:.]/g,"_").slice(0,128)}:${String(f.name).replace(/[^\w\-:.]/g,"_").slice(0,128)}:${String(i)}`,
           values: vec,
           metadata: {
             clientId,
@@ -326,16 +362,39 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
             fileUrl: f.webViewLink || "",
             study: f.name,
             date: f.modifiedTime || "",
-            chunkIndex: String(chunks[i].idSuffix),
+            chunkIndex: String(i),
             text: chunks[i].text.slice(0,4000)
           }
         }));
         await pineconeUpsert(vectors, clientId);
         upserted += vectors.length;
-      }catch(e){ errors.push({ file:f.name, msg: String(e?.message||e) }); }
+        ingested.push({ id:f.id, name:f.name, mimeType:f.mimeType, chunks:vectors.length });
+      }catch(e){
+        errors.push({ file:f.name, msg:String(e?.message||e) });
+      }
     }
 
-    res.json({ ok:true, filesSeen: files.length, filesIngested: supported.length, totalChunks, upserted, skipped, errors });
+    let namespaceVectorCount;
+    try {
+      const stats = await pineconeDescribe();
+      namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount;
+    } catch {}
+
+    res.json({
+      ok:true,
+      summary: {
+        filesSeen: files.length,
+        ingestedCount: ingested.length,
+        skippedCount: skipped.length,
+        errorsCount: errors.length,
+        totalChunks,
+        upserted,
+        namespaceVectorCount
+      },
+      ingested,
+      skipped,
+      errors
+    });
   }catch(e){
     res.status(500).json({ error:"Failed to ingest", detail:String(e?.message||e) });
   }
@@ -363,11 +422,11 @@ app.post("/search", requireSession, async (req,res)=>{
     const userQuery = String(body.userQuery || "").trim();
     if (!userQuery) return res.status(400).json({ error:"userQuery required" });
 
-    const [qEmb] = await embedTexts([userQuery]);
+    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const [qEmb] = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: [userQuery] }).then(r => r.data.map(d=>d.embedding));
     const out = await pineconeQuery(qEmb, clientId, DEFAULT_TOPK);
     const matches = Array.isArray(out.matches) ? out.matches : [];
 
-    // If no matches, don't fabricate an answer
     if (!matches.length) {
       return res.json({ answer: "", references: { chunks: [] }, visuals: [] });
     }
@@ -386,8 +445,7 @@ app.post("/search", requireSession, async (req,res)=>{
     const ctx = refs.map((r,i)=>`[${i+1}] (${r.study || r.fileName} ${r.date||""}) ${r.textSnippet}`).join("\n\n");
     const prompt = `Question: ${userQuery}\n\nContext:\n${ctx}\n\nWrite a 4–7 sentence answer summarizing the most relevant facts, with [#] citations. If information is insufficient, say so.`;
 
-    const ai = new OpenAI({ apiKey: OPENAI_API_KEY });
-    const chat = await ai.chat.completions.create({ model: ANSWER_MODEL, messages:[{role:"system",content:sys},{role:"user",content:prompt}], temperature:0.2 });
+    const chat = await openai.chat.completions.create({ model: ANSWER_MODEL, messages:[{role:"system",content:sys},{role:"user",content:prompt}], temperature:0.2 });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "";
 
     res.json({ answer, references:{ chunks: refs }, visuals:[] });
