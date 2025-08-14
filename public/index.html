@@ -16,6 +16,7 @@
     })();
   </script>
 
+  <!-- Link to the stylesheet served from /public/styles.css -->
   <link rel="stylesheet" href="/styles.css" />
   <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -168,7 +169,6 @@
       const refsAsc = sortRefsAsc(data.references || []);
       const refsDesc = refsAsc.slice().reverse();
       const lines = gatherLines(data);
-
       const points = [];
       lines.forEach(text => {
         if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
@@ -188,7 +188,6 @@
           });
         });
       });
-
       const byRef = new Map();
       points.forEach(p => byRef.set(p.ref, p));
       return Array.from(byRef.values()).sort((a,b)=>a.score - b.score);
@@ -410,7 +409,6 @@
         renderRefs(data.references || data.refs || []);
         show(qs("#results"));
         if (trendIntent) renderPreviews(data.visuals);
-        // Populate Secondary Resources (placeholder)
         const secContent = qs("#secondaryContent");
         secContent.innerHTML = "<p>No secondary resources available yet.</p>";
         hide(secContent);
