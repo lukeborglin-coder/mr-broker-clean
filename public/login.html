@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Login — Cognitive Research Q&A</title>
+  <title>Login — COGgpt</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
     body { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#0b0b0e; color:#eee; }
@@ -13,7 +13,6 @@
     .row { display:flex; gap:10px; margin:10px 0; }
     input, select { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3a; background:#0d0f14; color:#eee; outline:none; }
     button { width:100%; padding:12px; border-radius:10px; background:#ff7a00; color:#111; border:0; font-weight:700; cursor:pointer; }
-    .link { margin-top:12px; text-align:center; }
     .error { color:#ff9e9e; min-height:1.2em; }
     label { font-size:.9rem; color:#b6bcc6; margin:10px 0 6px; display:block; }
     .select-wrap { display:none; }
@@ -21,7 +20,7 @@
 </head>
 <body>
   <div class="card">
-    <h1 class="title">Cognitive Consulting</h1>
+    <h1 class="title">COGgpt</h1>
     <div class="sub">Secure access</div>
 
     <div class="error" id="err"></div>
@@ -40,16 +39,12 @@
     <div class="row">
       <button id="loginBtn">Sign in</button>
     </div>
-
-    <div class="link">
-      <a href="/admin">Set up a client account</a>
-    </div>
   </div>
 
 <script>
 async function fetchClients() {
   try {
-    const r = await fetch('/clients/public-list');
+    const r = await fetch('/clients/drive-folders');
     if (!r.ok) return [];
     return await r.json();
   } catch { return []; }
@@ -60,11 +55,13 @@ async function fetchClients() {
   const clientWrap = document.getElementById('clientWrap');
   const clientSel = document.getElementById('client');
 
-  // Populate clients for internal dropdown; only show when internal username is typed
+  // preload client list for internal users
   try {
     const clients = await fetchClients();
     clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   } catch {}
+
+  // only show the client picker when logging in as the internal account
   uname.addEventListener('input', () => {
     clientWrap.style.display = uname.value.trim() === 'cognitive_internal' ? 'block' : 'none';
   });
