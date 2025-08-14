@@ -1,5 +1,5 @@
 // server.js — login/session + Google Drive client libraries + RAG search
-// Deploy-safe: no static import of pdf-parse (PDFs are optional via dynamic import).
+// IMPORTANT: If no Pinecone matches are found, we DO NOT generate an answer.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -176,28 +176,8 @@ async function extractTextFromFile(file) {
     const blocks = (vals.data.valueRanges || []).map(v => (v.values || []).map(row => row.join(", ")).join("\n"));
     return blocks.filter(Boolean).join("\n\n");
   }
-
-  // PDFs are handled in the ingestion loop using a dynamic import (optional).
+  // PDFs are optional (skipped here to keep deploy simple)
   return "";
-}
-
-// Optional PDF extractor (dynamic import)
-async function tryExtractPdfText(file) {
-  try {
-    const { default: pdfParse } = await import("pdf-parse"); // only works if dependency is present
-    const drive = getDrive();
-    const r = await drive.files.get({ fileId: file.id, alt: "media" }, { responseType: "arraybuffer" });
-    const buf = Buffer.from(r.data);
-    const parsed = await pdfParse(buf);
-    return parsed.text || "";
-  } catch (e) {
-    // If pdf-parse is missing or fails, surface a clean message to caller
-    const msg = String(e?.message || e);
-    if (msg.includes("Cannot find package 'pdf-parse'")) {
-      throw new Error("PDF support disabled (pdf-parse not installed).");
-    }
-    throw e;
-  }
 }
 
 function chunkText(txt, maxLen = 1800) {
@@ -307,7 +287,7 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
   }catch(e){ res.status(500).json({ error:"Failed to create user" }); }
 });
 
-// NEW: Ingest entire client library from Drive (Docs/Slides/Sheets; PDFs optional)
+// Ingest entire client library from Drive (Docs/Slides/Sheets)
 app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = req.body?.clientId || req.session.activeClientId;
@@ -322,8 +302,7 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
       if ([
         "application/vnd.google-apps.document",
         "application/vnd.google-apps.presentation",
-        "application/vnd.google-apps.spreadsheet",
-        "application/pdf"
+        "application/vnd.google-apps.spreadsheet"
       ].includes(f.mimeType)) supported.push(f);
       else skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"unsupported type" });
     }
@@ -331,18 +310,7 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
     let totalChunks = 0, upserted = 0, errors = [];
     for (const f of supported) {
       try{
-        let text = "";
-        if (f.mimeType === "application/pdf") {
-          try {
-            text = await tryExtractPdfText(f);
-          } catch (e) {
-            skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:String(e?.message||e) });
-            continue;
-          }
-        } else {
-          text = (await extractTextFromFile(f)) || "";
-        }
-
+        const text = (await extractTextFromFile(f)) || "";
         if (!text.trim()) { skipped.push({ id:f.id, name:f.name, mimeType:f.mimeType, reason:"no text" }); continue; }
 
         const chunks = chunkText(text, 1800).map((t,i)=>({ idSuffix:i, text:t }));
@@ -399,6 +367,11 @@ app.post("/search", requireSession, async (req,res)=>{
     const out = await pineconeQuery(qEmb, clientId, DEFAULT_TOPK);
     const matches = Array.isArray(out.matches) ? out.matches : [];
 
+    // If no matches, don't fabricate an answer
+    if (!matches.length) {
+      return res.json({ answer: "", references: { chunks: [] }, visuals: [] });
+    }
+
     const refs = matches.map(m => ({
       id: m.id,
       score: m.score,
@@ -409,13 +382,13 @@ app.post("/search", requireSession, async (req,res)=>{
       textSnippet: (m.metadata?.text || "").slice(0, 500)
     }));
 
-    const sys = "You are a pharma market research assistant. Answer strictly from the provided context. Use bracketed numeric citations like [1], [2] mapping to references order.";
+    const sys = "You are a pharma market research assistant. Answer strictly from the provided context. Use bracketed numeric citations like [1], [2] mapping to the references order. Be concise and factual.";
     const ctx = refs.map((r,i)=>`[${i+1}] (${r.study || r.fileName} ${r.date||""}) ${r.textSnippet}`).join("\n\n");
-    const prompt = `Question: ${userQuery}\n\nContext:\n${ctx}\n\nWrite a 4–7 sentence answer summarizing the most relevant facts, with [#] citations.`;
+    const prompt = `Question: ${userQuery}\n\nContext:\n${ctx}\n\nWrite a 4–7 sentence answer summarizing the most relevant facts, with [#] citations. If information is insufficient, say so.`;
 
     const ai = new OpenAI({ apiKey: OPENAI_API_KEY });
     const chat = await ai.chat.completions.create({ model: ANSWER_MODEL, messages:[{role:"system",content:sys},{role:"user",content:prompt}], temperature:0.2 });
-    const answer = chat.choices?.[0]?.message?.content?.trim() || "I don't have enough information.";
+    const answer = chat.choices?.[0]?.message?.content?.trim() || "";
 
     res.json({ answer, references:{ chunks: refs }, visuals:[] });
   }catch(e){
