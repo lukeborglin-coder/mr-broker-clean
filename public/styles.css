@@ -1,3 +1,127 @@
+/* Base */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+    "Apple Color Emoji", "Segoe UI Emoji";
+  background: #f6f7f9;
+  color: #1c1d1f;
+  line-height: 1.45;
+}
+
+/* Utilities */
+.hidden { display: none !important; }
+.muted { color:#666; font-size:12px; }
+.ref-sup { font-size: 0.75em; vertical-align: super; }
+
+/* Page wrapper */
+.page { max-width: 980px; margin: 24px auto 60px; padding: 0 16px; }
+
+/* Header */
+.header { display:flex; align-items:center; position:relative; min-height: 40px; }
+.title { margin: 0; display:flex; align-items: baseline; gap: 4px; }
+.title-cog { font-size: 36px; font-weight: 800; letter-spacing: .2px; }
+.title-gpt { font-size: 36px; font-weight: 400; color: #ff7a00; }
+.beta-badge {
+  position: absolute; top: 0; right: 0;
+  color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px;
+}
+
+/* Search */
+.search { margin: 18px 0 10px; }
+#qform {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: stretch;
+}
+#q {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d6dae0;
+  background: #fff;
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 70px;
+  line-height: 1.35;
+}
+#ask {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #ff7a00;
+  color: #fff; font-weight: 700;
+  cursor: pointer;
+  height: 100%;
+  align-self: stretch;
+}
+#ask:hover { filter: brightness(.95); }
+#inlineErr { margin-top: 6px; }
+
+/* Results wrapper */
+.results { margin-top: 10px; }
+
+/* Panels */
+.panel {
+  margin: 14px 0;
+  padding: 16px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.04);
+}
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+/* Callout (headline + key numbers) */
+.callout {
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: #fff7ef;
+  border-left: 6px solid #ff7a00;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.04);
+}
+.keynums { margin: 8px 0 0; padding-left: 18px; }
+
+/* Lists */
+ul { margin: 0; padding-left: 18px; }
+li { margin: 6px 0; }
+.link-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: #0b6bcb;
+  font-weight: 600;
+  padding: 6px 0 0;
+  cursor: pointer;
+}
+
+/* Visuals */
+.charts-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; }
+.chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
+.chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
+
+/* Table */
+.table-wrap { overflow-x:auto; margin-top: 8px; }
+.data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
+.data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
+.data-table thead th { background:#f4f6fa; font-weight:700; }
+
+/* Quotes */
+#quotes { list-style:none; padding-left:0; margin:0; }
+#quotes .quote-item { margin:0 0 14px 0; }
+#quotes .quote-text { font-style: italic; margin:0; }
+#quotes .quote-tag { margin-top:4px; font-size:0.9em; color:#333; }
+
+/* References (ordered, italic, not links) */
+.ref-ol { margin: 0 0 0 22px; padding-left: 0; }
+.ref-li { font-style: italic; color: #1c1d1f; }
+
 /* Preview images for PDFs */
 .preview-img {
   width: 100%;
