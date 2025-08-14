@@ -1,4 +1,6 @@
-/* Base */
+/* =========================
+   Base
+   ========================= */
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -10,25 +12,109 @@ body {
   line-height: 1.45;
 }
 
-/* Utilities */
+/* Color tokens */
+:root{
+  --orange: #ff7a00;
+  --orange-dark: #ea580c; /* darker accent for left rule */
+  --panel: #fff;
+  --border: #d6dae0;
+  --muted: #666;
+  --shadow: 0 6px 18px rgba(0,0,0,.04);
+}
+
+/* =========================
+   Utilities
+   ========================= */
 .hidden { display: none !important; }
 .muted { color:#666; font-size:12px; }
 .ref-sup { font-size: 0.75em; vertical-align: super; }
+.small { font-size: 12px; color: var(--muted); }
+.text-sm { font-size: 12px; }
 
-/* Layout */
+/* Generic inputs/selects used on Home + Admin */
+.input, .select, .textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font: inherit;
+}
+.textarea { min-height: 92px; resize: vertical; }
+.label {
+  display:block;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase; /* LIBRARY cap styling */
+  letter-spacing: .5px;
+  margin-bottom: 6px;
+}
+
+/* =========================
+   Layout
+   ========================= */
 .page { max-width: 1000px; margin: 24px auto 60px; padding: 0 16px; }
 
-/* Header */
-.header { display:flex; align-items:center; position:relative; min-height: 40px; }
+/* =========================
+   Header
+   ========================= */
+.header { display:flex; align-items:center; position:relative; min-height: 40px; justify-content: space-between; gap: 8px; }
 .title { margin: 0; display:flex; align-items: baseline; gap: 4px; }
 .title-cog { font-size: 36px; font-weight: 800; letter-spacing: .2px; }
-.title-gpt { font-size: 36px; font-weight: 400; color: #ff7a00; }
+.title-gpt { font-size: 36px; font-weight: 400; color: var(--orange); }
 .beta-badge {
-  position: absolute; top: 0; right: 0;
   color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px;
 }
 
-/* Search */
+/* Right-side header actions (Admin/Sign out) */
+.header-actions { display:flex; align-items:center; gap:8px; }
+
+/* =========================
+   Buttons (white base, orange hover)
+   ========================= */
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #1f2937;
+  font-weight: 700;
+  padding: 10px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all .12s ease;
+}
+.btn:hover { background: var(--orange); border-color: var(--orange); color: #fff; transform: translateY(-1px); }
+.btn.block { width: 100%; }
+.btn.ghost { background: transparent; color: #1c1d1f; }
+.btn.ghost:hover { color: #fff; }
+
+/* Keep your original orange Ask button for #qform */
+.btn-ask {
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--orange);
+  color: #fff; font-weight: 800;
+  cursor: pointer;
+  height: 100%;
+  font-size: 16px;
+}
+.btn-ask:hover { filter: brightness(.95); }
+
+/* Link-style button */
+.link-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: #0b6bcb;
+  font-weight: 600;
+  padding: 6px 0 0;
+  cursor: pointer;
+}
+
+/* =========================
+   Search (Home)
+   ========================= */
 .search { margin: 18px 0 10px; }
 #qform {
   display: grid;
@@ -39,7 +125,7 @@ body {
 #q {
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid #d6dae0;
+  border: 1px solid var(--border);
   background: #fff;
   font-size: 15px;
   font-family: inherit;
@@ -47,42 +133,33 @@ body {
   min-height: 76px;
   line-height: 1.35;
 }
-.btn-ask {
-  padding: 0 16px;
-  border: 0;
-  border-radius: 10px;
-  background: #ff7a00;
-  color: #fff; font-weight: 800;
-  cursor: pointer;
-  height: 100%;
-  font-size: 16px;
-}
-.btn-ask:hover { filter: brightness(.95); }
 #inlineErr { margin-top: 6px; }
 
-/* Loading overlay */
+/* =========================
+   Loading overlay
+   ========================= */
 .overlay {
   position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
   background: rgba(255,255,255,0.65); z-index: 20;
 }
 .spinner {
-  width: 28px; height: 28px; border: 3px solid #ffcfad; border-top-color: #ff7a00; border-radius: 50%;
+  width: 28px; height: 28px; border: 3px solid #ffcfad; border-top-color: var(--orange); border-radius: 50%;
   animation: spin 0.9s linear infinite;
   margin-right: 10px;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .overlay-text { font-weight: 700; color: #333; }
 
-/* Results wrapper */
-.results { margin-top: 10px; }
-
-/* Panels & Callout */
+/* =========================
+   Panels & Callout
+   ========================= */
 .panel {
   margin: 14px 0;
   padding: 16px;
-  background: #fff;
+  background: var(--panel);
   border-radius: 12px;
-  box-shadow: 0 6px 18px rgba(0,0,0,.04);
+  box-shadow: var(--shadow);
+  border: 1px solid #eceff3;
 }
 .panel h3 {
   margin: 0 0 10px;
@@ -90,6 +167,7 @@ body {
   font-weight: 800;
 }
 
+/* Collapsible panels */
 details.panel > summary {
   cursor: pointer;
   list-style: none;
@@ -104,51 +182,31 @@ details.panel > summary::after {
   color: #999;
   transition: transform .2s ease;
 }
-details.panel[open] > summary::after {
-  transform: rotate(180deg);
-}
+details.panel[open] > summary::after { transform: rotate(180deg); }
 
+/* Hero/Callout (left darker orange bar) */
 .callout {
   margin: 14px 0;
   padding: 14px 16px;
   background: #fff7ef;
-  border-left: 6px solid #ff7a00;
+  border-left: 6px solid var(--orange-dark); /* darker left accent */
   border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(0,0,0,.04);
+  box-shadow: var(--shadow);
 }
 .keynums { margin: 8px 0 0; padding-left: 18px; }
 
-/* Lists */
+/* =========================
+   Lists
+   ========================= */
 ul { margin: 0; padding-left: 18px; }
 li { margin: 6px 0; }
-.link-btn {
-  appearance: none;
-  background: none;
-  border: 0;
-  color: #0b6bcb;
-  font-weight: 600;
-  padding: 6px 0 0;
-  cursor: pointer;
-}
 
-/* Visuals */
+/* =========================
+   Visuals
+   ========================= */
 .charts-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; }
 .chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
 .chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
-
-/* Table */
-.table-wrap { overflow-x:auto; margin-top: 8px; }
-.data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
-.data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
-.data-table thead th { background:#f4f6fa; font-weight:700; }
-
-/* Quotes */
-#quotes .quote-item { margin:0 0 14px 0; }
-#quotes .quote-text { font-style: italic; margin:0; }
-
-/* References */
-.ref-ol { margin: 0 0 0 22px; padding-left: 0; }
-.ref-li { font-style: italic; color: #1c1d1f; }
 
 /* Slide thumbnails */
 .preview-img {
@@ -172,5 +230,51 @@ li { margin: 6px 0; }
   background: #fafafa;
 }
 
-/* Secondary content */
+/* =========================
+   Table
+   ========================= */
+.table-wrap { overflow-x:auto; margin-top: 8px; }
+.data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
+.data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
+.data-table thead th { background:#f4f6fa; font-weight:700; }
+
+/* =========================
+   Quotes
+   ========================= */
+#quotes .quote-item { margin:0 0 14px 0; }
+#quotes .quote-text { font-style: italic; margin:0; }
+
+/* =========================
+   Secondary content
+   ========================= */
 .secondary { margin-top: 8px; }
+
+/* =========================
+   Results wrapper
+   ========================= */
+.results { margin-top: 10px; }
+
+/* =========================
+   Simple password gate (client-side UI)
+   ========================= */
+.gate { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index: 999; }
+.gate .panel {
+  width: 92%; max-width: 420px;
+  background: var(--panel);
+  border:1px solid #eceff3;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+/* =========================
+   Admin page layout
+   ========================= */
+.admin-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 960px) { .admin-grid { grid-template-columns: 1.1fr .9fr; } }
+.panel-toggle { margin-top: 8px; }
+.form-grid { display:grid; grid-template-columns: 1fr; gap: 10px; }
+
+/* Make the Library dropdown label look smaller */
+.label + .select.text-sm,
+.label + .input.text-sm { font-size: 12px; }
