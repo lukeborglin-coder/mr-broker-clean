@@ -8,75 +8,81 @@
 </head>
 <body>
   <div class="page">
+
+    <!-- Header -->
     <header class="header">
-      <h1 class="title">Admin</h1>
-      <div class="header-right">
-        <a class="btn ghost" href="/index.html">Home</a>
-        <button class="btn ghost" id="signOutBtn" type="button">Sign out</button>
+      <h1 class="title">
+        <span class="title-cog">Admin</span>
+      </h1>
+      <div class="header-actions">
+        <a class="cg-btn" href="/index.html">Home</a>
+        <button class="cg-btn" id="signOutBtn" type="button">Sign out</button>
       </div>
     </header>
 
-    <section class="admin-grid">
+    <!-- Two-column admin grid -->
+    <section class="cg-admin-grid">
+
       <!-- LEFT: Update Client Library -->
-      <div class="card">
-        <h2 class="card-title">UPDATE CLIENT LIBRARY</h2>
-        <label class="label text-sm">LIBRARY</label>
-        <select id="libSelect" class="select text-sm" autocomplete="off">
-          <option value="" disabled selected>Select…</option>
+      <div class="panel">
+        <h3>Update Client Library</h3>
+        <label for="libSelect" class="label text-sm">LIBRARY</label>
+        <select id="libSelect" class="select text-sm">
+          <option value="" disabled selected>Select...</option>
         </select>
-        <div class="row mt-12">
-          <button class="btn" id="btnUpdate">Update Library</button>
+        <div style="margin-top:12px;">
+          <button class="cg-btn" id="btnUpdate">Update Library</button>
         </div>
       </div>
 
       <!-- RIGHT: Users -->
-      <div class="card">
-        <h2 class="card-title">USERS</h2>
+      <div class="panel">
+        <h3>Users</h3>
 
-        <button class="btn" id="toggleCreate">Create client user</button>
+        <button class="cg-btn" id="toggleCreate" type="button">Create client user</button>
 
-        <div id="createPanel" class="panel-toggle hidden">
-          <form id="createForm" class="form-grid" autocomplete="off">
-            <!-- dummy anti-autofill -->
+        <div id="createPanel" class="cg-panel-toggle">
+          <form id="createForm" class="form-grid" autocomplete="off" style="margin-top:10px;">
+            <!-- dummy fields to deter autofill -->
             <input type="text" class="hidden" aria-hidden="true">
             <input type="password" class="hidden" aria-hidden="true">
 
             <div>
-              <label class="label text-sm">Username</label>
-              <input id="newUser" class="input readonly" type="text" autocomplete="off" placeholder="username" />
+              <label class="label text-sm" for="newUser">Username</label>
+              <input id="newUser" class="input cg-readonly" type="text" autocomplete="off" placeholder="username" />
             </div>
 
             <div>
-              <label class="label text-sm">Password</label>
-              <input id="newPass" class="input readonly" type="password" autocomplete="new-password" placeholder="new password" />
+              <label class="label text-sm" for="newPass">Password</label>
+              <input id="newPass" class="input cg-readonly" type="password" autocomplete="new-password" placeholder="new password" />
             </div>
 
-            <div class="row mt-8">
-              <button class="btn" type="submit">Save</button>
-              <button class="btn ghost" type="button" id="cancelCreate">Cancel</button>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+              <button class="cg-btn" type="submit">Save</button>
+              <button class="cg-btn ghost" type="button" id="cancelCreate">Cancel</button>
             </div>
           </form>
         </div>
       </div>
     </section>
 
-    <section class="card mt-16">
+    <section class="panel">
       <div class="small">Role: <strong>admin</strong></div>
     </section>
   </div>
 
-  <!-- Reuse the same password gate (optional for admin too) -->
-  <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
-    <div class="panel">
+  <!-- Optional: reuse password gate on admin -->
+  <div id="cgGate" class="cg-gate" role="dialog" aria-modal="true">
+    <div class="cg-panel">
       <h3>Enter Admin Password</h3>
-      <p class="small mb-0">Restricted page.</p>
-      <form id="gateForm" class="mt-12" autocomplete="off">
-        <!-- dummy fields to confuse autofill -->
+      <p class="muted">Restricted page.</p>
+      <form id="cgGateForm" autocomplete="off">
         <input type="text" class="hidden" aria-hidden="true">
         <input type="password" class="hidden" aria-hidden="true">
-        <label class="label">Password</label>
-        <input id="gatePwd" class="input readonly" type="password" inputmode="text" autocomplete="new-password" placeholder="Password" />
-        <button class="btn block mt-12" type="submit">Continue</button>
+
+        <label class="cg-label" for="cgGatePwd">Password</label>
+        <input id="cgGatePwd" class="input cg-readonly" type="password" autocomplete="new-password" placeholder="Password" />
+        <button class="cg-btn block" type="submit" style="margin-top:12px;">Continue</button>
       </form>
     </div>
   </div>
@@ -84,64 +90,66 @@
   <script>
     const $ = (sel) => document.querySelector(sel);
 
-    // --- gate
+    // ---- gate (same password as main)
     const GATE_KEY = "cg_gate_ok_v1";
-    function showGate() { $("#gate").classList.remove("hidden"); }
-    function hideGate() { $("#gate").classList.add("hidden"); }
+    const gate = $("#cgGate");
     function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
     function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
-    function setupGate() {
-      const pwd = $("#gatePwd");
+    function showGate() { gate.classList.add("open"); }
+    function hideGate() { gate.classList.remove("open"); }
+    (function setupGate(){
+      const pwd = $("#cgGatePwd");
       pwd.setAttribute("readonly", "readonly");
       pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
-      $("#gateForm").addEventListener("submit", (e) => {
+      $("#cgGateForm").addEventListener("submit", (e) => {
         e.preventDefault();
         if (pwd.value.trim() === "coggpt25") { markGateOk(); hideGate(); }
         else alert("Incorrect password");
       });
       if (!gateOk()) showGate();
-    }; setupGate();
+      $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
+    })();
 
-    $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
-
-    // --- populate library options
-    async function loadLibraries() {
+    // ---- populate library options
+    (async function loadLibraries() {
       const sel = $("#libSelect");
-      try {
-        const endpoints = ["/clients", "/admin/clients", "/api/clients"];
-        let data = null;
-        for (const ep of endpoints) {
-          try { const r = await fetch(ep); if (r.ok) { data = await r.json(); break; } } catch (_e) { }
-        }
-        if (Array.isArray(data)) {
-          for (const name of data) {
-            const opt = document.createElement("option");
-            opt.value = name; opt.textContent = name; sel.appendChild(opt);
+      const endpoints = ["/clients", "/admin/clients", "/api/clients"];
+      for (const ep of endpoints) {
+        try {
+          const r = await fetch(ep);
+          if (r.ok) {
+            const data = await r.json();
+            if (Array.isArray(data)) {
+              for (const name of data) {
+                const opt = document.createElement("option");
+                opt.value = name; opt.textContent = name; sel.appendChild(opt);
+              }
+              break;
+            }
           }
-        }
-      } catch (e) { /* silent */ }
-    }; loadLibraries();
+        } catch (_) {}
+      }
+    })();
 
-    // --- toggle create panel
+    // ---- toggle create panel
     const panel = $("#createPanel");
-    $("#toggleCreate").addEventListener("click", () => panel.classList.toggle("hidden"));
-    $("#cancelCreate").addEventListener("click", () => panel.classList.add("hidden"));
+    $("#toggleCreate").addEventListener("click", () => panel.classList.toggle("open"));
+    $("#cancelCreate").addEventListener("click", () => panel.classList.remove("open"));
 
-    // defeat autofill
+    // defeat autofill until focus
     for (const id of ["newUser","newPass"]) {
       const el = document.getElementById(id);
       el.setAttribute("readonly", "readonly");
       el.addEventListener("focus", () => el.removeAttribute("readonly"), { once: true });
     }
 
-    // --- save new user (placeholder; wire to your backend)
+    // ---- save new user (placeholder; wire to your backend)
     $("#createForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const username = $("#newUser").value.trim();
       const password = $("#newPass").value;
       if (!username || !password) { alert("Enter username and password"); return; }
       try {
-        // Replace with your real endpoint (example)
         const r = await fetch("/admin/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -149,12 +157,12 @@
         });
         if (!r.ok) throw new Error("Failed to create user");
         alert("Created!");
-        panel.classList.add("hidden");
+        panel.classList.remove("open");
         $("#newUser").value = ""; $("#newPass").value = "";
       } catch (err) { alert(err.message); }
     });
 
-    // --- update library (placeholder; wire to your backend)
+    // ---- update library (placeholder; wire to your backend)
     $("#btnUpdate").addEventListener("click", async () => {
       const lib = $("#libSelect").value;
       if (!lib) { alert("Select a library first"); return; }
