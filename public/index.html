@@ -1,194 +1,183 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>COGgpt — Research Q&A</title>
-  <link rel="stylesheet" href="/styles.css"/>
-  <style>
-    :root { --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; --soft:#fff7ed; --soft-border:#ffead6; }
-    *{box-sizing:border-box}
-    body { margin:0; background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-
-    header { position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid var(--line); }
-    .bar { max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .brand { font-weight:800; letter-spacing:.1px; }
-    .beta { font-size:.9rem; color:var(--muted); font-weight:500; margin-left:6px; }
-    .nav { display:flex; align-items:center; gap:10px; }
-    #who { color:var(--muted); }
-
-    .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:10px; font-weight:700; cursor:pointer; text-decoration:none; }
-    .btn.small { padding:10px 14px; font-size:.92rem; line-height:1; height:40px; }
-    .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
-    .btn.ghost:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
-    .btn.primary { background:var(--brand); color:#fff; border:0; padding:16px 22px; border-radius:18px; }
-
-    main { max-width:960px; margin: 56px auto; padding: 0 16px; }
-    .hero { text-align:center; margin: 8px 0 8px; }
-    .hero h1 { font-size:34px; margin:0 0 6px 0; }
-    .hero p { margin:0; color:var(--muted); }
-
-    /* Client row: label left, dropdown right */
-    .client-row { display:flex; gap:12px; align-items:center; justify-content:center; margin:16px 0 6px; }
-    .client-row .label { color:var(--muted); font-size:.95rem; }
-    .client-row select { color:var(--muted); border:1px solid var(--line); background:#fff; border-radius:12px; padding:10px 12px; min-width:300px; font-size:1rem; }
-
-    .askbox { display:flex; gap:12px; width:100%; margin:18px auto 0; }
-    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#f0f5ff; color:var(--ink); }
-
-    .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
-    .panel h3 { margin:0 0 8px 0; font-size:0.95rem; color:var(--muted); font-weight:600; }
-    .answer-panel { background:var(--soft); border-color:var(--soft-border); }
-    .answer-body { white-space:pre-wrap; line-height:1.55; font-size:1.02rem; }
-
-    .refs { display:grid; gap:10px; }
-    .ref { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; }
-    .ref small { color:var(--muted); }
-    a.link { color:#0b57d0; text-decoration:none; }
-    .muted { color:var(--muted); }
-
-    .msg { margin-top:14px; border:1px solid var(--line); background:#fafbfd; color:#2b2f36; border-radius:10px; padding:10px 12px; display:none; }
-    .msg.error { background:#fff5f5; color:#8b0000; display:block; }
-    .msg.info { display:block; }
-  </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Research Q&A</title>
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header>
-    <div class="bar">
-      <div>
-        <span class="brand">COGgpt</span><span class="beta">(BETA)</span>
+  <div class="page">
+    <header class="header">
+      <h1 class="title">Research Q&amp;A <span class="beta">(BETA)</span></h1>
+      <div class="header-right">
+        <a class="btn ghost" href="/admin.html">Admin</a>
+        <button class="btn ghost" id="signOutBtn" type="button">Sign out</button>
       </div>
-      <div class="nav">
-        <div id="who"></div>
-        <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
-        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
+    </header>
+
+    <!-- Hero / Instructions with left accent -->
+    <section class="card accent">
+      <div class="space-between">
+        <h2 class="card-title">Ask a question grounded in your LIBRARY</h2>
+        <span class="badge">Secure area</span>
       </div>
-    </div>
-  </header>
+      <p class="small">Enter a clear question. We’ll return key findings, citations, and related slides when available.</p>
+    </section>
 
-  <main>
-    <div class="hero">
-      <h1>Ask about your research</h1>
-      <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
-    </div>
-
-    <div class="client-row" id="clientRow" style="display:none;">
-      <div class="label">Client library</div>
-      <select id="client">
-        <option value="" selected disabled>Select a client</option>
-      </select>
-    </div>
-
-    <div class="askbox">
-      <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
-      <button id="ask" class="btn primary" disabled>Ask</button>
-    </div>
-
-    <div id="msg" class="msg"></div>
-
-    <div id="out" style="display:none;">
-      <div id="answerPanel" class="panel answer-panel" style="display:none;">
-        <h3>Answer</h3>
-        <div id="answer" class="answer-body"></div>
+    <!-- Query form -->
+    <section class="card mt-12">
+      <div class="grid-2">
+        <div>
+          <label class="label">Client Library</label>
+          <select id="clientLibrary" class="select text-sm" autocomplete="off">
+            <option value="" disabled selected>Select…</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Question</label>
+          <form id="qForm" class="row" autocomplete="off">
+            <input type="text" id="qInput" class="input" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?" />
+            <button class="btn" type="submit">Ask</button>
+          </form>
+        </div>
       </div>
+    </section>
 
-      <div id="supportPanel" class="panel" style="display:none;">
-        <h3>Supporting passages</h3>
-        <div id="refs" class="refs"></div>
+    <!-- Results (hidden until a question is asked) -->
+    <section id="results" class="hidden mt-16">
+      <div class="card">
+        <h3 class="card-title">Answer</h3>
+        <div id="answer"></div>
       </div>
+      <div class="grid-2 mt-12">
+        <div class="card">
+          <h3 class="card-title">References</h3>
+          <div id="references"></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Report Slides</h3>
+          <div id="slides"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Simple password gate (client-side) -->
+  <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
+    <div class="panel">
+      <h3>Enter Access Password</h3>
+      <p class="small mb-0">This page is gated. Contact your admin if you don’t have access.</p>
+      <form id="gateForm" class="mt-12" autocomplete="off">
+        <!-- dummy fields to confuse autofill -->
+        <input type="text" class="hidden" aria-hidden="true">
+        <input type="password" class="hidden" aria-hidden="true">
+        <label class="label">Password</label>
+        <input id="gatePwd" class="input readonly" type="password" inputmode="text" autocomplete="new-password" placeholder="Password" />
+        <button class="btn block mt-12" type="submit">Continue</button>
+        <div class="hint">Tip: This is a UI gate only. For real security, enforce auth in <code>server.js</code>.</div>
+      </form>
     </div>
-  </main>
+  </div>
 
-<script>
-async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-async function jpost(url, body){ const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+  <script>
+    // ---- tiny helper
+    const $ = (sel) => document.querySelector(sel);
 
-let me=null;
-async function boot() {
-  try {
-    me = await jget('/me');
-  } catch {
-    location.href = '/login.html'; return;
-  }
-  const { user, clients } = me;
+    // ---- password gate (per-session)
+    const GATE_KEY = "cg_gate_ok_v1";
+    function showGate() { $("#gate").classList.remove("hidden"); }
+    function hideGate() { $("#gate").classList.add("hidden"); }
+    function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
+    function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
 
-  document.getElementById('who').textContent = user.username + (user.role==='internal'?' (internal)':'');
-  if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline-flex';
+    function setupGate() {
+      // Prevent autofill tricks
+      const pwd = $("#gatePwd");
+      pwd.setAttribute("readonly", "readonly");
+      pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
 
-  // Internal users must choose a client each time (no preselect)
-  const row = document.getElementById('clientRow');
-  const sel = document.getElementById('client');
-  sel.innerHTML = `<option value="" selected disabled>Select a client</option>` + clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  if (user.role === 'internal') {
-    row.style.display = 'flex';
-  }
+      $("#gateForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const val = pwd.value.trim();
+        if (val === "coggpt25") {
+          markGateOk();
+          hideGate();
+        } else {
+          alert("Incorrect password");
+        }
+      });
 
-  sel.onchange = () => {
-    document.getElementById('ask').disabled = !sel.value;
-  };
-}
-boot();
-
-function showError(m){ const el = document.getElementById('msg'); el.className = 'msg error'; el.textContent = m; }
-function showInfo(m){ const el = document.getElementById('msg'); el.className = 'msg info'; el.textContent = m; }
-function clearMsg(){ const el = document.getElementById('msg'); el.className = 'msg'; el.textContent = ''; }
-
-function renderResults(resp){
-  const refs = resp.references?.chunks || [];
-  const answer = (resp.answer || '').trim();
-  document.getElementById('out').style.display = 'block';
-
-  if (answer) {
-    document.getElementById('answer').textContent = answer;
-    document.getElementById('answerPanel').style.display = 'block';
-  } else {
-    document.getElementById('answerPanel').style.display = 'none';
-  }
-
-  if (refs.length) {
-    document.getElementById('supportPanel').style.display = 'block';
-    document.getElementById('refs').innerHTML = refs.map((r,i) => `
-      <div class="ref">
-        <div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div>
-        <small>${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">open source</a>`:''}</small>
-        <div class="muted" style="margin-top:6px">${r.textSnippet||''}</div>
-      </div>`).join('');
-  } else {
-    document.getElementById('supportPanel').style.display = 'none';
-  }
-}
-
-async function doAsk() {
-  clearMsg();
-  const q = document.getElementById('q').value.trim();
-  const sel = document.getElementById('client');
-  if (!q || !sel.value) return;
-
-  try {
-    const resp = await jpost('/search', { userQuery: q, clientId: sel.value });
-    const refs = resp.references?.chunks || [];
-    if (!refs.length && !resp.answer) {
-      showInfo("No matching passages found. Try Admin → Update Client Library to ingest files from Drive, then ask again.");
-    } else {
-      clearMsg();
+      if (!gateOk()) showGate();
     }
-    renderResults(resp);
-  } catch (e) {
-    const msg = String(e);
-    if (msg.includes('/query') && msg.toLowerCase().includes('parse url')) {
-      showError("Search failed: your Pinecone host is not a full https URL. Set PINECONE_INDEX_HOST to the full https host and redeploy.");
-    } else {
-      showError('Search failed: ' + msg);
-    }
-  }
-}
-document.getElementById('ask').onclick = doAsk;
-document.getElementById('q').addEventListener('keypress', (e)=>{ if (e.key === 'Enter' && !document.getElementById('ask').disabled) doAsk(); });
+    setupGate();
 
-document.getElementById('logoutBtn').onclick = async () => {
-  await jpost('/auth/logout', {});
-  location.href = '/login.html';
-};
-</script>
+    // ---- sign out clears the gate
+    $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
+
+    // ---- populate client library (expects backend to serve list at /clients or /admin/clients)
+    async function loadLibraries() {
+      const sel = $("#clientLibrary");
+      try {
+        // try common endpoints; fallback stays empty so you can select later
+        const endpoints = ["/clients", "/admin/clients", "/api/clients"];
+        let data = null;
+        for (const ep of endpoints) {
+          try {
+            const r = await fetch(ep);
+            if (r.ok) { data = await r.json(); break; }
+          } catch (_) { /* ignore */ }
+        }
+        if (Array.isArray(data)) {
+          for (const name of data) {
+            const opt = document.createElement("option");
+            opt.value = name; opt.textContent = name;
+            sel.appendChild(opt);
+          }
+        }
+      } catch (e) { /* silent */ }
+    }
+    loadLibraries();
+
+    // ---- ask
+    $("#qForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const lib = $("#clientLibrary").value;
+      const q = $("#qInput").value.trim();
+      if (!lib || !q) { alert("Choose a Library and enter a question"); return; }
+
+      // Reveal results container immediately (empty state) and then fill
+      $("#results").classList.remove("hidden");
+      $("#answer").textContent = "Thinking…";
+      $("#references").innerHTML = "";
+      $("#slides").innerHTML = "";
+
+      try {
+        const r = await fetch("/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId: lib, userQuery: q, topK: 6 })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error || "Search failed");
+
+        $("#answer").textContent = data?.answer || "No answer.";
+        const refs = data?.references || {};
+        const visuals = data?.visuals || [];
+
+        // references
+        const refList = Object.entries(refs).map(([k, v]) => `<div class="small">• <strong>${k}</strong> — ${v}</div>`).join("");
+        $("#references").innerHTML = refList || "<span class='small'>None</span>";
+
+        // slides (limit 6)
+        const max = 6;
+        const imgs = (visuals || []).slice(0, max).map(src => `<img src="${src}" alt="slide" style="width:100%; border-radius:10px; border:1px solid var(--line); margin-bottom:8px;"/>`).join("");
+        $("#slides").innerHTML = imgs || "<span class='small'>No slides available</span>";
+      } catch (err) {
+        $("#answer").textContent = "I don't have enough information.";
+        console.error(err);
+      }
+    });
+  </script>
 </body>
 </html>
