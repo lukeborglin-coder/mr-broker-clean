@@ -1,365 +1,120 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>COGgpt — Research Q&A</title>
-
-  <!-- Simple password gate (remove if using ENABLE_BASIC_AUTH=true on server) -->
-  <script>
-    (function() {
-      const correctPassword = 'coggpt25';
-      const userPassword = prompt('Please enter the password:');
-      if (userPassword !== correctPassword) {
-        document.documentElement.innerHTML = '<h1 style="text-align:center;margin-top:50px;">Access denied</h1>';
-      }
-    })();
-  </script>
-
-  <link rel="stylesheet" href="/styles.css" />
-  <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
-
-  <!-- Chart.js (unchanged) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-  <!-- PDF.js for client-side slide thumbnails -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-+oJrfR0f6CwOqZk2d7t9N8kQq3e8mRzJpV4t/8rXkVt5qVx5q2ZHyFmc8mQXwq3c0v5zH2b2tMyJw1oYz/0K2Q==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script>
-    // Point the worker at a CDN copy
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  </script>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Cognitive Consulting — Research Q&A</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <style>
+    :root { --brand:#ff7a00; }
+    body { margin:0; background:#0b0b0e; color:#e9eef7; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid #22252b; }
+    .title { display:flex; align-items:center; gap:10px; }
+    .beta { font-size:.9rem; color:#a4aab4; }
+    main { max-width:980px; margin: 24px auto; padding: 0 16px; }
+    .box { background:#111317; border:1px solid #23262d; border-radius:16px; padding:16px; }
+    input, select, button, textarea { border-radius:10px; border:1px solid #2a2f3a; background:#0d0f14; color:#eee; outline:none; }
+    input, select, textarea { padding:10px; }
+    button { padding:10px 14px; background:var(--brand); color:#111; font-weight:700; border:0; cursor:pointer; }
+    .row { display:flex; gap:10px; }
+    .stack { display:grid; gap:12px; }
+    .answer { white-space:pre-wrap; line-height:1.45; }
+    .muted { color:#9aa0a6; }
+    .refs { display:grid; gap:8px; }
+    .ref { padding:10px; border-radius:10px; background:#0d0f14; border:1px solid #2a2f3a; }
+  </style>
 </head>
 <body>
-  <div class="page">
-    <header class="header">
-      <h1 class="title"><span class="title-cog">COG</span><span class="title-gpt">gpt</span></h1>
-      <div class="beta-badge">BETA</div>
-    </header>
-
-    <section class="search">
-      <form id="qform" autocomplete="off">
-        <textarea id="q" rows="3" placeholder="Try: “What has satisfaction for Evrysdi looked like over the past few years?”"></textarea>
-        <button id="ask" class="btn-ask" type="submit" title="Ask">Ask</button>
-      </form>
-      <div id="inlineErr" class="muted hidden"></div>
-    </section>
-
-    <div id="loadingOverlay" class="overlay hidden">
-      <div class="spinner"></div>
-      <div class="overlay-text">Thinking…</div>
+  <header>
+    <div class="title">
+      <strong>Research Q&amp;A</strong>
+      <span class="beta">(BETA)</span>
     </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div id="who" class="muted"></div>
+      <button id="logoutBtn" title="Sign out">Sign out</button>
+    </div>
+  </header>
 
-    <div id="results" class="results hidden">
-      <section class="callout" aria-live="polite">
-        <div id="answer"></div>
-        <ul id="keynums" class="keynums"></ul>
-      </section>
-
-      <section class="panel">
-        <h3>Additional Support</h3>
-        <ul id="bullets"></ul>
-        <button id="moreBtn" class="link-btn hidden" type="button">Show more</button>
-      </section>
-
-      <section id="quotesPanel" class="panel">
-        <h3>Supporting Quotes</h3>
-        <div id="quotes"></div>
-      </section>
-
-      <section id="visualsPanel" class="panel">
-        <h3>Supporting Slides</h3>
-        <div id="charts" class="charts-grid"></div>
-        <div id="tableWrap" class="table-wrap"></div>
-        <!-- Slide thumbnails injected here -->
-      </section>
-
-      <details class="panel" id="secondaryPanel">
-        <summary>Secondary Resources</summary>
-        <div id="secondaryContent" class="secondary"></div>
-      </details>
-
-      <details class="panel" id="refsPanel">
-        <summary>Report References</summary>
-        <div id="refsContainer" class="secondary">
-          <ol id="refs" class="ref-ol"></ol>
+  <main>
+    <div class="box stack">
+      <div class="row">
+        <div style="flex:1">
+          <label class="muted">Your question</label>
+          <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
         </div>
-      </details>
+        <div>
+          <label class="muted">Top K</label>
+          <select id="topk">
+            <option>6</option><option>8</option><option>10</option><option>12</option>
+          </select>
+        </div>
+        <div id="clientWrap" style="display:none">
+          <label class="muted">Client</label>
+          <select id="client"></select>
+        </div>
+        <div style="align-self:flex-end">
+          <button id="ask">Ask</button>
+        </div>
+      </div>
     </div>
-  </div>
 
-  <script>
-    // ---------- helpers ----------
-    const qs  = (s, r=document) => r.querySelector(s);
-    const show = el => el && el.classList.remove("hidden");
-    const hide = el => el && el.classList.add("hidden");
+    <div id="out" class="stack" style="margin-top:16px; display:none;">
+      <div class="box">
+        <div class="muted">Answer</div>
+        <div id="answer" class="answer"></div>
+      </div>
+      <div class="box">
+        <div class="muted">References</div>
+        <div id="refs" class="refs"></div>
+      </div>
+    </div>
+  </main>
 
-    function el(tag, attrs = {}, children = []) {
-      const node = document.createElement(tag);
-      for (const [k, v] of Object.entries(attrs)) {
-        if (k === "class") node.className = v;
-        else if (k === "html") node.innerHTML = v;
-        else node.setAttribute(k, v);
-      }
-      [].concat(children).forEach(c => {
-        if (c === null || c === undefined) return;
-        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-      });
-      return node;
-    }
-    const caretsToSup = s => String(s || "").replace(/\s*\^(\d+)\^\s*/g, (_m, n) => `<sup class="ref-sup">${n}</sup>`);
-    const niceTitle = s => (s || "").replace(/_/g, " ");
+<script>
+async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
-    // ---------- collect lines ----------
-    function gatherLines(data) {
-      const s = data.structured || {};
-      const arr = [];
-      if (Array.isArray(s.supporting)) arr.push(...s.supporting.map(x=>x.text).filter(Boolean));
-      if (Array.isArray(s.headline?.bullets)) arr.push(...s.headline.bullets);
-      if (s.headline?.paragraph) arr.push(s.headline.paragraph);
-      return arr;
-    }
+let me=null;
+async function boot() {
+  try {
+    me = await jget('/me');
+  } catch {
+    location.href = '/login.html'; return;
+  }
+  const { user, activeClientId, clients } = me;
+  document.getElementById('who').textContent = `${user.username} ${user.role==='internal'?'(internal)':''}`;
 
-    // ---------- trend helpers ----------
-    const sortRefsAsc = refs => [...(refs||[])].sort((a,b)=>scoreFromTitle(a.fileName)-scoreFromTitle(b.fileName));
-    const sortRefsDesc = refs => sortRefsAsc(refs).reverse();
-    function scoreFromTitle(title=""){
-      const t=String(title), y=(t.match(/(20\d{2})/)||[])[1], q=(t.match(/\bQ([1-4])\b/i)||[])[1], w=(t.match(/\bW(\d{1,2})\b/i)||[])[1];
-      return (y?+y:0)*100 + (w?+w:0)*4 + (q?+q:0);
-    }
-    function isTrendIntent(userQuery, data){
-      const txt = (userQuery + " " + gatherLines(data).join(" ")).toLowerCase();
-      return /\bsatisfaction\b|\bnps\b|\bnet\s*promoter\b/.test(txt);
-    }
-    function collectTrendPoints(data){
-      const refsAsc = sortRefsAsc(data.references || []);
-      const refsDesc = refsAsc.slice().reverse();
-      const lines = gatherLines(data);
-      const pts=[];
-      lines.forEach(text=>{
-        if (!/(satisfaction|nps|net\s*promoter)/i.test(text)) return;
-        const pcts = Array.from(String(text).matchAll(/(\d{1,3})%\b/g)).map(m=>+m[1]);
-        if (!pcts.length) return;
-        pcts.forEach((v,i)=>{
-          const r = refsDesc[i] || refsDesc[0] || {ref:1,fileName:"Study"};
-          pts.push({ x: r.fileName, y: v, ref: r.ref, score: scoreFromTitle(r.fileName) });
-        });
-      });
-      const byRef=new Map(); pts.forEach(p=>byRef.set(p.ref,p));
-      return Array.from(byRef.values()).sort((a,b)=>a.score-b.score);
-    }
-    function headlineFromTrend(points){
-      const latest = points[points.length-1], prev1 = points[points.length-2], prev2 = points[points.length-3];
-      const parts = [];
-      parts.push(`Satisfaction is ${latest.y}% (${latest.x})<sup class="ref-sup">${latest.ref}</sup>`);
-      if (prev1) parts.push(`up from ${prev1.y}% (${prev1.x})<sup class="ref-sup">${prev1.ref}</sup>`);
-      if (prev2) parts.push(`and ${prev2.y}% (${prev2.x})<sup class="ref-sup">${prev2.ref}</sup>`);
-      return parts.join(", ") + ".";
-    }
-    function renderTrend(points){
-      const answer = qs("#answer"); const keyUl = qs("#keynums"); keyUl.innerHTML = "";
-      if (points.length){
-        answer.innerHTML = headlineFromTrend(points);
-        [points[points.length-1], points[points.length-2], points[points.length-3]].filter(Boolean)
-          .forEach(p=>keyUl.appendChild(el("li",{html:`${p.x}: ${p.y}%<sup class="ref-sup">${p.ref}</sup>`})));
-        show(keyUl);
-        return;
-      }
-      hide(keyUl);
-    }
+  const clientSel = document.getElementById('client');
+  clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  if (activeClientId) clientSel.value = activeClientId;
 
-    // ---------- bullets (map ^n^ to real ref numbers; default to latest) ----------
-    function renderBullets(data){
-      const ul = qs("#bullets"); ul.innerHTML="";
-      const btn = qs("#moreBtn");
+  if (user.role === 'internal') {
+    document.getElementById('clientWrap').style.display = 'block';
+    clientSel.onchange = async () => {
+      await jpost('/auth/switch-client', { clientId: clientSel.value });
+    };
+  }
+}
+boot();
 
-      const s = data.structured || {};
-      const all = [].concat(s.headline?.bullets||[], (s.supporting||[]).map(x=>x.text||"")).filter(Boolean);
-      if (!all.length){ ul.appendChild(el("li",{class:"muted"},"No additional support returned.")); hide(btn); return; }
+document.getElementById('ask').onclick = async () => {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const topK = Number(document.getElementById('topk').value);
+  const body = { userQuery: q, topK };
+  if (me?.user?.role === 'internal') body.clientId = document.getElementById('client').value;
+  const resp = await jpost('/search', body);
+  document.getElementById('out').style.display = 'grid';
+  document.getElementById('answer').textContent = resp.answer || 'No answer';
+  const refs = resp.references?.chunks || [];
+  document.getElementById('refs').innerHTML = refs.map((r,i) => `<div class="ref"><div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div><div class="muted">${r.textSnippet||''}</div><div>${r.fileUrl ? `<a href="${r.fileUrl}" target="_blank">Open source</a>`:''}</div></div>`).join('');
+};
 
-      const latestRef = sortRefsDesc(data.references||[])[0]?.ref || 1;
-      const fixRefs = (t) => caretsToSup(String(t).replace(/\^(\d+)\^/g, (m,n)=>{
-        const num = +n; return data.references?.some(r=>r.ref===num) ? `^${num}^` : `^${latestRef}^`;
-      }).trim().replace(/[.。]\s*$/,""));
-
-      const MAX=5;
-      const renderSlice = (slice) => { ul.innerHTML=""; slice.forEach(t=>ul.appendChild(el("li",{html:fixRefs(t)}))); };
-      renderSlice(all.slice(0,MAX));
-
-      if (all.length>MAX){
-        btn._expanded=false;
-        btn.onclick=()=>{ btn._expanded=!btn._expanded; renderSlice(btn._expanded?all:all.slice(0,MAX)); btn.textContent=btn._expanded?"Show less":"Show more"; };
-        btn.textContent="Show more"; show(btn);
-      } else hide(btn);
-    }
-
-    // ---------- quotes (hide unless short + cited) ----------
-    function renderQuotes(data, userQuery){
-      const panel = qs("#quotesPanel"); const root = qs("#quotes"); root.innerHTML="";
-      const quotes = Array.isArray(data.structured?.quotes) ? data.structured.quotes : [];
-      const qlc = (q)=>/\^\d+\^/.test(q) && q.replace(/\^.+?\^/g,"").trim().split(/\s+/).length<=20 &&
-                    new RegExp((userQuery.split(/\s+/).filter(w=>w.length>4)[0]||"."),"i").test(q);
-      const filt = quotes.filter(qlc).slice(0,3);
-      if (!filt.length){ panel.classList.add("hidden"); return; }
-      panel.classList.remove("hidden");
-      filt.forEach(q => {
-        const html = caretsToSup(q);
-        root.appendChild(el("div",{class:"quote-item"},[
-          el("p",{class:"quote-text",html})
-        ]));
-      });
-    }
-
-    // ---------- table and chart (optional) ----------
-    function renderTrendVisual(points){
-      const grid  = qs("#charts"); grid.innerHTML = "";
-      const tbl   = qs("#tableWrap"); tbl.innerHTML = "";
-      if (!points.length) return;
-
-      const table = document.createElement("table");
-      table.className = "data-table";
-      table.innerHTML = `<thead><tr><th>Report</th><th>Value</th><th>Ref</th></tr></thead><tbody></tbody>`;
-      const tb = table.querySelector("tbody");
-      points.forEach(p=>{
-        const tr=document.createElement("tr");
-        tr.innerHTML=`<td>${p.x}</td><td>${p.y}%</td><td><sup class="ref-sup">${p.ref}</sup></td>`;
-        tb.appendChild(tr);
-      });
-      tbl.appendChild(table);
-
-      if (points.length>=2){
-        const labels=points.map(p=>p.x), values=points.map(p=>p.y);
-        const card=el("div",{class:"chart-card"},[el("h4",{}, "Satisfaction / NPS Trend"), el("canvas")]);
-        grid.appendChild(card);
-        new Chart(card.querySelector("canvas").getContext("2d"),{
-          type:"line",
-          data:{ labels, datasets:[{ label:"", data:values }]},
-          options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{ beginAtZero:true, ticks:{ callback:v=>v+"%" }}}}
-        });
-      }
-    }
-
-    // ---------- CLIENT-SIDE SLIDE THUMBNAILS (PDF.js) ----------
-    async function renderPdfThumb({ fileId, page, mountEl }) {
-      try {
-        // Fetch raw PDF bytes from your server
-        const ab = await fetch(`/file/pdf?fileId=${encodeURIComponent(fileId)}`).then(r => r.arrayBuffer());
-        const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
-        const p = await pdf.getPage(Math.max(1, Number(page) || 1));
-
-        // Compute a friendly width
-        const initialVp = p.getViewport({ scale: 1.0 });
-        const maxWidth = 320;
-        const scale = Math.min(maxWidth / initialVp.width, 2.0);
-        const viewport = p.getViewport({ scale });
-
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        canvas.className = "preview-img";
-        canvas.title = `Open page ${page || 1}`;
-
-        await p.render({ canvasContext: ctx, viewport }).promise;
-
-        canvas.addEventListener("click", () => {
-          // Deep-link to the exact page in the browser viewer
-          window.open(`/file/pdf?fileId=${encodeURIComponent(fileId)}#page=${page || 1}`, "_blank");
-        });
-
-        mountEl.appendChild(canvas);
-      } catch (e) {
-        console.error("PDF thumb render failed:", e);
-        const fb = document.createElement("div");
-        fb.className = "preview-fallback";
-        fb.textContent = "(slide preview unavailable)";
-        mountEl.appendChild(fb);
-      }
-    }
-
-    function renderPreviews(visuals){
-      const panel = qs("#visualsPanel");
-      // Remove previous thumbs
-      panel.querySelectorAll(".preview-img, .preview-fallback")?.forEach(n=>n.remove());
-      if (!Array.isArray(visuals) || !visuals.length) return;
-
-      // Render each referenced page (client-side)
-      visuals.forEach(v => {
-        renderPdfThumb({ fileId: v.fileId, page: v.page || 1, mountEl: panel });
-      });
-    }
-
-    function renderRefs(refs=[]){
-      const ol=qs("#refs"); ol.innerHTML="";
-      if (!refs.length){ ol.appendChild(el("li",{class:"muted"},"No sources returned.")); return; }
-      refs.forEach(r=>ol.appendChild(el("li",{class:"ref-li"}, niceTitle(r.fileName||"Report"))));
-    }
-
-    async function runQuery(userQuery){
-      hide(qs("#inlineErr"));
-      show(qs("#loadingOverlay"));
-      const token = document.querySelector('meta[name="auth-token"]')?.content || "";
-
-      // search
-      let data = {};
-      try {
-        const res = await fetch("/search",{
-          method:"POST",
-          headers:{ "Content-Type":"application/json", "x-auth-token": token },
-          body: JSON.stringify({ clientId:"genentech", userQuery, topK:8 })
-        });
-        const txt = await res.text();
-        if (!res.ok) throw new Error(txt||`HTTP ${res.status}`);
-        data = txt ? JSON.parse(txt) : {};
-      } catch (e) {
-        console.error("search failed:", e);
-        qs("#inlineErr").textContent="Search failed. See console for details.";
-        show(qs("#inlineErr")); hide(qs("#loadingOverlay")); return;
-      }
-
-      // render
-      try{
-        const s = data.structured || {};
-        const p = s.headline?.paragraph || data.answer || data.summary || data.result || "";
-        qs("#answer").innerHTML = caretsToSup(p);
-        const trendIntent = isTrendIntent(userQuery, data);
-        if (trendIntent){
-          const pts = collectTrendPoints(data);
-          renderTrend(pts);
-          renderTrendVisual(pts);
-        } else {
-          hide(qs("#keynums"));
-        }
-        renderBullets(data);
-        renderPreviews(data.visuals); // <-- now uses PDF.js client-side thumbnails
-        renderQuotes(data, userQuery);
-        renderRefs(data.references || []);
-        show(qs("#results"));
-      } catch (e) {
-        console.error("render error:", e);
-        qs("#inlineErr").textContent="There was an error rendering results. See console for details.";
-        show(qs("#inlineErr"));
-      } finally {
-        hide(qs("#loadingOverlay"));
-      }
-    }
-
-    // Submit (Enter submits; Shift+Enter newline)
-    document.getElementById("qform").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const q = document.getElementById("q").value.trim();
-      if (!q) return;
-      await runQuery(q);
-    });
-    document.getElementById("q").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        document.getElementById("qform").dispatchEvent(new Event("submit"));
-      }
-    });
-
-    // Collapse panels by default
-    qs("#refsPanel").open = false;
-    qs("#secondaryPanel").open = false;
-  </script>
+document.getElementById('logoutBtn').onclick = async () => {
+  await jpost('/auth/logout', {});
+  location.href = '/login.html';
+};
+</script>
 </body>
 </html>
