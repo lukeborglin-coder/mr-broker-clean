@@ -1,11 +1,15 @@
 {
   "name": "mr-broker-clean",
-  "version": "1.0.0",
-  "description": "Node middleware for RAG search + simple login/admin",
+  "version": "1.2.1",
+  "description": "RAG server with login/admin and Google Drive client libraries",
+  "private": true,
   "type": "module",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@pinecone-database/pinecone": "^2.2.1",
@@ -14,6 +18,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-session": "^1.17.3",
+    "googleapis": "^132.0.0",
     "openai": "^4.57.0"
   }
 }
