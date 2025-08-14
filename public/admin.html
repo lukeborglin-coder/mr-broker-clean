@@ -13,12 +13,15 @@
     main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
     section { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; }
     label { display:block; font-size:.9rem; color:var(--muted); margin:8px 0 6px; }
-    input, select, textarea { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--ink); outline:none; }
+    input, select { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:#222; outline:none; }
     button { padding:10px 14px; border-radius:10px; background:var(--brand); color:#111; border:0; font-weight:700; cursor:pointer; }
     table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
     td, th { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; }
     .muted { color:var(--muted); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; border:1px solid var(--line); }
+    .ok { background:#ecfdf5; border-color:#bbf7d0; }
+    .skip { background:#fef3c7; border-color:#fde68a; }
+    .err { background:#fee2e2; border-color:#fecaca; }
   </style>
 </head>
 <body>
@@ -52,20 +55,26 @@
 
     <section>
       <h3>Update Client Library</h3>
-      <div class="muted">This crawls the selected Drive client folder (and subfolders), extracts text from Google Docs, Google Slides, PDFs, and basic Sheets, then embeds to Pinecone.</div>
+      <div class="muted">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs (if enabled) into Pinecone.</div>
       <label style="margin-top:10px;">Client library</label>
       <select id="ingest_client"></select>
       <div style="margin-top:10px;">
         <button id="ingestBtn">Update Client Library</button>
       </div>
-      <label style="margin-top:12px;">Result</label>
-      <textarea id="ingest_out" class="mono" rows="10" readonly></textarea>
+
+      <div id="ingest_summary" style="margin-top:14px;"></div>
+      <table id="ingest_table" style="display:none;">
+        <thead>
+          <tr><th>File</th><th>Type</th><th>Status</th><th>Chunks</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
 
       <h3 style="margin-top:24px;">Existing Users</h3>
       <table id="usersTable"><tbody></tbody></table>
 
       <h3 style="margin-top:20px;">Available Client Libraries</h3>
-      <div class="muted">These are folders under your secure Drive root.</div>
+      <div class="muted">Folders under your secure Drive root.</div>
       <table id="clientsTable"><tbody></tbody></table>
     </section>
   </main>
@@ -101,14 +110,28 @@ document.getElementById('createUserBtn').onclick = async () => {
 
 document.getElementById('ingestBtn').onclick = async () => {
   const clientId = document.getElementById('ingest_client').value;
-  document.getElementById('ingest_out').value = 'Ingesting... this can take several minutes for large libraries.';
+  const summary = document.getElementById('ingest_summary');
+  const table = document.getElementById('ingest_table');
+  const tbody = table.querySelector('tbody');
+  summary.innerHTML = 'Ingesting… this can take several minutes for large libraries.';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
+
   try {
     const res = await jpost('/admin/ingest-client', { clientId });
-    document.getElementById('ingest_out').value = JSON.stringify(res, null, 2);
-    alert('Update complete');
+    const s = res.summary || {};
+    summary.innerHTML = `
+      <div><strong>Done.</strong> Files scanned: ${s.filesSeen || 0}. Ingested: ${s.ingestedCount || 0}. Skipped: ${s.skippedCount || 0}. Errors: ${s.errorsCount || 0}. Total chunks upserted: ${s.upserted || 0}. ${typeof s.namespaceVectorCount==='number' ? 'Namespace vectors now: ' + s.namespaceVectorCount + '.' : ''}</div>
+      <div class="muted" style="margin-top:6px">Supports Google Docs, Slides, Sheets, and PDFs (if pdf-parse is installed).</div>
+    `;
+    const rows = []
+      .concat((res.ingested || []).map(f => `<tr><td>${f.name}</td><td class="muted">${f.mimeType}</td><td><span class="pill ok">ingested</span></td><td>${f.chunks}</td></tr>`))
+      .concat((res.skipped || []).map(f => `<tr><td>${f.name}</td><td class="muted">${f.mimeType}</td><td><span class="pill skip">${f.reason || 'skipped'}</span></td><td>0</td></tr>`))
+      .concat((res.errors || []).map(f => `<tr><td>${f.file}</td><td class="muted">—</td><td><span class="pill err">${f.msg || 'error'}</span></td><td>0</td></tr>`));
+    tbody.innerHTML = rows.join('');
+    table.style.display = 'table';
   } catch (e) {
-    document.getElementById('ingest_out').value = String(e);
-    alert('Failed: ' + e);
+    summary.innerHTML = '<span class="pill err">Failed</span> ' + String(e);
   }
 };
 
