@@ -8,145 +8,146 @@
 </head>
 <body>
   <div class="page">
+
+    <!-- Header -->
     <header class="header">
-      <h1 class="title">Research Q&amp;A <span class="beta">(BETA)</span></h1>
-      <div class="header-right">
-        <a class="btn ghost" href="/admin.html">Admin</a>
-        <button class="btn ghost" id="signOutBtn" type="button">Sign out</button>
+      <h1 class="title">
+        <span class="title-cog">Research Q&amp;A</span>
+        <span class="beta-badge">(BETA)</span>
+      </h1>
+      <div class="header-actions">
+        <a class="cg-btn" href="/admin.html">Admin</a>
+        <button class="cg-btn" id="signOutBtn" type="button">Sign out</button>
       </div>
     </header>
 
-    <!-- Hero / Instructions with left accent -->
-    <section class="card accent">
-      <div class="space-between">
-        <h2 class="card-title">Ask a question grounded in your LIBRARY</h2>
-        <span class="badge">Secure area</span>
-      </div>
-      <p class="small">Enter a clear question. We’ll return key findings, citations, and related slides when available.</p>
+    <!-- Hero / Instructions with darker left accent -->
+    <section class="callout cg-dark-accent">
+      <div class="muted">Secure area</div>
+      <h3 style="margin:6px 0 8px 0;">Ask a question grounded in your LIBRARY</h3>
+      <p class="muted">Enter a clear question. We’ll return key findings, citations, and related slides when available.</p>
     </section>
 
-    <!-- Query form -->
-    <section class="card mt-12">
-      <div class="grid-2">
-        <div>
-          <label class="label">Client Library</label>
-          <select id="clientLibrary" class="select text-sm" autocomplete="off">
-            <option value="" disabled selected>Select…</option>
-          </select>
-        </div>
-        <div>
-          <label class="label">Question</label>
-          <form id="qForm" class="row" autocomplete="off">
-            <input type="text" id="qInput" class="input" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?" />
-            <button class="btn" type="submit">Ask</button>
+    <!-- Search -->
+    <section class="search">
+      <div class="panel">
+        <div style="display:grid; grid-template-columns: 1fr; gap:12px;">
+          <div>
+            <label class="label" for="clientLibrary">Client Library</label>
+            <select id="clientLibrary" class="select">
+              <option value="" disabled selected>Select...</option>
+            </select>
+          </div>
+
+          <form id="qform" autocomplete="off">
+            <textarea id="q" class="textarea" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"></textarea>
+            <button class="btn-ask" type="submit">Ask</button>
           </form>
+
+          <div id="inlineErr" class="muted hidden"></div>
         </div>
       </div>
     </section>
 
     <!-- Results (hidden until a question is asked) -->
-    <section id="results" class="hidden mt-16">
-      <div class="card">
-        <h3 class="card-title">Answer</h3>
+    <section id="results" class="results hidden">
+      <div class="panel">
+        <h3>Answer</h3>
         <div id="answer"></div>
       </div>
-      <div class="grid-2 mt-12">
-        <div class="card">
-          <h3 class="card-title">References</h3>
-          <div id="references"></div>
-        </div>
-        <div class="card">
-          <h3 class="card-title">Report Slides</h3>
-          <div id="slides"></div>
-        </div>
+
+      <div class="panel">
+        <h3>References</h3>
+        <ol id="references" class="ref-ol"></ol>
+      </div>
+
+      <div class="panel">
+        <h3>Report Slides</h3>
+        <div id="slides" class="charts-grid"></div>
       </div>
     </section>
+
   </div>
 
   <!-- Simple password gate (client-side) -->
-  <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
-    <div class="panel">
+  <div id="cgGate" class="cg-gate" role="dialog" aria-modal="true">
+    <div class="cg-panel">
       <h3>Enter Access Password</h3>
-      <p class="small mb-0">This page is gated. Contact your admin if you don’t have access.</p>
-      <form id="gateForm" class="mt-12" autocomplete="off">
-        <!-- dummy fields to confuse autofill -->
+      <p class="muted">This page is gated. Contact your admin if you don’t have access.</p>
+      <form id="cgGateForm" autocomplete="off">
+        <!-- dummy fields to discourage autofill -->
         <input type="text" class="hidden" aria-hidden="true">
         <input type="password" class="hidden" aria-hidden="true">
-        <label class="label">Password</label>
-        <input id="gatePwd" class="input readonly" type="password" inputmode="text" autocomplete="new-password" placeholder="Password" />
-        <button class="btn block mt-12" type="submit">Continue</button>
-        <div class="hint">Tip: This is a UI gate only. For real security, enforce auth in <code>server.js</code>.</div>
+
+        <label class="cg-label" for="cgGatePwd">Password</label>
+        <input id="cgGatePwd" class="input cg-readonly" type="password" autocomplete="new-password" placeholder="Password" />
+
+        <button class="cg-btn block" type="submit" style="margin-top:12px;">Continue</button>
+        <div class="cg-hint">Tip: UI gate only. Enforce real auth in <code>server.js</code>.</div>
       </form>
     </div>
   </div>
 
   <script>
-    // ---- tiny helper
+    // Helpers
     const $ = (sel) => document.querySelector(sel);
 
-    // ---- password gate (per-session)
+    // ----- Password gate (session-only)
     const GATE_KEY = "cg_gate_ok_v1";
-    function showGate() { $("#gate").classList.remove("hidden"); }
-    function hideGate() { $("#gate").classList.add("hidden"); }
+    const gate = $("#cgGate");
     function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
     function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
+    function showGate() { gate.classList.add("open"); }
+    function hideGate() { gate.classList.remove("open"); }
 
-    function setupGate() {
-      // Prevent autofill tricks
-      const pwd = $("#gatePwd");
+    (function setupGate() {
+      const pwd = $("#cgGatePwd");
+      // defeat aggressive autofill UX
       pwd.setAttribute("readonly", "readonly");
       pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
 
-      $("#gateForm").addEventListener("submit", (e) => {
+      $("#cgGateForm").addEventListener("submit", (e) => {
         e.preventDefault();
         const val = pwd.value.trim();
-        if (val === "coggpt25") {
-          markGateOk();
-          hideGate();
-        } else {
-          alert("Incorrect password");
-        }
+        if (val === "coggpt25") { markGateOk(); hideGate(); }
+        else alert("Incorrect password");
       });
-
       if (!gateOk()) showGate();
-    }
-    setupGate();
+      $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
+    })();
 
-    // ---- sign out clears the gate
-    $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
-
-    // ---- populate client library (expects backend to serve list at /clients or /admin/clients)
-    async function loadLibraries() {
+    // ----- Populate Client Libraries (optional; best-effort)
+    (async function loadLibraries() {
       const sel = $("#clientLibrary");
-      try {
-        // try common endpoints; fallback stays empty so you can select later
-        const endpoints = ["/clients", "/admin/clients", "/api/clients"];
-        let data = null;
-        for (const ep of endpoints) {
-          try {
-            const r = await fetch(ep);
-            if (r.ok) { data = await r.json(); break; }
-          } catch (_) { /* ignore */ }
-        }
-        if (Array.isArray(data)) {
-          for (const name of data) {
-            const opt = document.createElement("option");
-            opt.value = name; opt.textContent = name;
-            sel.appendChild(opt);
+      const endpoints = ["/clients", "/admin/clients", "/api/clients"];
+      for (const ep of endpoints) {
+        try {
+          const r = await fetch(ep);
+          if (r.ok) {
+            const data = await r.json();
+            if (Array.isArray(data)) {
+              for (const name of data) {
+                const opt = document.createElement("option");
+                opt.value = name; opt.textContent = name;
+                sel.appendChild(opt);
+              }
+              break;
+            }
           }
-        }
-      } catch (e) { /* silent */ }
-    }
-    loadLibraries();
+        } catch (_) { /* ignore */ }
+      }
+    })();
 
-    // ---- ask
-    $("#qForm").addEventListener("submit", async (e) => {
+    // ----- Ask flow
+    $("#qform").addEventListener("submit", async (e) => {
       e.preventDefault();
       const lib = $("#clientLibrary").value;
-      const q = $("#qInput").value.trim();
-      if (!lib || !q) { alert("Choose a Library and enter a question"); return; }
+      const q = $("#q").value.trim();
+      const err = $("#inlineErr");
+      err.classList.add("hidden");
+      if (!lib) { err.textContent = "Please select a Client Library."; err.classList.remove("hidden"); return; }
+      if (!q) { err.textContent = "Please enter a question."; err.classList.remove("hidden"); return; }
 
-      // Reveal results container immediately (empty state) and then fill
       $("#results").classList.remove("hidden");
       $("#answer").textContent = "Thinking…";
       $("#references").innerHTML = "";
@@ -165,17 +166,19 @@
         const refs = data?.references || {};
         const visuals = data?.visuals || [];
 
-        // references
-        const refList = Object.entries(refs).map(([k, v]) => `<div class="small">• <strong>${k}</strong> — ${v}</div>`).join("");
-        $("#references").innerHTML = refList || "<span class='small'>None</span>";
+        // references list (italic like your style)
+        const items = Object.entries(refs).map(([k, v]) => `<li class="ref-li"><em>${k}</em> — ${v}</li>`).join("");
+        $("#references").innerHTML = items || "<li class='ref-li'><em>No references</em></li>";
 
-        // slides (limit 6)
+        // slides grid (limit 6)
         const max = 6;
-        const imgs = (visuals || []).slice(0, max).map(src => `<img src="${src}" alt="slide" style="width:100%; border-radius:10px; border:1px solid var(--line); margin-bottom:8px;"/>`).join("");
-        $("#slides").innerHTML = imgs || "<span class='small'>No slides available</span>";
-      } catch (err) {
+        const imgs = visuals.slice(0, max)
+          .map(src => `<img class="preview-img" src="${src}" alt="slide" />`)
+          .join("");
+        $("#slides").innerHTML = imgs || "<div class='preview-fallback'>No slides available</div>";
+      } catch (e2) {
+        console.error(e2);
         $("#answer").textContent = "I don't have enough information.";
-        console.error(err);
       }
     });
   </script>
