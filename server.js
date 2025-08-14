@@ -1,10 +1,7 @@
 // server.js — Express app with login, sessions, Google Drive client folders, and RAG search
-// This file is a full replacement that *updates your existing functionality*:
-// - Keeps /search and /upsert-chunks endpoints (auth-gated)
-// - Adds session login (cognitive_internal / coggpt25) and client-user accounts
-// - Shows client libraries from Drive subfolders of DRIVE_ROOT_FOLDER_ID (no manual subfolder config)
-// - Admin page is only accessible after login; client-user creation requires username/password/confirm + client folder
-// - Removes any UI dependency on "Top K" (server uses DEFAULT_TOPK internally)
+// IMPORTANT: This version UPDATES (upserts) the internal user on every boot.
+// Set INTERNAL_PASSWORD in your environment to control the password (defaults to "coggpt25").
+// The login page has only username/password. Client selection is shown AFTER login on the main page.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -43,13 +40,24 @@ const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || "";
 const GOOGLE_KEYFILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || "";
 
+// Internal account config
+const INTERNAL_USERNAME = "cognitive_internal";
+const INTERNAL_PASSWORD =
+  process.env.INTERNAL_PASSWORD && String(process.env.INTERNAL_PASSWORD).trim()
+    ? String(process.env.INTERNAL_PASSWORD).trim()
+    : "coggpt25";
+const INTERNAL_PASSWORD_HASH =
+  process.env.INTERNAL_PASSWORD_HASH && String(process.env.INTERNAL_PASSWORD_HASH).trim()
+    ? String(process.env.INTERNAL_PASSWORD_HASH).trim()
+    : null;
+
 // -------------------- App Setup --------------------
 const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
-// Sessions (MemoryStore for simplicity; swap to Redis for production)
+// Sessions (MemoryStore is OK for testing; swap to Redis for production)
 app.use(
   session({
     secret: SESSION_SECRET,
@@ -92,43 +100,41 @@ function writeJSON(p, obj) {
   }
 }
 
-// Seed internal user if file absent
-(function seedInternalUser() {
+/** Upsert (create or update) the internal account on every boot. */
+(function upsertInternalUser() {
   ensureConfigDir();
-  if (!fs.existsSync(USERS_PATH)) {
-    // bcrypt hash for "coggpt25" (precomputed). You can override with INTERNAL_PASSWORD_HASH.
-    const defaultHash =
-      process.env.INTERNAL_PASSWORD_HASH ||
-      "$2b$10$wU2s/7vQ5U5mZHsajCwQXOFQ8cJk8N3U3m4l5o9pQJ6y0yqJ4b2x2";
-    const seeded = {
-      users: [
-        {
-          username: "cognitive_internal",
-          passwordHash: defaultHash,
-          role: "internal",
-          allowedClients: "*", // can access/switch to any client library
-        },
-      ],
-    };
-    writeJSON(USERS_PATH, seeded);
-    console.log("[seed] created config/users.json with internal account");
+  const usersDoc = readJSON(USERS_PATH, { users: [] });
+
+  // Choose the hash: explicit hash wins; else hash the plain password from env (or default).
+  const passwordHash = INTERNAL_PASSWORD_HASH || bcrypt.hashSync(INTERNAL_PASSWORD, 10);
+
+  const idx = usersDoc.users.findIndex((u) => u.username === INTERNAL_USERNAME);
+  if (idx === -1) {
+    usersDoc.users.push({
+      username: INTERNAL_USERNAME,
+      passwordHash,
+      role: "internal",
+      allowedClients: "*",
+    });
+    console.log("[auth] created internal user");
+  } else {
+    usersDoc.users[idx].passwordHash = passwordHash;
+    usersDoc.users[idx].role = "internal";
+    usersDoc.users[idx].allowedClients = "*";
+    console.log("[auth] updated internal user");
   }
+  writeJSON(USERS_PATH, usersDoc);
 })();
 
 // -------------------- Google Drive Helpers --------------------
 function getDrive() {
-  // Accept either a keyfile path or raw JSON credentials
   let auth;
   if (GOOGLE_CREDENTIALS_JSON) {
-    try {
-      const creds = JSON.parse(GOOGLE_CREDENTIALS_JSON);
-      auth = new google.auth.GoogleAuth({
-        credentials: creds,
-        scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-      });
-    } catch (e) {
-      throw new Error("Invalid GOOGLE_CREDENTIALS_JSON: " + (e?.message || e));
-    }
+    const creds = JSON.parse(GOOGLE_CREDENTIALS_JSON);
+    auth = new google.auth.GoogleAuth({
+      credentials: creds,
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    });
   } else if (GOOGLE_KEYFILE) {
     auth = new google.auth.GoogleAuth({
       keyFile: GOOGLE_KEYFILE,
@@ -142,10 +148,7 @@ function getDrive() {
   return google.drive({ version: "v3", auth });
 }
 
-/**
- * Lists direct subfolders under the DRIVE_ROOT_FOLDER_ID; each is a "client library".
- * Returns: [{ id, name }]
- */
+/** Lists direct subfolders under the DRIVE_ROOT_FOLDER_ID; each is a "client library". */
 async function listClientFolders() {
   if (!DRIVE_ROOT_FOLDER_ID) return [];
   try {
@@ -164,7 +167,6 @@ async function listClientFolders() {
     return [];
   }
 }
-
 async function driveFolderExists(folderId) {
   if (!folderId) return false;
   const list = await listClientFolders();
@@ -199,15 +201,12 @@ app.get("/admin", (req, res) => {
 // -------------------- Auth APIs --------------------
 app.post("/auth/login", async (req, res) => {
   try {
-    const { username, password, selectedClientId } = req.body || {};
+    const { username, password /* selectedClientId (unused in new UI) */ } = req.body || {};
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     const found = usersDoc.users.find((u) => u.username === username);
     if (!found) return res.status(401).json({ error: "Invalid credentials" });
 
-    const ok = await bcrypt.compare(
-      String(password || ""),
-      String(found.passwordHash || "")
-    );
+    const ok = await bcrypt.compare(String(password || ""), String(found.passwordHash || ""));
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
     req.session.user = {
@@ -216,23 +215,13 @@ app.post("/auth/login", async (req, res) => {
       allowed: found.allowedClients,
     };
 
-    // Set active client library for the session
+    // Pick an active client for the session:
     if (found.role === "internal") {
-      // internal can optionally pick a client on the login screen
-      let active = null;
-      if (selectedClientId && (await driveFolderExists(selectedClientId))) {
-        active = selectedClientId;
-      } else {
-        const folders = await listClientFolders();
-        active = folders[0]?.id || null; // fallback to first available
-      }
-      req.session.activeClientId = active;
+      const folders = await listClientFolders();
+      req.session.activeClientId = folders[0]?.id || null; // choose first available
     } else {
-      // client user: forced to their allowed client library
       const allowed = found.allowedClients;
-      req.session.activeClientId = Array.isArray(allowed)
-        ? allowed[0]
-        : allowed || null;
+      req.session.activeClientId = Array.isArray(allowed) ? allowed[0] : allowed || null;
     }
 
     res.json({ ok: true });
@@ -275,13 +264,8 @@ app.post("/auth/switch-client", requireSession, requireInternal, async (req, res
   res.json({ ok: true });
 });
 
-// Public (no auth) helper to show available client libraries on login (for internal user dropdown)
+// Public helper to show available client libraries on login if needed elsewhere
 app.get("/clients/drive-folders", async (_req, res) => {
-  const folders = await listClientFolders();
-  res.json(folders);
-});
-// Alias (kept for compatibility if you referenced it anywhere else)
-app.get("/clients/public-list", async (_req, res) => {
   const folders = await listClientFolders();
   res.json(folders);
 });
@@ -387,9 +371,6 @@ function sanitizeIdPart(s) {
 }
 
 // -------------------- Ingestion --------------------
-// POST /upsert-chunks
-// Body: { clientId, fileName, fileUrl, study, date, chunks: [{ idSuffix?, text }] }
-// Requires: (a) logged-in internal user OR (b) x-auth-token header = AUTH_TOKEN
 app.post("/upsert-chunks", requireSession, async (req, res) => {
   const headerToken = req.get("x-auth-token");
   const isInternal = req.session?.user?.role === "internal";
@@ -435,9 +416,6 @@ app.post("/upsert-chunks", requireSession, async (req, res) => {
 });
 
 // -------------------- Search --------------------
-// POST /search
-// Body: { userQuery, clientId? } (clientId optional for internal users; otherwise taken from session)
-// Returns: { answer, references: { chunks: [...] }, visuals: [] }
 app.post("/search", requireSession, async (req, res) => {
   try {
     const headerToken = req.get("x-auth-token");
