@@ -180,64 +180,63 @@ async function extractTextFromFile(file) {
   return "";
 }
 
-// Optional PDF extractor with fallback
+// Optional PDF extractor with robust fallback
 async function tryExtractPdfText(file) {
-  // 1) Download the raw PDF bytes from Drive
+  // 1) Download raw PDF bytes from Drive
   const drive = getDrive();
   const r = await drive.files.get(
     { fileId: file.id, alt: "media" },
     { responseType: "arraybuffer" }
   );
-  const buf = Buffer.from(r.data); // Node Buffer
+  const buf = Buffer.from(r.data);
 
-  // 2) First, try pdf-parse (fast & simple)
+  // 2) First try: pdf-parse (fast, simple)
   try {
     const mod = await import("pdf-parse");
     const pdfParse = (mod && (mod.default || mod)) || mod;
     if (typeof pdfParse === "function") {
       const parsed = await pdfParse(buf);
-      if (parsed && parsed.text && parsed.text.trim()) return parsed.text;
+      if (parsed?.text?.trim()) return parsed.text;
     }
-    // If it didn't throw but produced no text, continue to fallback
-  } catch (e) {
-    const msg = String(e?.message || e);
-    // If pdf-parse isn't installed or misbehaved, we'll try pdfjs next
-    if (!/Cannot find package 'pdf-parse'/.test(msg)) {
-      // swallow other pdf-parse errors and try fallback
-    }
+  } catch (_) {
+    // swallow and fall through to pdfjs
   }
 
-  // 3) Fallback: pdfjs-dist (robust pure-JS extractor)
+  // 3) Fallback: pdfjs-dist (works in Node, resilient)
   try {
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.js");
-    // In Node, worker is handled internally; just ensure eval is off
+    // Try modern export first; fall back to legacy if needed
+    let pdfjs;
+    try {
+      pdfjs = await import("pdfjs-dist/build/pdf.mjs");
+    } catch {
+      pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    }
+
     const loadingTask = pdfjs.getDocument({
       data: new Uint8Array(buf),
       isEvalSupported: false,
       useSystemFonts: false
     });
     const pdf = await loadingTask.promise;
+
     let all = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      const text = content.items.map(it => (it.str || "")).join(" ");
+      const text = content.items.map(it => it.str || "").join(" ");
       if (text.trim()) all.push(text.trim());
     }
-    const joined = all.join("\n\n");
-    if (joined.trim()) return joined;
+    const joined = all.join("\n\n").trim();
+    if (joined) return joined;
+
     throw new Error("Empty text from pdfjs.");
   } catch (e) {
-    // If both methods fail, surface a clear reason back to the admin UI
-    const msg = String(e?.message || e);
     throw new Error(
-      "PDF text extraction failed. " +
-      "Try converting this PDF to a Google Doc or ensure pdf-parse/pdfjs are available. " +
-      `Reason: ${msg}`
+      "PDF text extraction failed. Try converting this PDF to a Google Doc or ensure pdf-parse/pdfjs are available. " +
+      `Reason: ${String(e?.message || e)}`
     );
   }
 }
-
 
 // -------------------- Pinecone helpers --------------------
 async function embedTexts(texts) {
@@ -497,4 +496,5 @@ app.listen(PORT, ()=>{
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
 });
+
 
