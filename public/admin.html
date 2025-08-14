@@ -9,11 +9,12 @@
     body { background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; }
     header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); }
     h1 { font-size:1.1rem; margin:0; }
-    main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1fr 1.6fr; gap:20px; }
+    main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1.6fr 1fr; gap:20px; }
     section { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; }
     label { display:block; font-size:.9rem; color:var(--muted); margin:8px 0 6px; }
     input, select { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:#222; outline:none; }
-    button { padding:10px 14px; border-radius:10px; background:var(--brand); color:#111; border:0; font-weight:700; cursor:pointer; }
+    button, .btn { padding:10px 14px; border-radius:10px; background:#fff; color:#111; border:1px solid var(--line); font-weight:700; cursor:pointer; }
+    button:hover, .btn:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
     table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
     th, td { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top; }
     th { color:var(--muted); font-weight:600; }
@@ -21,51 +22,30 @@
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; border:1px solid var(--line); }
     .ok { background:#ecfdf5; border-color:#bbf7d0; }
     .err { background:#fee2e2; border-color:#fecaca; }
+    .hidden { display:none; }
+    .uppercase { text-transform:uppercase; }
   </style>
 </head>
 <body>
   <header>
     <h1>Admin</h1>
     <div>
-      <a href="/" style="margin-right:10px; color:var(--ink); text-decoration:none;">Back</a>
-      <button id="logoutBtn">Log out</button>
+      <a href="/" class="btn" style="margin-right:10px;">Back</a>
+      <button id="logoutBtn" class="btn">Sign out</button>
     </div>
   </header>
 
   <main>
+    <!-- LEFT: Update Client LIBRARY -->
     <section>
-      <h3>Create Client User</h3>
-      <label>Username</label>
-      <input id="u_username" placeholder="e.g., genentech_user"/>
-      <label>Password</label>
-      <input id="u_password" type="password" placeholder="Set a password"/>
-      <label>Confirm Password</label>
-      <input id="u_confirm" type="password" placeholder="Re-enter password"/>
-      <label>Client library (Drive folder)</label>
-      <select id="u_client" size="6"></select>
-      <div style="margin-top:12px;">
-        <button id="createUserBtn">Create User</button>
-      </div>
-
-      <h3 style="margin-top:24px;">Existing Users</h3>
-      <table id="usersTable"><tbody></tbody></table>
-
-      <h3 style="margin-top:20px;">Available Client Libraries</h3>
-      <div class="muted">Folders under your secure Drive root.</div>
-      <table id="clientsTable"><tbody></tbody></table>
-    </section>
-
-    <section>
-      <h3>Update Client Library</h3>
+      <h3>Update Client <span class="uppercase">Library</span></h3>
       <div class="muted">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs (if enabled) into Pinecone.</div>
-      <label style="margin-top:10px;">Client library</label>
+      <label style="margin-top:10px;">Client Library</label>
       <select id="ingest_client"></select>
       <div style="margin-top:10px;">
-        <button id="ingestBtn">Update Client Library</button>
+        <button id="ingestBtn" class="btn">Update Client Library</button>
       </div>
-
       <div id="ingest_summary" style="margin-top:14px;"></div>
-
       <table id="ingest_table" style="display:none;">
         <thead>
           <tr>
@@ -80,6 +60,30 @@
         <tbody></tbody>
       </table>
     </section>
+
+    <!-- RIGHT: Create Client User (toggleable) -->
+    <section>
+      <h3>Create Client User</h3>
+      <button id="toggleUserForm" class="btn">Open Form</button>
+      <div id="userForm" class="hidden">
+        <label>Username</label>
+        <input id="u_username" placeholder="e.g., genentech_user" autocomplete="new-username"/>
+        <label>Password</label>
+        <input id="u_password" type="password" placeholder="Set a password" autocomplete="new-password"/>
+        <label>Confirm Password</label>
+        <input id="u_confirm" type="password" placeholder="Re-enter password" autocomplete="new-password"/>
+        <label>Client <span class="uppercase">Library</span> (Drive folder)</label>
+        <select id="u_client" size="6"></select>
+        <div style="margin-top:12px;">
+          <button id="createUserBtn" class="btn">Create User</button>
+        </div>
+      </div>
+      <h3 style="margin-top:24px;">Existing Users</h3>
+      <table id="usersTable"><tbody></tbody></table>
+      <h3 style="margin-top:20px;">Available Client Libraries</h3>
+      <div class="muted">Folders under your secure Drive root.</div>
+      <table id="clientsTable"><tbody></tbody></table>
+    </section>
   </main>
 
 <script>
@@ -90,16 +94,20 @@ async function load() {
   const users = await jget('/admin/users/list');
   document.querySelector('#usersTable tbody').innerHTML =
     '<tr><th>Username</th><th>Role</th><th>Client Library</th></tr>' +
-    users.map(u => `<tr><td>${u.username}</td><td>${u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
-
+    users.map(u => `<tr><td>${u.username}</td><td>${u.role==='internal'?'admin':u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
   const clients = await jget('/clients/drive-folders');
   document.querySelector('#clientsTable tbody').innerHTML =
     '<tr><th>Name</th><th>Folder ID</th></tr>' +
     clients.map(c => `<tr><td>${c.name}</td><td class="muted">${c.id}</td></tr>`).join('');
-
   document.getElementById('u_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   document.getElementById('ingest_client').innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
 }
+
+document.getElementById('toggleUserForm').onclick = () => {
+  const form = document.getElementById('userForm');
+  form.classList.toggle('hidden');
+  document.getElementById('toggleUserForm').textContent = form.classList.contains('hidden') ? 'Open Form' : 'Close Form';
+};
 
 document.getElementById('createUserBtn').onclick = async () => {
   const username = document.getElementById('u_username').value.trim();
@@ -120,12 +128,10 @@ document.getElementById('ingestBtn').onclick = async () => {
   summary.textContent = 'Ingesting… this can take several minutes.';
   table.style.display = 'none';
   tbody.innerHTML = '';
-
   try {
     const res = await jpost('/admin/ingest-client', { clientId });
     const s = res.summary || {};
     summary.innerHTML = `<strong>Done.</strong> Files scanned: ${s.filesSeen || 0}. Ingested: ${s.ingestedCount || 0}. Skipped: ${s.skippedCount || 0}. Errors: ${s.errorsCount || 0}. Total chunks upserted: ${s.upserted || 0}. ${typeof s.namespaceVectorCount==='number' ? 'Namespace vectors: ' + s.namespaceVectorCount + '.' : ''}`;
-
     const rows = (res.ingested || []).map(f => `
       <tr>
         <td>${f.name}</td>
