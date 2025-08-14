@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Cognitive Consulting — Research Q&A</title>
+  <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
     :root { --brand:#ff7a00; }
     body { margin:0; background:#0b0b0e; color:#e9eef7; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid #22252b; }
-    .title { display:flex; align-items:center; gap:10px; }
-    .beta { font-size:.9rem; color:#a4aab4; }
+    .title { display:flex; align-items:center; gap:10px; font-weight:700; }
+    .beta { font-size:.9rem; color:#a4aab4; font-weight:500; }
     main { max-width:980px; margin: 24px auto; padding: 0 16px; }
     .box { background:#111317; border:1px solid #23262d; border-radius:16px; padding:16px; }
     input, select, button, textarea { border-radius:10px; border:1px solid #2a2f3a; background:#0d0f14; color:#eee; outline:none; }
@@ -22,15 +22,16 @@
     .muted { color:#9aa0a6; }
     .refs { display:grid; gap:8px; }
     .ref { padding:10px; border-radius:10px; background:#0d0f14; border:1px solid #2a2f3a; }
+    a.nav { color:#e9eef7; text-decoration:none; }
   </style>
 </head>
 <body>
   <header>
     <div class="title">
-      <strong>Research Q&amp;A</strong>
-      <span class="beta">(BETA)</span>
+      <strong>COGgpt</strong> <span class="beta">(BETA)</span>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
+      <a id="adminLink" class="nav" href="/admin" style="display:none;">Admin</a>
       <div id="who" class="muted"></div>
       <button id="logoutBtn" title="Sign out">Sign out</button>
     </div>
@@ -43,14 +44,8 @@
           <label class="muted">Your question</label>
           <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
         </div>
-        <div>
-          <label class="muted">Top K</label>
-          <select id="topk">
-            <option>6</option><option>8</option><option>10</option><option>12</option>
-          </select>
-        </div>
         <div id="clientWrap" style="display:none">
-          <label class="muted">Client</label>
+          <label class="muted">Client library</label>
           <select id="client"></select>
         </div>
         <div style="align-self:flex-end">
@@ -73,7 +68,7 @@
 
 <script>
 async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(url, body){ const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
 let me=null;
 async function boot() {
@@ -84,11 +79,14 @@ async function boot() {
   }
   const { user, activeClientId, clients } = me;
   document.getElementById('who').textContent = `${user.username} ${user.role==='internal'?'(internal)':''}`;
+  if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline';
 
+  // Populate client dropdown from Drive subfolders under the secure root
   const clientSel = document.getElementById('client');
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   if (activeClientId) clientSel.value = activeClientId;
 
+  // Show client selector only for internal users
   if (user.role === 'internal') {
     document.getElementById('clientWrap').style.display = 'block';
     clientSel.onchange = async () => {
@@ -101,8 +99,7 @@ boot();
 document.getElementById('ask').onclick = async () => {
   const q = document.getElementById('q').value.trim();
   if (!q) return;
-  const topK = Number(document.getElementById('topk').value);
-  const body = { userQuery: q, topK };
+  const body = { userQuery: q }; // Top K removed; server keeps its default
   if (me?.user?.role === 'internal') body.clientId = document.getElementById('client').value;
   const resp = await jpost('/search', body);
   document.getElementById('out').style.display = 'grid';
