@@ -1,101 +1,173 @@
-/* Admin page interactivity
-   - Flip layout already handled by HTML order
-   - "Create Client User" is collapsed until button clicked
-   - Prevent browser autofill with autocomplete="off" + nonstandard names
-   - Client Library as dropdown with ability to add new entries
-   - Buttons share site-wide styles
-*/
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <h1 class="title">Admin</h1>
+      <div class="header-right">
+        <a class="btn ghost" href="/index.html">Home</a>
+        <button class="btn ghost" id="signOutBtn" type="button">Sign out</button>
+      </div>
+    </header>
 
-const $ = (s, r=document)=>r.querySelector(s);
+    <section class="admin-grid">
+      <!-- LEFT: Update Client Library -->
+      <div class="card">
+        <h2 class="card-title">UPDATE CLIENT LIBRARY</h2>
+        <label class="label text-sm">LIBRARY</label>
+        <select id="libSelect" class="select text-sm" autocomplete="off">
+          <option value="" disabled selected>Select…</option>
+        </select>
+        <div class="row mt-12">
+          <button class="btn" id="btnUpdate">Update Library</button>
+        </div>
+      </div>
 
-const toggleBtn = $("#toggleCreateUser");
-const form = $("#createUserForm");
-const statusCreate = $("#createUserStatus");
-const signOutBtn = $("#signOutBtn");
+      <!-- RIGHT: Users -->
+      <div class="card">
+        <h2 class="card-title">USERS</h2>
 
-toggleBtn?.addEventListener("click", ()=>{
-  form.classList.toggle("hidden");
-  toggleBtn.textContent = form.classList.contains("hidden") ? "Open" : "Close";
-});
+        <button class="btn" id="toggleCreate">Create client user</button>
 
-signOutBtn?.addEventListener("click",(e)=>{
-  e.preventDefault();
-  localStorage.removeItem("AUTH_TOKEN");
-  location.href="/";
-});
+        <div id="createPanel" class="panel-toggle hidden">
+          <form id="createForm" class="form-grid" autocomplete="off">
+            <!-- dummy anti-autofill -->
+            <input type="text" class="hidden" aria-hidden="true">
+            <input type="password" class="hidden" aria-hidden="true">
 
-// ----- Client Library dropdown (simple client-side store; replace with your API if available)
-const selectLib = $("#clientLibrarySelect");
-const addBtn = $("#addLibraryItemBtn");
-const newItem = $("#newLibraryItem");
-const libStatus = $("#libraryStatus");
-const saveBtn = $("#saveLibraryBtn");
+            <div>
+              <label class="label text-sm">Username</label>
+              <input id="newUser" class="input readonly" type="text" autocomplete="off" placeholder="username" />
+            </div>
 
-function loadLib() {
-  try {
-    const raw = localStorage.getItem("CLIENT_LIBRARY") || '["Genentech","Demo"]';
-    const items = JSON.parse(raw);
-    selectLib.innerHTML = "";
-    items.forEach(v=>{
-      const opt = document.createElement("option");
-      opt.value = v; opt.textContent = v;
-      selectLib.appendChild(opt);
+            <div>
+              <label class="label text-sm">Password</label>
+              <input id="newPass" class="input readonly" type="password" autocomplete="new-password" placeholder="new password" />
+            </div>
+
+            <div class="row mt-8">
+              <button class="btn" type="submit">Save</button>
+              <button class="btn ghost" type="button" id="cancelCreate">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mt-16">
+      <div class="small">Role: <strong>admin</strong></div>
+    </section>
+  </div>
+
+  <!-- Reuse the same password gate (optional for admin too) -->
+  <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
+    <div class="panel">
+      <h3>Enter Admin Password</h3>
+      <p class="small mb-0">Restricted page.</p>
+      <form id="gateForm" class="mt-12" autocomplete="off">
+        <!-- dummy fields to confuse autofill -->
+        <input type="text" class="hidden" aria-hidden="true">
+        <input type="password" class="hidden" aria-hidden="true">
+        <label class="label">Password</label>
+        <input id="gatePwd" class="input readonly" type="password" inputmode="text" autocomplete="new-password" placeholder="Password" />
+        <button class="btn block mt-12" type="submit">Continue</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+
+    // --- gate
+    const GATE_KEY = "cg_gate_ok_v1";
+    function showGate() { $("#gate").classList.remove("hidden"); }
+    function hideGate() { $("#gate").classList.add("hidden"); }
+    function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
+    function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
+    function setupGate() {
+      const pwd = $("#gatePwd");
+      pwd.setAttribute("readonly", "readonly");
+      pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
+      $("#gateForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (pwd.value.trim() === "coggpt25") { markGateOk(); hideGate(); }
+        else alert("Incorrect password");
+      });
+      if (!gateOk()) showGate();
+    }; setupGate();
+
+    $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
+
+    // --- populate library options
+    async function loadLibraries() {
+      const sel = $("#libSelect");
+      try {
+        const endpoints = ["/clients", "/admin/clients", "/api/clients"];
+        let data = null;
+        for (const ep of endpoints) {
+          try { const r = await fetch(ep); if (r.ok) { data = await r.json(); break; } } catch (_e) { }
+        }
+        if (Array.isArray(data)) {
+          for (const name of data) {
+            const opt = document.createElement("option");
+            opt.value = name; opt.textContent = name; sel.appendChild(opt);
+          }
+        }
+      } catch (e) { /* silent */ }
+    }; loadLibraries();
+
+    // --- toggle create panel
+    const panel = $("#createPanel");
+    $("#toggleCreate").addEventListener("click", () => panel.classList.toggle("hidden"));
+    $("#cancelCreate").addEventListener("click", () => panel.classList.add("hidden"));
+
+    // defeat autofill
+    for (const id of ["newUser","newPass"]) {
+      const el = document.getElementById(id);
+      el.setAttribute("readonly", "readonly");
+      el.addEventListener("focus", () => el.removeAttribute("readonly"), { once: true });
+    }
+
+    // --- save new user (placeholder; wire to your backend)
+    $("#createForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const username = $("#newUser").value.trim();
+      const password = $("#newPass").value;
+      if (!username || !password) { alert("Enter username and password"); return; }
+      try {
+        // Replace with your real endpoint (example)
+        const r = await fetch("/admin/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, role: "admin" })
+        });
+        if (!r.ok) throw new Error("Failed to create user");
+        alert("Created!");
+        panel.classList.add("hidden");
+        $("#newUser").value = ""; $("#newPass").value = "";
+      } catch (err) { alert(err.message); }
     });
-  } catch {
-    selectLib.innerHTML = `<option>Demo</option>`;
-  }
-}
-loadLib();
 
-addBtn?.addEventListener("click", ()=>{
-  const v = (newItem.value||"").trim();
-  if (!v) return;
-  const arr = Array.from(selectLib.options).map(o=>o.value);
-  if (!arr.includes(v)) {
-    const opt = document.createElement("option"); opt.value=v; opt.textContent=v;
-    selectLib.appendChild(opt);
-    selectLib.value = v;
-    libStatus.textContent = "Added (not yet saved)";
-  } else {
-    libStatus.textContent = "Already exists";
-  }
-  newItem.value="";
-});
-
-saveBtn?.addEventListener("click", async ()=>{
-  const arr = Array.from(selectLib.options).map(o=>o.value);
-  localStorage.setItem("CLIENT_LIBRARY", JSON.stringify(arr));
-  libStatus.textContent = "Saved";
-});
-
-// ----- Create Client User (role fixed to admin)
-form?.addEventListener("submit", async (e)=>{
-  e.preventDefault();
-  statusCreate.textContent = "Creating…";
-
-  const payload = {
-    username: $("#cu_username").value.trim(),
-    password: $("#cu_password").value,
-    role: $("#cu_role").value || "admin"
-  };
-  if (!payload.username || !payload.password) {
-    statusCreate.textContent = "Username and password required";
-    return;
-  }
-
-  try {
-    const res = await fetch("/admin/create-user", {
-      method:"POST",
-      headers:{
-        "Content-Type":"application/json",
-        "x-auth-token": (localStorage.getItem("AUTH_TOKEN") || "")
-      },
-      body: JSON.stringify(payload)
+    // --- update library (placeholder; wire to your backend)
+    $("#btnUpdate").addEventListener("click", async () => {
+      const lib = $("#libSelect").value;
+      if (!lib) { alert("Select a library first"); return; }
+      try {
+        const r = await fetch(`/admin/library/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ library: lib })
+        });
+        if (!r.ok) throw new Error("Update failed");
+        alert("Library update started");
+      } catch (err) { alert(err.message); }
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    statusCreate.textContent = "User created";
-    form.reset();
-  } catch (err) {
-    statusCreate.textContent = "Error: " + err.message;
-  }
-});
+  </script>
+</body>
+</html>
