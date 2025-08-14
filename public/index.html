@@ -18,8 +18,13 @@
     .nav { display:flex; align-items:center; gap:10px; }
 
     /* Buttons */
-    .btn { display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:10px; background:var(--brand); color:#fff; font-weight:700; cursor:pointer; text-decoration:none; }
-    .btn.small { padding:8px 12px; font-size:.9rem; }
+    .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:10px; font-weight:700; cursor:pointer; text-decoration:none; }
+    .btn.small { padding:10px 14px; font-size:.92rem; line-height:1; height:40px; }
+    /* Admin + Sign out: white boxes, orange on hover */
+    .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
+    .btn.ghost:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
+    /* Ask button: orange with white text */
+    .btn.primary { background:var(--brand); color:#fff; border:0; padding:16px 22px; border-radius:18px; }
 
     /* Page layout */
     main { max-width:960px; margin: 56px auto; padding: 0 16px; }
@@ -27,16 +32,14 @@
     .hero h1 { font-size:34px; margin:0 0 6px 0; }
     .hero p { margin:0; color:var(--muted); }
 
-    /* Sleek Client selector (between title and prompt) */
-    .client-wrap { display:none; justify-content:center; margin: 16px 0 6px; }
-    .client-card { display:flex; align-items:center; gap:10px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:10px 12px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
-    .client-label { color:var(--muted); font-size:.95rem; }
+    /* Client selector (no surrounding box) */
+    .client-wrap { display:none; text-align:center; margin: 16px 0 6px; }
+    .client-wrap label { display:block; font-size:0.95rem; color:var(--muted); margin-bottom:6px; }
     select { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:12px; padding:10px 12px; min-width:260px; font-size:1rem; }
 
     /* Ask bar */
     .askbox { display:flex; gap:12px; width:100%; margin:18px auto 0; }
-    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#fff; color:var(--ink); }
-    .askbox button { padding:16px 22px; border-radius:18px; background:var(--brand); color:#fff; }
+    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#f6faff; color:var(--ink); }
 
     /* Results */
     .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
@@ -59,8 +62,8 @@
       </div>
       <div class="nav">
         <div id="who" class="muted"></div>
-        <a id="adminLink" class="btn small" href="/admin" style="display:none;">Admin</a>
-        <button id="logoutBtn" class="btn small" title="Sign out">Sign out</button>
+        <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
+        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
@@ -73,15 +76,13 @@
 
     <!-- Client dropdown (between title and prompt) -->
     <div class="client-wrap" id="clientWrap">
-      <div class="client-card">
-        <span class="client-label">Client library</span>
-        <select id="client"></select>
-      </div>
+      <label for="client">Client library</label>
+      <select id="client"></select>
     </div>
 
     <div class="askbox">
       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
-      <button id="ask" class="btn">Ask</button>
+      <button id="ask" class="btn primary">Ask</button>
     </div>
 
     <div id="msg" class="msg"></div>
@@ -121,7 +122,7 @@ async function boot() {
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   if (activeClientId) clientSel.value = activeClientId;
   if (user.role === 'internal') {
-    wrap.style.display = 'flex';
+    wrap.style.display = 'block';
     clientSel.onchange = async () => {
       try { await jpost('/auth/switch-client', { clientId: clientSel.value }); showInfo('Switched client library.'); }
       catch (e) { showError('Could not switch client: ' + e); }
@@ -140,7 +141,6 @@ async function doAsk() {
   if (!q) return;
 
   const body = { userQuery: q };
-  // For internal users, include the explicit clientId
   const sel = document.getElementById('client');
   if (sel && sel.value) body.clientId = sel.value;
 
@@ -162,7 +162,12 @@ async function doAsk() {
         <div style="margin-top:6px">${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">Open source</a>`:''}</div>
       </div>`).join('');
   } catch (e) {
-    showError('Search failed: ' + e);
+    const msg = String(e);
+    if (msg.includes('/query') && msg.toLowerCase().includes('parse url')) {
+      showError("Search failed: your Pinecone host is not a full https URL. In Pinecone → your index → Connection details, copy the Host value into the PINECONE_INDEX_HOST environment variable, then redeploy.");
+    } else {
+      showError('Search failed: ' + msg);
+    }
   }
 }
 document.getElementById('ask').onclick = doAsk;
