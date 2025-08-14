@@ -18,7 +18,16 @@
 
   <link rel="stylesheet" href="/styles.css" />
   <meta name="auth-token" content="Jrx4cukgLvuj5jFs4mU0U5ckL+UxHfkrL5pHY+xr5Hw=">
+
+  <!-- Chart.js (unchanged) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- PDF.js for client-side slide thumbnails -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-+oJrfR0f6CwOqZk2d7t9N8kQq3e8mRzJpV4t/8rXkVt5qVx5q2ZHyFmc8mQXwq3c0v5zH2b2tMyJw1oYz/0K2Q==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // Point the worker at a CDN copy
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  </script>
 </head>
 <body>
   <div class="page">
@@ -187,9 +196,8 @@
     function renderQuotes(data, userQuery){
       const panel = qs("#quotesPanel"); const root = qs("#quotes"); root.innerHTML="";
       const quotes = Array.isArray(data.structured?.quotes) ? data.structured.quotes : [];
-      const qlc = (q)=>/\^\d+\^/.test(q) && q.replace(/\^.+?\^/g,"").trim().split(/\s+/).length<=20 && new RegExp(
-        (userQuery.split(/\s+/).filter(w=>w.length>4)[0]||".")
-      ,"i").test(q);
+      const qlc = (q)=>/\^\d+\^/.test(q) && q.replace(/\^.+?\^/g,"").trim().split(/\s+/).length<=20 &&
+                    new RegExp((userQuery.split(/\s+/).filter(w=>w.length>4)[0]||"."),"i").test(q);
       const filt = quotes.filter(qlc).slice(0,3);
       if (!filt.length){ panel.classList.add("hidden"); return; }
       panel.classList.remove("hidden");
@@ -230,21 +238,54 @@
       }
     }
 
-    // ---------- slide thumbnails ----------
+    // ---------- CLIENT-SIDE SLIDE THUMBNAILS (PDF.js) ----------
+    async function renderPdfThumb({ fileId, page, mountEl }) {
+      try {
+        // Fetch raw PDF bytes from your server
+        const ab = await fetch(`/file/pdf?fileId=${encodeURIComponent(fileId)}`).then(r => r.arrayBuffer());
+        const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+        const p = await pdf.getPage(Math.max(1, Number(page) || 1));
+
+        // Compute a friendly width
+        const initialVp = p.getViewport({ scale: 1.0 });
+        const maxWidth = 320;
+        const scale = Math.min(maxWidth / initialVp.width, 2.0);
+        const viewport = p.getViewport({ scale });
+
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.className = "preview-img";
+        canvas.title = `Open page ${page || 1}`;
+
+        await p.render({ canvasContext: ctx, viewport }).promise;
+
+        canvas.addEventListener("click", () => {
+          // Deep-link to the exact page in the browser viewer
+          window.open(`/file/pdf?fileId=${encodeURIComponent(fileId)}#page=${page || 1}`, "_blank");
+        });
+
+        mountEl.appendChild(canvas);
+      } catch (e) {
+        console.error("PDF thumb render failed:", e);
+        const fb = document.createElement("div");
+        fb.className = "preview-fallback";
+        fb.textContent = "(slide preview unavailable)";
+        mountEl.appendChild(fb);
+      }
+    }
+
     function renderPreviews(visuals){
       const panel = qs("#visualsPanel");
-      panel.querySelectorAll("img.preview-img")?.forEach(img=>img.remove());
-      if (Array.isArray(visuals) && visuals.length){
-        visuals.forEach(v=>{
-          const img=new Image();
-          img.className="preview-img";
-          img.alt=`${v.fileName} page ${v.page}`;
-          img.src=v.imageUrl;
-          img.onerror = ()=>{ img.replaceWith(el("div",{class:"preview-fallback"},"(slide preview unavailable)")); };
-          img.addEventListener("click",()=> window.open(`/file/pdf?fileId=${encodeURIComponent(v.fileId)}`,"_blank"));
-          panel.appendChild(img);
-        });
-      }
+      // Remove previous thumbs
+      panel.querySelectorAll(".preview-img, .preview-fallback")?.forEach(n=>n.remove());
+      if (!Array.isArray(visuals) || !visuals.length) return;
+
+      // Render each referenced page (client-side)
+      visuals.forEach(v => {
+        renderPdfThumb({ fileId: v.fileId, page: v.page || 1, mountEl: panel });
+      });
     }
 
     function renderRefs(refs=[]){
@@ -289,7 +330,7 @@
           hide(qs("#keynums"));
         }
         renderBullets(data);
-        renderPreviews(data.visuals);
+        renderPreviews(data.visuals); // <-- now uses PDF.js client-side thumbnails
         renderQuotes(data, userQuery);
         renderRefs(data.references || []);
         show(qs("#results"));
@@ -297,27 +338,6 @@
         console.error("render error:", e);
         qs("#inlineErr").textContent="There was an error rendering results. See console for details.";
         show(qs("#inlineErr"));
-      }
-
-      // secondary
-      try{
-        const r = await fetch("/secondary",{
-          method:"POST",
-          headers:{ "Content-Type":"application/json", "x-auth-token": token },
-          body: JSON.stringify({ userQuery })
-        });
-        const sec = await r.json();
-        const box = qs("#secondaryContent");
-        if (Array.isArray(sec?.items) && sec.items.length){
-          box.innerHTML = sec.items.map(it =>
-            `<strong>${(it.title||"Source").trim()}</strong><br>${(it.summary||"").trim()}<br><a href="${it.url}" target="_blank" rel="noopener">${it.url}</a>`
-          ).join("<br><br>");
-        } else {
-          box.innerHTML = "<p class='muted'>No secondary resources available yet.</p>";
-        }
-      } catch (e) {
-        console.error("secondary failed:", e);
-        qs("#secondaryContent").innerHTML = "<p class='muted'>Secondary resources unavailable.</p>";
       } finally {
         hide(qs("#loadingOverlay"));
       }
