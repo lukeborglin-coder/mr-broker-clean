@@ -1,5 +1,6 @@
 // server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
-// Adds: "Secondary Information" web search results in /search; maps 'internal' -> 'admin' in /me
+// Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
+// Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
 // Fixes: defines chunkText() and uses it correctly; robust ingest + tags (month/year/report)
 
 import fs from "node:fs";
@@ -389,7 +390,6 @@ app.get("/me", async (req,res)=>{
   const clients = await listClientFolders();
   const me = req.session.user;
   const roleLabel = me.role === "internal" ? "admin" : me.role;
-  // Return a clean user object (avoid leaking 'allowed' etc.)
   res.json({
     user: { username: me.username, role: roleLabel },
     activeClientId: req.session.activeClientId || null,
@@ -410,12 +410,15 @@ app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
   const usersDoc = readJSON(USERS_PATH, { users: [] });
   res.json(usersDoc.users.map(u => ({ username:u.username, role:u.role, allowedClients:u.allowedClients })));
 });
+
+// UPDATED: allow role selection (admin -> internal)
 app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
   try{
     const { username, password, confirmPassword, clientFolderId, role } = req.body || {};
     if (!username || !password || !confirmPassword || !clientFolderId) return res.status(400).json({ error:"username, password, confirmPassword, clientFolderId required" });
     if (password !== confirmPassword) return res.status(400).json({ error:"Passwords do not match" });
     if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
+
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     if (usersDoc.users.some(u => u.username === username)) return res.status(400).json({ error:"Username exists" });
 
@@ -428,7 +431,34 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
     });
     writeJSON(USERS_PATH, usersDoc);
     res.json({ ok:true });
-  }catch{ res.status(500).json({ error:"Failed to create user" }); }
+  }catch{
+    res.status(500).json({ error:"Failed to create user" });
+  }
+});
+
+// -------------------- Manifest & stats --------------------
+const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
+if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
+
+app.get("/admin/library-stats", requireSession, requireInternal, async (req,res)=>{
+  try{
+    const clientId = String(req.query.clientId || "").trim();
+    if (!clientId) return res.status(400).json({ error: "clientId required" });
+    if (!(await driveFolderExists(clientId))) return res.status(400).json({ error: "Unknown clientId" });
+
+    // Count current Drive files (non-folders)
+    const all = await listAllFilesUnder(clientId);
+    const driveCount = all.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
+
+    // Count library (manifest) files if present
+    const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
+    const manifest = readJSON(manifestPath, { files: [] });
+    const libraryCount = Array.isArray(manifest.files) ? manifest.files.length : 0;
+
+    res.json({ clientId, driveCount, libraryCount });
+  } catch(e){
+    res.status(500).json({ error:"Failed to get stats", detail:String(e?.message||e) });
+  }
 });
 
 // Ingest library (Docs/Slides/Sheets + PDFs when possible) with auto-tagging
@@ -512,6 +542,15 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
     const stats = await pineconeDescribe();
     try { namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount; } catch {}
 
+    // --- NEW: write/update manifest with distinct ingested file names
+    try {
+      const distinct = Array.from(new Set(ingested.filter(x => x.status === "complete").map(x => x.name)));
+      const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
+      writeJSON(manifestPath, { clientId, updatedAt: new Date().toISOString(), files: distinct });
+    } catch(e) {
+      console.warn("[manifest] write failed:", e);
+    }
+
     res.json({
       ok: true,
       summary: {
@@ -593,7 +632,6 @@ app.post("/search", requireSession, async (req,res)=>{
     const result = await pineconeQuery(vec, clientId, DEFAULT_TOPK);
     let matches = Array.isArray(result.matches) ? result.matches : [];
     if (!matches.length) {
-      // Still attach secondary (web) results for context
       const secondary = await fetchSecondaryInfo(q, 5);
       return res.json({ answer:"", references:{ chunks:[] }, visuals:[], secondary });
     }
@@ -634,7 +672,6 @@ app.post("/search", requireSession, async (req,res)=>{
     });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "";
 
-    // NEW: add secondary web info (up to 5)
     const secondary = await fetchSecondaryInfo(q, 5);
 
     res.json({ answer, references: { chunks: refs }, visuals: [], secondary });
@@ -652,4 +689,3 @@ app.listen(PORT, ()=>{
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
 });
-
