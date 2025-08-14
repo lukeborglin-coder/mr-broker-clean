@@ -412,13 +412,20 @@ app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
 });
 app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
   try{
-    const { username, password, confirmPassword, clientFolderId } = req.body || {};
+    const { username, password, confirmPassword, clientFolderId, role } = req.body || {};
     if (!username || !password || !confirmPassword || !clientFolderId) return res.status(400).json({ error:"username, password, confirmPassword, clientFolderId required" });
     if (password !== confirmPassword) return res.status(400).json({ error:"Passwords do not match" });
     if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     if (usersDoc.users.some(u => u.username === username)) return res.status(400).json({ error:"Username exists" });
-    usersDoc.users.push({ username, passwordHash: await bcrypt.hash(String(password),10), role:"client", allowedClients: clientFolderId });
+
+    const normalizedRole = (String(role||"client").toLowerCase() === "admin") ? "internal" : "client";
+    usersDoc.users.push({
+      username,
+      passwordHash: await bcrypt.hash(String(password),10),
+      role: normalizedRole,
+      allowedClients: normalizedRole === "internal" ? "*" : clientFolderId
+    });
     writeJSON(USERS_PATH, usersDoc);
     res.json({ ok:true });
   }catch{ res.status(500).json({ error:"Failed to create user" }); }
@@ -645,3 +652,4 @@ app.listen(PORT, ()=>{
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
 });
+
