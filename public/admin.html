@@ -1,119 +1,129 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Admin • Ingest PDFs</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Admin — Cognitive Research Q&A</title>
+  <link rel="stylesheet" href="/styles.css"/>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; max-width: 780px; margin: 32px auto; padding: 0 16px; }
-    h1 { font-size: 22px; margin-bottom: 12px; }
-    .card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin:16px 0; }
-    label { display:block; margin:8px 0 4px; font-weight:600; }
-    input { width:100%; padding:10px; border:1px solid #e5e7eb; border-radius:10px; }
-    button { margin-top:12px; padding:10px 14px; border:0; border-radius:10px; background:#ef6c00; color:#fff; font-weight:700; cursor:pointer; }
-    .row { display:flex; gap:10px; align-items:center; }
-    .row > * { flex:1; }
-    .muted { color:#6b7280; }
-    pre { background:#0b1020; color:#e6edf3; padding:12px; border-radius:10px; overflow:auto; max-height:360px; }
-    small { color:#6b7280; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0b0e; color:#e9eef7; margin:0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid #22252b; }
+    h1 { font-size:1.1rem; margin:0; }
+    main { padding:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+    section { background:#111317; border:1px solid #23262d; border-radius:16px; padding:16px; }
+    label { display:block; font-size:.9rem; color:#b6bcc6; margin:8px 0 6px; }
+    input, select, textarea { width:100%; padding:10px; border-radius:10px; border:1px solid #2a2f3a; background:#0d0f14; color:#eee; outline:none; }
+    button { padding:10px 14px; border-radius:10px; background:#ff7a00; color:#111; border:0; font-weight:700; cursor:pointer; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
+    td, th { border-bottom:1px solid #23262d; padding:8px 6px; text-align:left; }
+    .muted { color:#9aa0a6; }
   </style>
 </head>
 <body>
-  <h1>Admin • Ingest PDFs into Pinecone</h1>
-  <div class="card">
-    <div class="row">
-      <div>
-        <label>Client ID (namespace)</label>
-        <input id="clientId" value="genentech" />
-      </div>
-      <div>
-        <label>Auth Token (if required)</label>
-        <input id="token" placeholder="leave blank if AUTH_TOKEN is not set" />
-      </div>
+  <header>
+    <h1>Admin — Users & Clients</h1>
+    <div>
+      <button id="logoutBtn">Log out</button>
     </div>
-    <button id="ingest">Ingest PDFs from Google Drive</button>
-    <button id="purge" style="background:#b91c1c">Purge Namespace (danger)</button>
-    <div class="muted"><small>
-      “Ingest” will read all PDFs currently in your configured Drive folder and load them for search.<br>
-      “Purge” will clear all vectors in this clientId (use before re-ingesting for a clean reset).
-    </small></div>
-  </div>
+  </header>
 
-  <div class="card">
-    <div class="row">
-      <button id="listDrive" style="background:#334155">Check Drive Files</button>
-      <button id="pinecone" style="background:#334155">Check Pinecone Stats</button>
-    </div>
-  </div>
+  <main>
+    <section>
+      <h3>Create Client User</h3>
+      <label>Username</label>
+      <input id="u_username" placeholder="e.g., genentech_user"/>
 
-  <div class="card">
-    <label>Status / Output</label>
-    <pre id="out">Ready.</pre>
-  </div>
+      <label>Password</label>
+      <input id="u_password" type="password" placeholder="Set a password"/>
 
-  <script>
-    const base = window.location.origin;
-    const $ = (id) => document.getElementById(id);
-    const out = $("out");
+      <label>Allowed Clients (Ctrl/Cmd+Click to select multiple)</label>
+      <select id="u_allowed" multiple size="6"></select>
 
-    function headers() {
-      const h = { "Content-Type": "application/json" };
-      const tok = $("token").value.trim();
-      if (tok) h["x-auth-token"] = tok;
-      return h;
+      <div style="margin-top:12px;">
+        <button id="createUserBtn">Create User</button>
+      </div>
+
+      <h4>Existing Users</h4>
+      <table id="usersTable"><tbody></tbody></table>
+    </section>
+
+    <section>
+      <h3>Add/Update Client</h3>
+      <label>Client ID</label>
+      <input id="c_id" placeholder="e.g., genentech"/>
+
+      <label>Client Name</label>
+      <input id="c_name" placeholder="e.g., Genentech"/>
+
+      <label>Root Drive Folder ID</label>
+      <input id="c_drive" placeholder="Google Drive folder ID (optional)"/>
+
+      <label>Subfolders</label>
+      <div class="muted">Leave blank if not applicable.</div>
+      <label>Reports</label>
+      <input id="c_reports" placeholder="Reports folder ID"/>
+      <label>Data Files</label>
+      <input id="c_data" placeholder="Data Files folder ID"/>
+      <label>QNRs</label>
+      <input id="c_qnrs" placeholder="QNRs folder ID"/>
+
+      <div style="margin-top:12px;">
+        <button id="upsertClientBtn">Save Client</button>
+      </div>
+
+      <h4>Registered Clients</h4>
+      <table id="clientsTable"><tbody></tbody></table>
+    </section>
+  </main>
+
+<script>
+async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function load() {
+  // populate users
+  const users = await jget('/admin/users/list');
+  const ut = document.querySelector('#usersTable tbody');
+  ut.innerHTML = '<tr><th>Username</th><th>Role</th><th>Allowed Clients</th></tr>' + users.map(u => `<tr><td>${u.username}</td><td>${u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients}</td></tr>`).join('');
+
+  // populate clients
+  const clients = await jget('/admin/clients/list');
+  const ct = document.querySelector('#clientsTable tbody');
+  ct.innerHTML = '<tr><th>ID</th><th>Name</th><th>Drive Root</th></tr>' + clients.map(c => `<tr><td>${c.id}</td><td>${c.name}</td><td class="muted">${c.driveFolderId||''}</td></tr>`).join('');
+
+  // fill the multi-select
+  const sel = document.getElementById('u_allowed');
+  sel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name} (${c.id})</option>`).join('');
+}
+
+document.getElementById('createUserBtn').onclick = async () => {
+  const opts = Array.from(document.getElementById('u_allowed').selectedOptions).map(o => o.value);
+  await jpost('/admin/users/create', { username: document.getElementById('u_username').value.trim(), password: document.getElementById('u_password').value, allowedClients: opts });
+  await load();
+  alert('User created');
+};
+
+document.getElementById('upsertClientBtn').onclick = async () => {
+  await jpost('/admin/clients/upsert', {
+    id: document.getElementById('c_id').value.trim(),
+    name: document.getElementById('c_name').value.trim(),
+    driveFolderId: document.getElementById('c_drive').value.trim(),
+    subfolders: {
+      reports: document.getElementById('c_reports').value.trim(),
+      dataFiles: document.getElementById('c_data').value.trim(),
+      qnrs: document.getElementById('c_qnrs').value.trim()
     }
+  });
+  await load();
+  alert('Client saved');
+};
 
-    function log(obj) {
-      try { out.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
-      catch { out.textContent = String(obj); }
-    }
+document.getElementById('logoutBtn').onclick = async () => {
+  await jpost('/auth/logout', {});
+  location.href = '/login.html';
+};
 
-    $("ingest").onclick = async () => {
-      log("Starting ingest…");
-      const clientId = $("clientId").value.trim() || "demo";
-      try {
-        const res = await fetch(`${base}/admin/ingest-drive`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({ clientId })
-        });
-        const json = await res.json();
-        log(json);
-      } catch (e) {
-        log(e?.message || e);
-      }
-    };
-
-    $("purge").onclick = async () => {
-      if (!confirm("This will delete all vectors in this namespace. Continue?")) return;
-      const clientId = $("clientId").value.trim() || "demo";
-      log("Purging…");
-      try {
-        const res = await fetch(`${base}/admin/rebuild-from-drive`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({ clientId })
-        });
-        const json = await res.json();
-        log(json);
-      } catch (e) {
-        log(e?.message || e);
-      }
-    };
-
-    $("listDrive").onclick = async () => {
-      log("Listing Drive folder…");
-      const res = await fetch(`${base}/debug/drive-list`);
-      const json = await res.json();
-      log(json);
-    };
-
-    $("pinecone").onclick = async () => {
-      log("Checking Pinecone…");
-      const res = await fetch(`${base}/debug/pinecone`);
-      const json = await res.json();
-      log(json);
-    };
-  </script>
+load().catch(err => alert('Failed to load admin: ' + err));
+</script>
 </body>
 </html>
