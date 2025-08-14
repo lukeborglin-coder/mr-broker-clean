@@ -15,8 +15,8 @@ body {
 .muted { color:#666; font-size:12px; }
 .ref-sup { font-size: 0.75em; vertical-align: super; }
 
-/* Page wrapper */
-.page { max-width: 980px; margin: 24px auto 60px; padding: 0 16px; }
+/* Layout */
+.page { max-width: 1000px; margin: 24px auto 60px; padding: 0 16px; }
 
 /* Header */
 .header { display:flex; align-items:center; position:relative; min-height: 40px; }
@@ -32,15 +32,145 @@ body {
 .search { margin: 18px 0 10px; }
 #qform {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr 140px;
   gap: 8px;
   align-items: stretch;
 }
 #q {
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
   border: 1px solid #d6dae0;
   background: #fff;
   font-size: 15px;
   font-family: inherit;
-  resize: vertical
+  resize: vertical;
+  min-height: 76px;
+  line-height: 1.35;
+}
+.btn-ask {
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #ff7a00;
+  color: #fff; font-weight: 800;
+  cursor: pointer;
+  height: 100%;
+  font-size: 16px;
+}
+.btn-ask:hover { filter: brightness(.95); }
+#inlineErr { margin-top: 6px; }
+
+/* Loading overlay */
+.overlay {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.65); z-index: 20;
+}
+.spinner {
+  width: 28px; height: 28px; border: 3px solid #ffcfad; border-top-color: #ff7a00; border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin-right: 10px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.overlay-text { font-weight: 700; color: #333; }
+
+/* Results wrapper */
+.results { margin-top: 10px; }
+
+/* Panels & Callout */
+.panel {
+  margin: 14px 0;
+  padding: 16px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.04);
+}
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+details.panel > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 18px;
+  font-weight: 800;
+  outline: none;
+}
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::after {
+  content: "▼";
+  float: right;
+  color: #999;
+  transition: transform .2s ease;
+}
+details.panel[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.callout {
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: #fff7ef;
+  border-left: 6px solid #ff7a00;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.04);
+}
+.keynums { margin: 8px 0 0; padding-left: 18px; }
+
+/* Lists */
+ul { margin: 0; padding-left: 18px; }
+li { margin: 6px 0; }
+.link-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: #0b6bcb;
+  font-weight: 600;
+  padding: 6px 0 0;
+  cursor: pointer;
+}
+
+/* Visuals */
+.charts-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; }
+.chart-card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); height:260px; }
+.chart-card h4 { margin:0 0 8px 0; font-size:14px; color:#333; }
+
+/* Table */
+.table-wrap { overflow-x:auto; margin-top: 8px; }
+.data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
+.data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
+.data-table thead th { background:#f4f6fa; font-weight:700; }
+
+/* Quotes */
+#quotes .quote-item { margin:0 0 14px 0; }
+#quotes .quote-text { font-style: italic; margin:0; }
+
+/* References */
+.ref-ol { margin: 0 0 0 22px; padding-left: 0; }
+.ref-li { font-style: italic; color: #1c1d1f; }
+
+/* Slide thumbnails */
+.preview-img {
+  width: 100%;
+  max-width: 320px;
+  display: block;
+  margin: 10px 0 12px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+  cursor: pointer;
+}
+.preview-fallback {
+  width: 100%;
+  max-width: 320px;
+  margin: 10px 0 12px;
+  padding: 18px;
+  text-align: center;
+  border: 1px dashed #d9d9d9;
+  border-radius: 10px;
+  color: #888;
+  background: #fafafa;
+}
+
+/* Secondary content */
+.secondary { margin-top: 8px; }
