@@ -1,186 +1,194 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Research Q&A</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>COGgpt — Research Q&A</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <style>
+    :root { --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; --soft:#fff7ed; --soft-border:#ffead6; }
+    *{box-sizing:border-box}
+    body { margin:0; background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+    header { position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid var(--line); }
+    .bar { max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .brand { font-weight:800; letter-spacing:.1px; }
+    .beta { font-size:.9rem; color:var(--muted); font-weight:500; margin-left:6px; }
+    .nav { display:flex; align-items:center; gap:10px; }
+    #who { color:var(--muted); }
+
+    .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:10px; font-weight:700; cursor:pointer; text-decoration:none; }
+    .btn.small { padding:10px 14px; font-size:.92rem; line-height:1; height:40px; }
+    .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
+    .btn.ghost:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
+    .btn.primary { background:var(--brand); color:#fff; border:0; padding:16px 22px; border-radius:18px; }
+
+    main { max-width:960px; margin: 56px auto; padding: 0 16px; }
+    .hero { text-align:center; margin: 8px 0 8px; }
+    .hero h1 { font-size:34px; margin:0 0 6px 0; }
+    .hero p { margin:0; color:var(--muted); }
+
+    /* Client row: label left, dropdown right */
+    .client-row { display:flex; gap:12px; align-items:center; justify-content:center; margin:16px 0 6px; }
+    .client-row .label { color:var(--muted); font-size:.95rem; }
+    .client-row select { color:var(--muted); border:1px solid var(--line); background:#fff; border-radius:12px; padding:10px 12px; min-width:300px; font-size:1rem; }
+
+    .askbox { display:flex; gap:12px; width:100%; margin:18px auto 0; }
+    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#f0f5ff; color:var(--ink); }
+
+    .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
+    .panel h3 { margin:0 0 8px 0; font-size:0.95rem; color:var(--muted); font-weight:600; }
+    .answer-panel { background:var(--soft); border-color:var(--soft-border); }
+    .answer-body { white-space:pre-wrap; line-height:1.55; font-size:1.02rem; }
+
+    .refs { display:grid; gap:10px; }
+    .ref { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; }
+    .ref small { color:var(--muted); }
+    a.link { color:#0b57d0; text-decoration:none; }
+    .muted { color:var(--muted); }
+
+    .msg { margin-top:14px; border:1px solid var(--line); background:#fafbfd; color:#2b2f36; border-radius:10px; padding:10px 12px; display:none; }
+    .msg.error { background:#fff5f5; color:#8b0000; display:block; }
+    .msg.info { display:block; }
+  </style>
 </head>
 <body>
-  <div class="page">
-
-    <!-- Header -->
-    <header class="header">
-      <h1 class="title">
-        <span class="title-cog">Research Q&amp;A</span>
-        <span class="beta-badge">(BETA)</span>
-      </h1>
-      <div class="header-actions">
-        <a class="cg-btn" href="/admin.html">Admin</a>
-        <button class="cg-btn" id="signOutBtn" type="button">Sign out</button>
+  <header>
+    <div class="bar">
+      <div>
+        <span class="brand">COGgpt</span><span class="beta">(BETA)</span>
       </div>
-    </header>
-
-    <!-- Hero / Instructions with darker left accent -->
-    <section class="callout cg-dark-accent">
-      <div class="muted">Secure area</div>
-      <h3 style="margin:6px 0 8px 0;">Ask a question grounded in your LIBRARY</h3>
-      <p class="muted">Enter a clear question. We’ll return key findings, citations, and related slides when available.</p>
-    </section>
-
-    <!-- Search -->
-    <section class="search">
-      <div class="panel">
-        <div style="display:grid; grid-template-columns: 1fr; gap:12px;">
-          <div>
-            <label class="label" for="clientLibrary">Client Library</label>
-            <select id="clientLibrary" class="select">
-              <option value="" disabled selected>Select...</option>
-            </select>
-          </div>
-
-          <form id="qform" autocomplete="off">
-            <textarea id="q" class="textarea" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"></textarea>
-            <button class="btn-ask" type="submit">Ask</button>
-          </form>
-
-          <div id="inlineErr" class="muted hidden"></div>
-        </div>
+      <div class="nav">
+        <div id="who"></div>
+        <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
+        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
       </div>
-    </section>
-
-    <!-- Results (hidden until a question is asked) -->
-    <section id="results" class="results hidden">
-      <div class="panel">
-        <h3>Answer</h3>
-        <div id="answer"></div>
-      </div>
-
-      <div class="panel">
-        <h3>References</h3>
-        <ol id="references" class="ref-ol"></ol>
-      </div>
-
-      <div class="panel">
-        <h3>Report Slides</h3>
-        <div id="slides" class="charts-grid"></div>
-      </div>
-    </section>
-
-  </div>
-
-  <!-- Simple password gate (client-side) -->
-  <div id="cgGate" class="cg-gate" role="dialog" aria-modal="true">
-    <div class="cg-panel">
-      <h3>Enter Access Password</h3>
-      <p class="muted">This page is gated. Contact your admin if you don’t have access.</p>
-      <form id="cgGateForm" autocomplete="off">
-        <!-- dummy fields to discourage autofill -->
-        <input type="text" class="hidden" aria-hidden="true">
-        <input type="password" class="hidden" aria-hidden="true">
-
-        <label class="cg-label" for="cgGatePwd">Password</label>
-        <input id="cgGatePwd" class="input cg-readonly" type="password" autocomplete="new-password" placeholder="Password" />
-
-        <button class="cg-btn block" type="submit" style="margin-top:12px;">Continue</button>
-        <div class="cg-hint">Tip: UI gate only. Enforce real auth in <code>server.js</code>.</div>
-      </form>
     </div>
-  </div>
+  </header>
 
-  <script>
-    // Helpers
-    const $ = (sel) => document.querySelector(sel);
+  <main>
+    <div class="hero">
+      <h1>Ask about your research</h1>
+      <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
+    </div>
 
-    // ----- Password gate (session-only)
-    const GATE_KEY = "cg_gate_ok_v1";
-    const gate = $("#cgGate");
-    function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
-    function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
-    function showGate() { gate.classList.add("open"); }
-    function hideGate() { gate.classList.remove("open"); }
+    <div class="client-row" id="clientRow" style="display:none;">
+      <div class="label">Client library</div>
+      <select id="client">
+        <option value="" selected disabled>Select a client</option>
+      </select>
+    </div>
 
-    (function setupGate() {
-      const pwd = $("#cgGatePwd");
-      // defeat aggressive autofill UX
-      pwd.setAttribute("readonly", "readonly");
-      pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
+    <div class="askbox">
+      <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
+      <button id="ask" class="btn primary" disabled>Ask</button>
+    </div>
 
-      $("#cgGateForm").addEventListener("submit", (e) => {
-        e.preventDefault();
-        const val = pwd.value.trim();
-        if (val === "coggpt25") { markGateOk(); hideGate(); }
-        else alert("Incorrect password");
-      });
-      if (!gateOk()) showGate();
-      $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
-    })();
+    <div id="msg" class="msg"></div>
 
-    // ----- Populate Client Libraries (optional; best-effort)
-    (async function loadLibraries() {
-      const sel = $("#clientLibrary");
-      const endpoints = ["/clients", "/admin/clients", "/api/clients"];
-      for (const ep of endpoints) {
-        try {
-          const r = await fetch(ep);
-          if (r.ok) {
-            const data = await r.json();
-            if (Array.isArray(data)) {
-              for (const name of data) {
-                const opt = document.createElement("option");
-                opt.value = name; opt.textContent = name;
-                sel.appendChild(opt);
-              }
-              break;
-            }
-          }
-        } catch (_) { /* ignore */ }
-      }
-    })();
+    <div id="out" style="display:none;">
+      <div id="answerPanel" class="panel answer-panel" style="display:none;">
+        <h3>Answer</h3>
+        <div id="answer" class="answer-body"></div>
+      </div>
 
-    // ----- Ask flow
-    $("#qform").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const lib = $("#clientLibrary").value;
-      const q = $("#q").value.trim();
-      const err = $("#inlineErr");
-      err.classList.add("hidden");
-      if (!lib) { err.textContent = "Please select a Client Library."; err.classList.remove("hidden"); return; }
-      if (!q) { err.textContent = "Please enter a question."; err.classList.remove("hidden"); return; }
+      <div id="supportPanel" class="panel" style="display:none;">
+        <h3>Supporting passages</h3>
+        <div id="refs" class="refs"></div>
+      </div>
+    </div>
+  </main>
 
-      $("#results").classList.remove("hidden");
-      $("#answer").textContent = "Thinking…";
-      $("#references").innerHTML = "";
-      $("#slides").innerHTML = "";
+<script>
+async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(url, body){ const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
-      try {
-        const r = await fetch("/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId: lib, userQuery: q, topK: 6 })
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data?.error || "Search failed");
+let me=null;
+async function boot() {
+  try {
+    me = await jget('/me');
+  } catch {
+    location.href = '/login.html'; return;
+  }
+  const { user, clients } = me;
 
-        $("#answer").textContent = data?.answer || "No answer.";
-        const refs = data?.references || {};
-        const visuals = data?.visuals || [];
+  document.getElementById('who').textContent = user.username + (user.role==='internal'?' (internal)':'');
+  if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline-flex';
 
-        // references list (italic like your style)
-        const items = Object.entries(refs).map(([k, v]) => `<li class="ref-li"><em>${k}</em> — ${v}</li>`).join("");
-        $("#references").innerHTML = items || "<li class='ref-li'><em>No references</em></li>";
+  // Internal users must choose a client each time (no preselect)
+  const row = document.getElementById('clientRow');
+  const sel = document.getElementById('client');
+  sel.innerHTML = `<option value="" selected disabled>Select a client</option>` + clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  if (user.role === 'internal') {
+    row.style.display = 'flex';
+  }
 
-        // slides grid (limit 6)
-        const max = 6;
-        const imgs = visuals.slice(0, max)
-          .map(src => `<img class="preview-img" src="${src}" alt="slide" />`)
-          .join("");
-        $("#slides").innerHTML = imgs || "<div class='preview-fallback'>No slides available</div>";
-      } catch (e2) {
-        console.error(e2);
-        $("#answer").textContent = "I don't have enough information.";
-      }
-    });
-  </script>
+  sel.onchange = () => {
+    document.getElementById('ask').disabled = !sel.value;
+  };
+}
+boot();
+
+function showError(m){ const el = document.getElementById('msg'); el.className = 'msg error'; el.textContent = m; }
+function showInfo(m){ const el = document.getElementById('msg'); el.className = 'msg info'; el.textContent = m; }
+function clearMsg(){ const el = document.getElementById('msg'); el.className = 'msg'; el.textContent = ''; }
+
+function renderResults(resp){
+  const refs = resp.references?.chunks || [];
+  const answer = (resp.answer || '').trim();
+  document.getElementById('out').style.display = 'block';
+
+  if (answer) {
+    document.getElementById('answer').textContent = answer;
+    document.getElementById('answerPanel').style.display = 'block';
+  } else {
+    document.getElementById('answerPanel').style.display = 'none';
+  }
+
+  if (refs.length) {
+    document.getElementById('supportPanel').style.display = 'block';
+    document.getElementById('refs').innerHTML = refs.map((r,i) => `
+      <div class="ref">
+        <div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div>
+        <small>${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">open source</a>`:''}</small>
+        <div class="muted" style="margin-top:6px">${r.textSnippet||''}</div>
+      </div>`).join('');
+  } else {
+    document.getElementById('supportPanel').style.display = 'none';
+  }
+}
+
+async function doAsk() {
+  clearMsg();
+  const q = document.getElementById('q').value.trim();
+  const sel = document.getElementById('client');
+  if (!q || !sel.value) return;
+
+  try {
+    const resp = await jpost('/search', { userQuery: q, clientId: sel.value });
+    const refs = resp.references?.chunks || [];
+    if (!refs.length && !resp.answer) {
+      showInfo("No matching passages found. Try Admin → Update Client Library to ingest files from Drive, then ask again.");
+    } else {
+      clearMsg();
+    }
+    renderResults(resp);
+  } catch (e) {
+    const msg = String(e);
+    if (msg.includes('/query') && msg.toLowerCase().includes('parse url')) {
+      showError("Search failed: your Pinecone host is not a full https URL. Set PINECONE_INDEX_HOST to the full https host and redeploy.");
+    } else {
+      showError('Search failed: ' + msg);
+    }
+  }
+}
+document.getElementById('ask').onclick = doAsk;
+document.getElementById('q').addEventListener('keypress', (e)=>{ if (e.key === 'Enter' && !document.getElementById('ask').disabled) doAsk(); });
+
+document.getElementById('logoutBtn').onclick = async () => {
+  await jpost('/auth/logout', {});
+  location.href = '/login.html';
+};
+</script>
 </body>
 </html>
