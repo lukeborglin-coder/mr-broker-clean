@@ -3,73 +3,71 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Admin</title>
+  <title>Research Q&A</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="page">
     <header class="header">
-      <h1 class="title">Admin</h1>
+      <h1 class="title">Research Q&amp;A <span class="beta">(BETA)</span></h1>
       <div class="header-right">
-        <a class="btn ghost" href="/index.html">Home</a>
+        <a class="btn ghost" href="/admin.html">Admin</a>
         <button class="btn ghost" id="signOutBtn" type="button">Sign out</button>
       </div>
     </header>
 
-    <section class="admin-grid">
-      <!-- LEFT: Update Client Library -->
-      <div class="card">
-        <h2 class="card-title">UPDATE CLIENT LIBRARY</h2>
-        <label class="label text-sm">LIBRARY</label>
-        <select id="libSelect" class="select text-sm" autocomplete="off">
-          <option value="" disabled selected>Select…</option>
-        </select>
-        <div class="row mt-12">
-          <button class="btn" id="btnUpdate">Update Library</button>
-        </div>
+    <!-- Hero / Instructions with left accent -->
+    <section class="card accent">
+      <div class="space-between">
+        <h2 class="card-title">Ask a question grounded in your LIBRARY</h2>
+        <span class="badge">Secure area</span>
       </div>
+      <p class="small">Enter a clear question. We’ll return key findings, citations, and related slides when available.</p>
+    </section>
 
-      <!-- RIGHT: Users -->
-      <div class="card">
-        <h2 class="card-title">USERS</h2>
-
-        <button class="btn" id="toggleCreate">Create client user</button>
-
-        <div id="createPanel" class="panel-toggle hidden">
-          <form id="createForm" class="form-grid" autocomplete="off">
-            <!-- dummy anti-autofill -->
-            <input type="text" class="hidden" aria-hidden="true">
-            <input type="password" class="hidden" aria-hidden="true">
-
-            <div>
-              <label class="label text-sm">Username</label>
-              <input id="newUser" class="input readonly" type="text" autocomplete="off" placeholder="username" />
-            </div>
-
-            <div>
-              <label class="label text-sm">Password</label>
-              <input id="newPass" class="input readonly" type="password" autocomplete="new-password" placeholder="new password" />
-            </div>
-
-            <div class="row mt-8">
-              <button class="btn" type="submit">Save</button>
-              <button class="btn ghost" type="button" id="cancelCreate">Cancel</button>
-            </div>
+    <!-- Query form -->
+    <section class="card mt-12">
+      <div class="grid-2">
+        <div>
+          <label class="label">Client Library</label>
+          <select id="clientLibrary" class="select text-sm" autocomplete="off">
+            <option value="" disabled selected>Select…</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Question</label>
+          <form id="qForm" class="row" autocomplete="off">
+            <input type="text" id="qInput" class="input" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?" />
+            <button class="btn" type="submit">Ask</button>
           </form>
         </div>
       </div>
     </section>
 
-    <section class="card mt-16">
-      <div class="small">Role: <strong>admin</strong></div>
+    <!-- Results (hidden until a question is asked) -->
+    <section id="results" class="hidden mt-16">
+      <div class="card">
+        <h3 class="card-title">Answer</h3>
+        <div id="answer"></div>
+      </div>
+      <div class="grid-2 mt-12">
+        <div class="card">
+          <h3 class="card-title">References</h3>
+          <div id="references"></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Report Slides</h3>
+          <div id="slides"></div>
+        </div>
+      </div>
     </section>
   </div>
 
-  <!-- Reuse the same password gate (optional for admin too) -->
+  <!-- Simple password gate (client-side) -->
   <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
     <div class="panel">
-      <h3>Enter Admin Password</h3>
-      <p class="small mb-0">Restricted page.</p>
+      <h3>Enter Access Password</h3>
+      <p class="small mb-0">This page is gated. Contact your admin if you don’t have access.</p>
       <form id="gateForm" class="mt-12" autocomplete="off">
         <!-- dummy fields to confuse autofill -->
         <input type="text" class="hidden" aria-hidden="true">
@@ -77,96 +75,108 @@
         <label class="label">Password</label>
         <input id="gatePwd" class="input readonly" type="password" inputmode="text" autocomplete="new-password" placeholder="Password" />
         <button class="btn block mt-12" type="submit">Continue</button>
+        <div class="hint">Tip: This is a UI gate only. For real security, enforce auth in <code>server.js</code>.</div>
       </form>
     </div>
   </div>
 
   <script>
+    // ---- tiny helper
     const $ = (sel) => document.querySelector(sel);
 
-    // --- gate
+    // ---- password gate (per-session)
     const GATE_KEY = "cg_gate_ok_v1";
     function showGate() { $("#gate").classList.remove("hidden"); }
     function hideGate() { $("#gate").classList.add("hidden"); }
     function gateOk() { return sessionStorage.getItem(GATE_KEY) === "1"; }
     function markGateOk() { sessionStorage.setItem(GATE_KEY, "1"); }
+
     function setupGate() {
+      // Prevent autofill tricks
       const pwd = $("#gatePwd");
       pwd.setAttribute("readonly", "readonly");
       pwd.addEventListener("focus", () => pwd.removeAttribute("readonly"), { once: true });
+
       $("#gateForm").addEventListener("submit", (e) => {
         e.preventDefault();
-        if (pwd.value.trim() === "coggpt25") { markGateOk(); hideGate(); }
-        else alert("Incorrect password");
+        const val = pwd.value.trim();
+        if (val === "coggpt25") {
+          markGateOk();
+          hideGate();
+        } else {
+          alert("Incorrect password");
+        }
       });
-      if (!gateOk()) showGate();
-    }; setupGate();
 
+      if (!gateOk()) showGate();
+    }
+    setupGate();
+
+    // ---- sign out clears the gate
     $("#signOutBtn")?.addEventListener("click", () => { sessionStorage.removeItem(GATE_KEY); showGate(); });
 
-    // --- populate library options
+    // ---- populate client library (expects backend to serve list at /clients or /admin/clients)
     async function loadLibraries() {
-      const sel = $("#libSelect");
+      const sel = $("#clientLibrary");
       try {
+        // try common endpoints; fallback stays empty so you can select later
         const endpoints = ["/clients", "/admin/clients", "/api/clients"];
         let data = null;
         for (const ep of endpoints) {
-          try { const r = await fetch(ep); if (r.ok) { data = await r.json(); break; } } catch (_e) { }
+          try {
+            const r = await fetch(ep);
+            if (r.ok) { data = await r.json(); break; }
+          } catch (_) { /* ignore */ }
         }
         if (Array.isArray(data)) {
           for (const name of data) {
             const opt = document.createElement("option");
-            opt.value = name; opt.textContent = name; sel.appendChild(opt);
+            opt.value = name; opt.textContent = name;
+            sel.appendChild(opt);
           }
         }
       } catch (e) { /* silent */ }
-    }; loadLibraries();
-
-    // --- toggle create panel
-    const panel = $("#createPanel");
-    $("#toggleCreate").addEventListener("click", () => panel.classList.toggle("hidden"));
-    $("#cancelCreate").addEventListener("click", () => panel.classList.add("hidden"));
-
-    // defeat autofill
-    for (const id of ["newUser","newPass"]) {
-      const el = document.getElementById(id);
-      el.setAttribute("readonly", "readonly");
-      el.addEventListener("focus", () => el.removeAttribute("readonly"), { once: true });
     }
+    loadLibraries();
 
-    // --- save new user (placeholder; wire to your backend)
-    $("#createForm").addEventListener("submit", async (e) => {
+    // ---- ask
+    $("#qForm").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const username = $("#newUser").value.trim();
-      const password = $("#newPass").value;
-      if (!username || !password) { alert("Enter username and password"); return; }
-      try {
-        // Replace with your real endpoint (example)
-        const r = await fetch("/admin/users", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password, role: "admin" })
-        });
-        if (!r.ok) throw new Error("Failed to create user");
-        alert("Created!");
-        panel.classList.add("hidden");
-        $("#newUser").value = ""; $("#newPass").value = "";
-      } catch (err) { alert(err.message); }
-    });
+      const lib = $("#clientLibrary").value;
+      const q = $("#qInput").value.trim();
+      if (!lib || !q) { alert("Choose a Library and enter a question"); return; }
 
-    // --- update library (placeholder; wire to your backend)
-    $("#btnUpdate").addEventListener("click", async () => {
-      const lib = $("#libSelect").value;
-      if (!lib) { alert("Select a library first"); return; }
+      // Reveal results container immediately (empty state) and then fill
+      $("#results").classList.remove("hidden");
+      $("#answer").textContent = "Thinking…";
+      $("#references").innerHTML = "";
+      $("#slides").innerHTML = "";
+
       try {
-        const r = await fetch(`/admin/library/update`, {
+        const r = await fetch("/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ library: lib })
+          body: JSON.stringify({ clientId: lib, userQuery: q, topK: 6 })
         });
-        if (!r.ok) throw new Error("Update failed");
-        alert("Library update started");
-      } catch (err) { alert(err.message); }
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error || "Search failed");
+
+        $("#answer").textContent = data?.answer || "No answer.";
+        const refs = data?.references || {};
+        const visuals = data?.visuals || [];
+
+        // references
+        const refList = Object.entries(refs).map(([k, v]) => `<div class="small">• <strong>${k}</strong> — ${v}</div>`).join("");
+        $("#references").innerHTML = refList || "<span class='small'>None</span>";
+
+        // slides (limit 6)
+        const max = 6;
+        const imgs = (visuals || []).slice(0, max).map(src => `<img src="${src}" alt="slide" style="width:100%; border-radius:10px; border:1px solid var(--line); margin-bottom:8px;"/>`).join("");
+        $("#slides").innerHTML = imgs || "<span class='small'>No slides available</span>";
+      } catch (err) {
+        $("#answer").textContent = "I don't have enough information.";
+        console.error(err);
+      }
     });
   </script>
 </body>
