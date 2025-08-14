@@ -9,28 +9,46 @@
     :root { --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; }
     *{box-sizing:border-box}
     body { margin:0; background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+    /* Header */
     header { position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid var(--line); }
     .bar { max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .brand { font-weight:800; letter-spacing:.1px; }
     .beta { font-size:.9rem; color:var(--muted); font-weight:500; margin-left:6px; }
-    .nav { display:flex; align-items:center; gap:12px; }
-    .muted { color:var(--muted); }
+    .nav { display:flex; align-items:center; gap:10px; }
+
+    /* Buttons */
+    .btn { display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:10px; background:var(--brand); color:#fff; font-weight:700; cursor:pointer; text-decoration:none; }
+    .btn.small { padding:8px 12px; font-size:.9rem; }
+
+    /* Page layout */
     main { max-width:960px; margin: 56px auto; padding: 0 16px; }
-    .topline { display:flex; align-items:center; justify-content:flex-end; margin-bottom:10px; }
-    select, button, input { font-size:1rem; }
-    select, input { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:12px; padding:10px 12px; }
-    button { border:0; border-radius:12px; background:var(--brand); color:#111; font-weight:800; padding:12px 16px; cursor:pointer; }
-    .hero { text-align:center; margin: 32px 0 18px; }
+    .hero { text-align:center; margin: 8px 0 8px; }
     .hero h1 { font-size:34px; margin:0 0 6px 0; }
     .hero p { margin:0; color:var(--muted); }
+
+    /* Sleek Client selector (between title and prompt) */
+    .client-wrap { display:none; justify-content:center; margin: 16px 0 6px; }
+    .client-card { display:flex; align-items:center; gap:10px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:10px 12px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
+    .client-label { color:var(--muted); font-size:.95rem; }
+    select { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:12px; padding:10px 12px; min-width:260px; font-size:1rem; }
+
+    /* Ask bar */
     .askbox { display:flex; gap:12px; width:100%; margin:18px auto 0; }
-    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; }
-    .askbox button { padding:16px 22px; border-radius:18px; }
+    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+    .askbox button { padding:16px 22px; border-radius:18px; background:var(--brand); color:#fff; }
+
+    /* Results */
     .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
     .refs { display:grid; gap:10px; }
     .ref { border:1px solid var(--line); border-radius:12px; padding:10px; }
     a.link { color:#0b57d0; text-decoration:none; }
-    .admin { text-decoration:none; color:var(--ink); padding:8px 10px; border:1px solid var(--line); border-radius:10px; }
+    .muted { color:var(--muted); }
+
+    /* Messages */
+    .msg { margin-top:14px; border:1px solid var(--line); background:#fafbfd; color:#2b2f36; border-radius:10px; padding:10px 12px; display:none; }
+    .msg.error { background:#fff5f5; color:#8b0000; display:block; }
+    .msg.info { display:block; }
   </style>
 </head>
 <body>
@@ -40,28 +58,33 @@
         <span class="brand">COGgpt</span><span class="beta">(BETA)</span>
       </div>
       <div class="nav">
-        <a id="adminLink" class="admin" href="/admin" style="display:none;">Admin</a>
         <div id="who" class="muted"></div>
-        <button id="logoutBtn" title="Sign out">Sign out</button>
+        <a id="adminLink" class="btn small" href="/admin" style="display:none;">Admin</a>
+        <button id="logoutBtn" class="btn small" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
 
   <main>
-    <div class="topline" id="clientTopWrap" style="display:none">
-      <label for="client" class="muted" style="margin-right:8px;">Client library</label>
-      <select id="client"></select>
-    </div>
-
     <div class="hero">
       <h1>Ask about your research</h1>
       <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
     </div>
 
+    <!-- Client dropdown (between title and prompt) -->
+    <div class="client-wrap" id="clientWrap">
+      <div class="client-card">
+        <span class="client-label">Client library</span>
+        <select id="client"></select>
+      </div>
+    </div>
+
     <div class="askbox">
       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
-      <button id="ask">Ask</button>
+      <button id="ask" class="btn">Ask</button>
     </div>
+
+    <div id="msg" class="msg"></div>
 
     <div id="out" style="display:none;">
       <div class="panel">
@@ -87,36 +110,60 @@ async function boot() {
     location.href = '/login.html'; return;
   }
   const { user, activeClientId, clients } = me;
-  document.getElementById('who').textContent = `${user.username} ${user.role==='internal'?'(internal)':''}`;
-  if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline';
 
+  // username, then Admin, then Sign out
+  document.getElementById('who').textContent = user.username + (user.role==='internal'?' (internal)':'');
+  if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline-flex';
+
+  // Populate client dropdown and show only for internal
+  const wrap = document.getElementById('clientWrap');
   const clientSel = document.getElementById('client');
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   if (activeClientId) clientSel.value = activeClientId;
-
   if (user.role === 'internal') {
-    document.getElementById('clientTopWrap').style.display = 'flex';
-    clientSel.onchange = async () => { await jpost('/auth/switch-client', { clientId: clientSel.value }); };
+    wrap.style.display = 'flex';
+    clientSel.onchange = async () => {
+      try { await jpost('/auth/switch-client', { clientId: clientSel.value }); showInfo('Switched client library.'); }
+      catch (e) { showError('Could not switch client: ' + e); }
+    };
   }
 }
 boot();
 
+function showError(m){ const el = document.getElementById('msg'); el.className = 'msg error'; el.textContent = m; }
+function showInfo(m){ const el = document.getElementById('msg'); el.className = 'msg info'; el.textContent = m; }
+function clearMsg(){ const el = document.getElementById('msg'); el.className = 'msg'; el.textContent = ''; }
+
 async function doAsk() {
+  clearMsg();
   const q = document.getElementById('q').value.trim();
   if (!q) return;
-  const body = { userQuery: q };
-  if (me?.user?.role === 'internal') body.clientId = document.getElementById('client').value;
 
-  const resp = await jpost('/search', body);
-  document.getElementById('out').style.display = 'block';
-  document.getElementById('answer').textContent = resp.answer || 'No answer';
-  const refs = resp.references?.chunks || [];
-  document.getElementById('refs').innerHTML = refs.map((r,i) => `
-    <div class="ref">
-      <div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div>
-      <div class="muted" style="margin-top:4px">${r.textSnippet||''}</div>
-      <div style="margin-top:6px">${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">Open source</a>`:''}</div>
-    </div>`).join('');
+  const body = { userQuery: q };
+  // For internal users, include the explicit clientId
+  const sel = document.getElementById('client');
+  if (sel && sel.value) body.clientId = sel.value;
+
+  try {
+    const resp = await jpost('/search', body);
+    const refs = resp.references?.chunks || [];
+    if (!refs.length) {
+      const suffix = (me?.user?.role === 'internal')
+        ? " Try Admin → Update Client Library to ingest files from Drive, then ask again."
+        : "";
+      showInfo("No matching passages found." + suffix);
+    }
+    document.getElementById('out').style.display = 'block';
+    document.getElementById('answer').textContent = resp.answer || 'No answer';
+    document.getElementById('refs').innerHTML = refs.map((r,i) => `
+      <div class="ref">
+        <div><strong>[${i+1}]</strong> ${r.study || r.fileName || ''} ${r.date||''}</div>
+        <div class="muted" style="margin-top:4px">${r.textSnippet||''}</div>
+        <div style="margin-top:6px">${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">Open source</a>`:''}</div>
+      </div>`).join('');
+  } catch (e) {
+    showError('Search failed: ' + e);
+  }
 }
 document.getElementById('ask').onclick = doAsk;
 document.getElementById('q').addEventListener('keypress', (e)=>{ if (e.key === 'Enter') doAsk(); });
