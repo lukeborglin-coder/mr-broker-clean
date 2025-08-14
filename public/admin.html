@@ -16,8 +16,8 @@
     h3 { margin:0 0 10px; }
     label { display:block; font-size:.85rem; color:var(--muted); margin:8px 0 6px; }
     input, select { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:#222; outline:none; }
-    .btn, button { padding:10px 14px; border-radius:10px; background:#fff; color:#111; border:1px solid var(--line); font-weight:700; cursor:pointer; transition:all .12s ease; }
-    .btn:hover, button:hover { background:var(--brand); border-color:var(--brand); color:#fff; transform: translateY(-1px); }
+    .btn, button, a.btn { padding:10px 14px; border-radius:10px; background:#fff; color:#111; border:1px solid var(--line); font-weight:700; cursor:pointer; transition:all .12s ease; text-decoration:none; display:inline-flex; align-items:center; }
+    .btn:hover, button:hover, a.btn:hover { background:var(--brand); border-color:var(--brand); color:#fff; transform: translateY(-1px); }
     .btn.sm { padding:8px 12px; border-radius:10px; font-size:.9rem; }
     .rows { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
     table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
@@ -40,7 +40,7 @@
       <span class="beta">(BETA)</span>
     </div>
     <div class="rows">
-      <a href="/" class="btn">Back</a>
+      <a href="/" class="btn" id="backBtn">Back</a>
       <button id="logoutBtn" class="btn">Sign out</button>
     </div>
   </header>
@@ -49,7 +49,7 @@
     <!-- LEFT: Update Client Library -->
     <section>
       <h3>Update Client Library</h3>
-      <div class="smalltext">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs into Pinecone.</div>
+      <div class="smalltext">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs.</div>
 
       <label style="margin-top:10px;">Client Library</label>
       <select id="ingest_client">
@@ -82,7 +82,14 @@
       </table>
     </section>
 
-    <!-- RIGHT: Existing Accounts (with Add Account button) -->
+    <!-- RIGHT: Available Client Libraries (moved above Accounts) -->
+    <section>
+      <h3 style="margin:0;">Available Client Libraries</h3>
+      <div class="muted">Folders under your secure Drive root.</div>
+      <table id="clientsTable" style="margin-top:10px;"><tbody></tbody></table>
+    </section>
+
+    <!-- RIGHT: Existing Accounts with Add Account -->
     <section>
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
         <h3 style="margin:0;">Existing Accounts</h3>
@@ -96,13 +103,19 @@
         <input id="u_password" type="password" placeholder="Set a password" autocomplete="new-password"/>
         <label>Confirm Password</label>
         <input id="u_confirm" type="password" placeholder="Re-enter password" autocomplete="new-password"/>
+
         <label>Role</label>
         <select id="u_role">
-          <option value="client" selected>Client</option>
+          <option value="" selected disabled>Select role</option>
           <option value="admin">Admin</option>
+          <option value="client">Client</option>
         </select>
-        <label>Client Library</label>
-        <select id="u_client" size="6"></select>
+
+        <div id="u_client_wrap" class="hidden">
+          <label>Client Library</label>
+          <select id="u_client"></select>
+        </div>
+
         <div style="margin-top:10px; display:flex; gap:8px;">
           <button id="createUserBtn" class="btn">Create Account</button>
           <button id="cancelUserBtn" class="btn">Cancel</button>
@@ -110,13 +123,6 @@
       </div>
 
       <table id="usersTable" style="margin-top:12px;"><tbody></tbody></table>
-    </section>
-
-    <!-- RIGHT: Available Client Libraries -->
-    <section>
-      <h3 style="margin:0;">Available Client Libraries</h3>
-      <div class="muted">Folders under your secure Drive root.</div>
-      <table id="clientsTable" style="margin-top:10px;"><tbody></tbody></table>
     </section>
   </main>
 
@@ -146,9 +152,10 @@ async function load() {
     clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
 
   const userClientSel = document.getElementById('u_client');
-  userClientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  userClientSel.innerHTML = '<option value="" selected disabled>Select a client</option>' +
+    clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
 
-  // Populate right-hand libraries table with counts + status
+  // Populate libraries table with counts + status
   const tbody = document.querySelector('#clientsTable tbody');
   tbody.innerHTML = '<tr><th>Name</th><th>Files in Library</th><th>Status</th></tr>';
 
@@ -171,9 +178,22 @@ async function load() {
   }
 }
 
+// Add Account handlers
 document.getElementById('addAccountBtn').onclick = () => {
   document.getElementById('addForm').classList.remove('hidden');
+  // reset role & hide client library picker until role chosen
+  const roleSel = document.getElementById('u_role');
+  roleSel.value = "";
+  document.getElementById('u_client_wrap').classList.add('hidden');
 };
+
+document.getElementById('u_role').addEventListener('change', (e) => {
+  const val = e.target.value;
+  const wrap = document.getElementById('u_client_wrap');
+  if (val === 'client') wrap.classList.remove('hidden');
+  else wrap.classList.add('hidden');
+});
+
 document.getElementById('cancelUserBtn').onclick = () => {
   document.getElementById('addForm').classList.add('hidden');
 };
@@ -182,8 +202,12 @@ document.getElementById('createUserBtn').onclick = async () => {
   const username = document.getElementById('u_username').value.trim();
   const password = document.getElementById('u_password').value;
   const confirmPassword = document.getElementById('u_confirm').value;
+  const role = document.getElementById('u_role').value; // '' | 'admin' | 'client'
   const clientFolderId = document.getElementById('u_client').value;
-  const role = document.getElementById('u_role').value; // 'admin' or 'client'
+
+  if (!role) { alert('Select a role'); return; }
+  if (role === 'client' && !clientFolderId) { alert('Select a client library'); return; }
+
   try {
     await jpost('/admin/users/create', { username, password, confirmPassword, clientFolderId, role });
     document.getElementById('addForm').classList.add('hidden');
@@ -191,6 +215,7 @@ document.getElementById('createUserBtn').onclick = async () => {
   } catch (e) { alert('Failed: ' + e); }
 };
 
+// Ingest
 document.getElementById('ingestBtn').onclick = async () => {
   const clientId = document.getElementById('ingest_client').value;
   const summary = document.getElementById('ingest_summary');
@@ -238,6 +263,7 @@ document.getElementById('ingestBtn').onclick = async () => {
   }
 };
 
+// Snapshot when selecting client
 document.getElementById('ingest_client').addEventListener('change', async (e) => {
   const clientId = e.target.value;
   const libQuick = document.getElementById('libQuick');
@@ -262,6 +288,7 @@ document.getElementById('ingest_client').addEventListener('change', async (e) =>
   }
 });
 
+// Sign out
 document.getElementById('logoutBtn').onclick = async () => {
   await jpost('/auth/logout', {});
   location.href = '/login.html';
