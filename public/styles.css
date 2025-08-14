@@ -27,7 +27,7 @@ body {
    ========================= */
 .hidden { display: none !important; }
 .muted { color:#666; font-size:12px; }
-.ref-sup { font-size: 0.75em; vertical-align: super; }
+.ref-sup, .prose sup { font-size: 0.75em; vertical-align: super; }
 .small { font-size: 12px; color: var(--muted); }
 .text-sm { font-size: 12px; }
 .uppercase { text-transform: uppercase; }
@@ -63,9 +63,7 @@ body {
 .title { margin: 0; display:flex; align-items: baseline; gap: 4px; }
 .title-cog { font-size: 36px; font-weight: 800; letter-spacing: .2px; }
 .title-gpt { font-size: 36px; font-weight: 400; color: var(--orange); }
-.beta-badge {
-  color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px;
-}
+.beta-badge { color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px; }
 .header-actions { display:flex; align-items:center; gap:8px; }
 
 /* =========================
@@ -100,6 +98,55 @@ body {
 }
 .btn-ask:hover { filter: brightness(.95); }
 
+/* Link-style button */
+.link-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: #0b6bcb;
+  font-weight: 600;
+  padding: 6px 0 0;
+  cursor: pointer;
+}
+
+/* =========================
+   Search (Home)
+   ========================= */
+.search { margin: 18px 0 10px; }
+#qform {
+  display: grid;
+  grid-template-columns: 1fr 140px;
+  gap: 8px;
+  align-items: stretch;
+}
+#q {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 76px;
+  line-height: 1.35;
+}
+#inlineErr { margin-top: 6px; }
+
+/* =========================
+   Loading overlay
+   ========================= */
+.overlay {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.65); z-index: 20;
+}
+.spinner {
+  width: 28px; height: 28px; border: 3px solid #ffcfad; border-top-color: var(--orange); border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin-right: 10px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.overlay-text { font-weight: 700; color: #333; }
+
 /* =========================
    Panels & Callout
    ========================= */
@@ -116,7 +163,26 @@ body {
   font-size: 18px;
   font-weight: 800;
 }
-.answer-panel { border-left: 6px solid var(--orange-dark); background: #fff7ef; }
+
+/* Hero/Callout (old look restored) */
+.callout {
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: #fff7ef;
+  border-left: 6px solid var(--orange-dark); /* darker left accent */
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.keynums { margin: 8px 0 0; padding-left: 18px; }
+
+/* Make the Answer panel match the callout look exactly */
+.answer-panel {
+  background: #fff7ef;
+  border-left: 6px solid var(--orange-dark);
+  border-radius: 10px;         /* match callout radius */
+  box-shadow: var(--shadow);   /* match callout shadow */
+  border: 1px solid #eceff3;   /* keep subtle border for consistency */
+}
 
 /* =========================
    Lists
@@ -125,7 +191,7 @@ ul { margin: 0; padding-left: 18px; }
 li { margin: 6px 0; }
 
 /* =========================
-   Visuals
+   Visuals (slides + secondary info)
    ========================= */
 .slides-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 .slides-grid img { width:100%; border-radius:8px; }
@@ -135,8 +201,50 @@ li { margin: 6px 0; }
 .secondary-item p { margin:0; color:var(--muted); font-size:0.85rem; }
 
 /* =========================
+   Table
+   ========================= */
+.table-wrap { overflow-x:auto; margin-top: 8px; }
+.data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
+.data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
+.data-table thead th { background:#f4f6fa; font-weight:700; }
+
+/* =========================
+   Quotes
+   ========================= */
+#quotes .quote-item { margin:0 0 14px 0; }
+#quotes .quote-text { font-style: italic; margin:0; }
+
+/* =========================
+   Secondary content
+   ========================= */
+.secondary { margin-top: 8px; }
+
+/* =========================
+   Results wrapper
+   ========================= */
+.results { margin-top: 10px; }
+
+/* =========================
+   Simple password gate (client-side UI)
+   ========================= */
+.gate { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index: 999; }
+.gate .panel {
+  width: 92%; max-width: 420px;
+  background: var(--panel);
+  border:1px solid #eceff3;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+/* =========================
    Admin page layout
    ========================= */
 .admin-grid { display:grid; grid-template-columns:1.6fr 1fr; gap:20px; }
+@media (max-width: 959px) { .admin-grid { grid-template-columns:1fr; } }
 .panel-toggle { margin-top: 8px; }
 .form-grid { display:grid; grid-template-columns: 1fr; gap: 10px; }
+
+/* Smaller controls right under a .label */
+.label + .select.text-sm,
+.label + .input.text-sm { font-size: 12px; }
