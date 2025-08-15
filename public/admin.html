@@ -9,6 +9,8 @@
     :root{
       --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2;
       --soft:#fff7ed; --soft-border:#ffead6;
+      --danger:#b91c1c; --danger-bg:#fff1f2;
+      --link:#2563eb;
     }
     *{box-sizing:border-box}
     body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
@@ -20,20 +22,21 @@
     .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
     .nav{display:flex;align-items:center;gap:10px}
     #who{color:var(--muted);font-size:.85rem}
+
     .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none}
     .btn.small{padding:10px 14px;font-size:.92rem;line-height:1;height:40px}
     .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
     .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
     .btn.primary{background:var(--brand);color:#fff;border:0;padding:12px 18px;border-radius:12px}
 
-    main{max-width:960px;margin:28px auto;padding:0 16px;display:grid;gap:18px}
-    .card{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
-    .card h2{margin:0 0 8px;font-size:1.1rem}
-    .muted{color:var(--muted)}
+    /* 2/3 : 1/3 layout */
+    .grid{max-width:1080px;margin:28px auto;padding:0 16px;display:grid;gap:18px;grid-template-columns:2fr 1fr}
+    @media (max-width: 900px){ .grid{grid-template-columns:1fr} }
 
-    /* Create user section: button expands form */
-    .collapser{display:flex;align-items:center;justify-content:space-between;gap:10px}
-    .hidden{display:none}
+    .card{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
+    .card h2{margin:0 0 6px;font-size:1.1rem}
+    .muted{color:var(--muted)}
+    .soft{background:var(--soft);border-color:var(--soft-border)}
 
     /* Tree list */
     .tree{list-style:none;padding-left:0;margin:0}
@@ -41,11 +44,21 @@
     .tree summary{cursor:pointer;font-weight:600}
     .tree ul{list-style:disc;padding-left:20px;margin:6px 0 0}
     .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:.8rem;color:var(--muted);margin-left:8px}
-    .info{border:1px solid var(--line);background:#fafbfd;border-radius:10px;padding:10px 12px}
-    .soft{background:var(--soft);border-color:var(--soft-border)}
+
+    /* Selects/inputs */
     .row{display:flex;gap:10px;flex-wrap:wrap}
     select, input{border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:.95rem}
     label{font-size:.9rem;color:var(--muted)}
+
+    /* Account lists (show ~5, scroll for more) */
+    .list{border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-height:220px;overflow:auto}
+    .acct{display:flex;align-items:center;justify-content:space-between;padding:6px 6px;border-bottom:1px solid #f2f4f7}
+    .acct:last-child{border-bottom:0}
+    .kill{color:var(--danger);background:transparent;border:0;font-weight:900;font-size:16px;cursor:pointer;border-radius:6px;padding:2px 6px}
+    .kill:hover{background:var(--danger-bg)}
+    .link{color:var(--link);text-decoration:underline;cursor:pointer;font-size:.9rem}
+    .hidden{display:none}
+    .tiny{font-size:.85rem}
   </style>
 </head>
 <body>
@@ -62,172 +75,133 @@
     </div>
   </header>
 
-  <main>
-    <!-- Create Client User -->
-    <section class="card" id="createUserCard">
-      <div class="collapser">
-        <h2>Create client user</h2>
-        <button id="toggleCreate" class="btn small ghost">Open</button>
-      </div>
-      <div id="createForm" class="hidden" style="margin-top:10px;">
+  <main class="grid">
+    <!-- LEFT 2/3 -->
+    <section>
+      <!-- Available libraries -->
+      <section class="card">
+        <h2>Available client libraries</h2>
+        <div class="muted tiny" id="libsNote">Click a library to view its folders, then click a folder to view file names.</div>
+        <ul id="libsTree" class="tree" style="margin-top:8px;"></ul>
+        <div id="libsMsg" class="muted"></div>
+      </section>
+
+      <!-- Library stats -->
+      <section class="card">
+        <h2>Library stats</h2>
         <div class="row">
-          <div style="flex:1;min-width:220px;">
-            <label>Username</label>
-            <input id="cu_username" autocomplete="off" placeholder="client_username"/>
-          </div>
-          <div style="flex:1;min-width:220px;">
-            <label>Password</label>
-            <input id="cu_password" type="password" autocomplete="new-password" placeholder="Set password"/>
-          </div>
-          <div style="flex:1;min-width:220px;">
-            <label>Confirm password</label>
-            <input id="cu_confirm" type="password" autocomplete="new-password" placeholder="Confirm password"/>
-          </div>
+          <select id="statsClient"><option value="">Select a client library</option></select>
+          <button id="statsBtn" class="btn small ghost">Refresh</button>
         </div>
-        <div class="row" style="margin-top:10px;">
-          <div style="flex:1;min-width:220px;">
-            <label>Role</label>
-            <select id="cu_role">
-              <option value="client" selected>Client</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-          <div style="flex:2;min-width:260px;">
-            <label>Assign to client library</label>
-            <select id="cu_client">
-              <option value="">Select a client library</option>
-            </select>
-          </div>
+        <div id="statsOut" class="soft" style="margin-top:10px;padding:10px 12px;border-radius:10px;"></div>
+      </section>
+
+      <!-- Ingest -->
+      <section class="card">
+        <h2>Ingest / re‑ingest a client library</h2>
+        <div class="row">
+          <select id="ingestClient"><option value="">Select a client library</option></select>
+          <button id="ingestBtn" class="btn small ghost">Start ingest</button>
         </div>
-        <div style="margin-top:12px;">
-          <button id="createBtn" class="btn primary">Create user</button>
-          <span id="createMsg" class="muted" style="margin-left:10px;"></span>
-        </div>
-      </div>
+        <div id="ingestOut" class="soft" style="margin-top:10px;padding:10px 12px;border-radius:10px;"></div>
+      </section>
     </section>
 
-    <!-- Available Client Libraries (tree browser) -->
-    <section class="card">
-      <h2>Available client libraries</h2>
-      <div class="info soft muted" style="margin-bottom:8px;">Click a library to view its folders, then click a folder to view file names.</div>
-      <ul id="libsTree" class="tree"></ul>
-      <div id="libsMsg" class="muted"></div>
-    </section>
+    <!-- RIGHT 1/3 -->
+    <aside>
+      <!-- Client Accounts -->
+      <section class="card">
+        <h2>Client Accounts</h2>
+        <div class="list" id="clientList"></div>
+        <div style="margin-top:8px;">
+          <span id="addClientLink" class="link">Add new account</span>
+        </div>
+        <div id="clientForm" class="hidden" style="margin-top:10px;">
+          <div class="row">
+            <div style="flex:1;min-width:200px;">
+              <label>Username</label>
+              <input id="cu_username" autocomplete="off" placeholder="client_username"/>
+            </div>
+            <div style="flex:1;min-width:200px;">
+              <label>Password</label>
+              <input id="cu_password" type="password" autocomplete="new-password" placeholder="Set password"/>
+            </div>
+            <div style="flex:1;min-width:200px;">
+              <label>Confirm</label>
+              <input id="cu_confirm" type="password" autocomplete="new-password" placeholder="Confirm password"/>
+            </div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <div style="flex:1;min-width:220px;">
+              <label>Assign to client library</label>
+              <select id="cu_client"><option value="">Select a client library</option></select>
+            </div>
+          </div>
+          <div style="margin-top:10px;">
+            <button id="createClientBtn" class="btn primary">Create</button>
+            <span id="createClientMsg" class="muted" style="margin-left:8px;"></span>
+          </div>
+        </div>
+      </section>
 
-    <!-- Library stats (kept) -->
-    <section class="card">
-      <h2>Library stats</h2>
-      <div class="row">
-        <select id="statsClient">
-          <option value="">Select a client library</option>
-        </select>
-        <button id="statsBtn" class="btn small ghost">Refresh</button>
-      </div>
-      <div id="statsOut" class="info" style="margin-top:10px;"></div>
-    </section>
-
-    <!-- Ingest -->
-    <section class="card">
-      <h2>Ingest / re-ingest a client library</h2>
-      <div class="row">
-        <select id="ingestClient">
-          <option value="">Select a client library</option>
-        </select>
-        <button id="ingestBtn" class="btn small ghost">Start ingest</button>
-      </div>
-      <div id="ingestOut" class="info" style="margin-top:10px;"></div>
-    </section>
+      <!-- Admin Accounts -->
+      <section class="card">
+        <h2>Admin Accounts</h2>
+        <div class="list" id="adminList"></div>
+        <div style="margin-top:8px;">
+          <span id="addAdminLink" class="link">Add new admin</span>
+        </div>
+        <div id="adminForm" class="hidden" style="margin-top:10px;">
+          <div class="row">
+            <div style="flex:1;min-width:200px;">
+              <label>Username</label>
+              <input id="au_username" autocomplete="off" placeholder="admin_username"/>
+            </div>
+            <div style="flex:1;min-width:200px;">
+              <label>Password</label>
+              <input id="au_password" type="password" autocomplete="new-password" placeholder="Set password"/>
+            </div>
+            <div style="flex:1;min-width:200px;">
+              <label>Confirm</label>
+              <input id="au_confirm" type="password" autocomplete="new-password" placeholder="Confirm password"/>
+            </div>
+          </div>
+          <div style="margin-top:10px;">
+            <button id="createAdminBtn" class="btn primary">Create</button>
+            <span id="createAdminMsg" class="muted" style="margin-left:8px;"></span>
+          </div>
+        </div>
+      </section>
+    </aside>
   </main>
 
 <script>
 (async function init(){
   // whoami & logout
-  const meRes = await fetch("/me");
-  if (meRes.ok) {
-    const me = await meRes.json();
-    document.getElementById("who").textContent = `${me.user.username} · ${me.user.role}`;
-  }
+  try{
+    const meRes = await fetch("/me");
+    if (meRes.ok) {
+      const me = await meRes.json();
+      document.getElementById("who").textContent = `${me.user.username} · ${me.user.role}`;
+    }
+  }catch{}
   document.getElementById("logoutBtn").onclick = async ()=>{ await fetch("/auth/logout",{method:"POST"}); location.href="/login.html"; };
 
-  // collapse create user
-  const toggle = document.getElementById("toggleCreate");
-  const form = document.getElementById("createForm");
-  toggle.onclick = ()=> {
-    const open = !form.classList.contains("hidden");
-    form.classList.toggle("hidden", open);
-    toggle.textContent = open ? "Open" : "Close";
-  };
-
-  // load libraries (for dropdowns & tree)
+  // libraries for selects & tree
   const libs = await (await fetch("/api/client-libraries")).json();
-  const selects = ["cu_client","statsClient","ingestClient"].map(id=>document.getElementById(id));
-  for (const s of selects) {
+  const libSelects = ["cu_client","statsClient","ingestClient"].map(id=>document.getElementById(id));
+  for (const s of libSelects) {
+    if (!s) continue;
     s.innerHTML = '<option value="">Select a client library</option>';
     libs.forEach(l=>{
-      const o=document.createElement("option");
-      o.value=l.id; o.textContent=l.name;
-      s.appendChild(o);
+      const o=document.createElement("option"); o.value=l.id; o.textContent=l.name; s.appendChild(o);
     });
   }
 
-  // create user
-  document.getElementById("createBtn").onclick = async ()=>{
-    const username = document.getElementById("cu_username").value.trim();
-    const password = document.getElementById("cu_password").value;
-    const confirmPassword = document.getElementById("cu_confirm").value;
-    const clientFolderId = document.getElementById("cu_client").value;
-    const role = document.getElementById("cu_role").value; // "client" or "admin"
-    const msg = document.getElementById("createMsg");
-    msg.textContent = "…";
-    try{
-      const r = await fetch("/admin/users/create", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ username, password, confirmPassword, clientFolderId, role })
-      });
-      const j = await r.json();
-      msg.textContent = r.ok ? "User created." : (j.error || "Failed.");
-    }catch(e){
-      msg.textContent = "Failed.";
-    }
-  };
-
-  // stats
-  document.getElementById("statsBtn").onclick = async ()=>{
-    const clientId = document.getElementById("statsClient").value;
-    const out = document.getElementById("statsOut");
-    if (!clientId) { out.textContent="Select a client."; return; }
-    out.textContent="Loading…";
-    const r = await fetch(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
-    const j = await r.json();
-    if (!r.ok) { out.textContent = j.error || "Error"; return; }
-    out.innerHTML = `
-      <div><strong>Drive files:</strong> ${j.driveCount ?? "—"}</div>
-      <div><strong>Library (manifest) files:</strong> ${j.libraryCount ?? "—"}</div>
-      <div class="muted" style="margin-top:6px;">clientId: ${j.clientId}</div>
-    `;
-  };
-
-  // ingest
-  document.getElementById("ingestBtn").onclick = async ()=>{
-    const clientId = document.getElementById("ingestClient").value;
-    const out = document.getElementById("ingestOut");
-    if (!clientId) { out.textContent="Select a client."; return; }
-    out.textContent="Ingesting…";
-    const r = await fetch("/admin/ingest-client", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ clientId })
-    });
-    const j = await r.json();
-    out.textContent = r.ok ? `OK. Upserted: ${j.summary?.upserted ?? 0}` : (j.error || "Error");
-  };
-
-  // --- Library tree (folders -> files) ---
+  // ---- Library tree (folders -> files)
   const libsTree = document.getElementById("libsTree");
   const libsMsg = document.getElementById("libsMsg");
   libsMsg.textContent = libs.length ? "" : "No libraries found.";
-
   libs.forEach(lib=>{
     const li = document.createElement("li");
     const details = document.createElement("details");
@@ -236,102 +210,143 @@
     const pill = document.createElement("span"); pill.className="pill"; pill.textContent="library";
     summary.appendChild(pill);
     details.appendChild(summary);
-
     const container = document.createElement("div");
-    container.className = "muted";
-    container.textContent = "Loading folders…";
+    container.className = "muted"; container.textContent = "Loading folders…";
     details.appendChild(container);
-
     details.addEventListener("toggle", async ()=>{
       if (!details.open) return;
-      // fetch immediate children (folders + files) of library root
-      container.textContent = "Loading folders…";
+      container.textContent="Loading folders…";
       try{
         const r = await fetch(`/admin/drive/children?parentId=${encodeURIComponent(lib.id)}`);
         const j = await r.json();
-        if (!r.ok) throw new Error(j.error || "error");
-        // Build folder list
-        const ul = document.createElement("ul");
-        ul.className="tree";
-        // Folders first
-        (j.folders || []).forEach(f=>{
+        if (!r.ok) throw new Error(j.error||"error");
+        const ul = document.createElement("ul"); ul.className="tree";
+        (j.folders||[]).forEach(f=>{
           const d = document.createElement("details");
-          const s = document.createElement("summary");
-          s.textContent = f.name;
-          const fp = document.createElement("span"); fp.className="pill"; fp.textContent="folder";
-          s.appendChild(fp);
+          const s = document.createElement("summary"); s.textContent=f.name;
+          const fp = document.createElement("span"); fp.className="pill"; fp.textContent="folder"; s.appendChild(fp);
           d.appendChild(s);
-          const inner = document.createElement("div");
-          inner.className = "muted";
-          inner.textContent = "Loading…";
-          d.appendChild(inner);
+          const inner = document.createElement("div"); inner.className="muted"; inner.textContent="Loading…"; d.appendChild(inner);
           d.addEventListener("toggle", async ()=>{
             if (!d.open) return;
-            inner.textContent = "Loading…";
+            inner.textContent="Loading…";
             const rr = await fetch(`/admin/drive/children?parentId=${encodeURIComponent(f.id)}`);
             const jj = await rr.json();
             if (!rr.ok) { inner.textContent = jj.error || "Error"; return; }
             const list = document.createElement("ul");
-            // Subfolders (one more level, lazy)
-            (jj.folders || []).forEach(sf=>{
-              const d2 = document.createElement("details");
-              const s2 = document.createElement("summary");
-              s2.textContent = sf.name;
-              const p2 = document.createElement("span"); p2.className="pill"; p2.textContent="folder";
-              s2.appendChild(p2);
+            // one more subfolder level
+            (jj.folders||[]).forEach(sf=>{
+              const d2=document.createElement("details");
+              const s2=document.createElement("summary"); s2.textContent=sf.name;
+              const p2=document.createElement("span"); p2.className="pill"; p2.textContent="folder"; s2.appendChild(p2);
               d2.appendChild(s2);
-              const inner2 = document.createElement("div");
-              inner2.className = "muted";
-              inner2.textContent = "Loading…";
-              d2.appendChild(inner2);
+              const inner2=document.createElement("div"); inner2.className="muted"; inner2.textContent="Loading…"; d2.appendChild(inner2);
               d2.addEventListener("toggle", async ()=>{
                 if (!d2.open) return;
-                inner2.textContent = "Loading…";
+                inner2.textContent="Loading…";
                 const r3 = await fetch(`/admin/drive/children?parentId=${encodeURIComponent(sf.id)}`);
                 const j3 = await r3.json();
-                if (!r3.ok) { inner2.textContent = j3.error || "Error"; return; }
-                const l3 = document.createElement("ul");
-                (j3.files || []).forEach(file=>{
-                  const liF = document.createElement("li");
-                  liF.textContent = file.name;
-                  l3.appendChild(liF);
-                });
-                inner2.innerHTML = "";
-                if (l3.children.length) inner2.appendChild(l3); else inner2.textContent = "No files.";
+                if (!r3.ok) { inner2.textContent=j3.error||"Error"; return; }
+                const l3=document.createElement("ul");
+                (j3.files||[]).forEach(file=>{ const it=document.createElement("li"); it.textContent=file.name; l3.appendChild(it); });
+                inner2.innerHTML=""; l3.children.length ? inner2.appendChild(l3) : inner2.textContent="No files.";
               });
-              list.appendChild(d2);
+              const lii=document.createElement("li"); lii.appendChild(d2); list.appendChild(lii);
             });
-            // Files in this folder
-            (jj.files || []).forEach(file=>{
-              const liF = document.createElement("li");
-              liF.textContent = file.name;
-              list.appendChild(liF);
-            });
-            inner.innerHTML = "";
-            if (list.children.length) inner.appendChild(list); else inner.textContent = "Empty.";
+            (jj.files||[]).forEach(file=>{ const liF=document.createElement("li"); liF.textContent=file.name; list.appendChild(liF); });
+            inner.innerHTML=""; list.children.length ? inner.appendChild(list) : inner.textContent="Empty.";
           });
-          const liF = document.createElement("li");
-          liF.appendChild(d);
-          ul.appendChild(liF);
+          const liF=document.createElement("li"); liF.appendChild(d); ul.appendChild(liF);
         });
-        // Files directly under library root
-        (j.files || []).forEach(file=>{
-          const liF = document.createElement("li");
-          liF.textContent = file.name;
-          ul.appendChild(liF);
-        });
-
-        container.innerHTML = "";
-        if (ul.children.length) container.appendChild(ul); else container.textContent = "Empty.";
-      }catch(e){
-        container.textContent = "Failed to load.";
-      }
+        (j.files||[]).forEach(file=>{ const liF=document.createElement("li"); liF.textContent=file.name; ul.appendChild(liF); });
+        container.innerHTML=""; ul.children.length ? container.appendChild(ul) : container.textContent="Empty.";
+      }catch(e){ container.textContent="Failed to load."; }
     });
-
-    li.appendChild(details);
-    libsTree.appendChild(li);
+    li.appendChild(details); libsTree.appendChild(li);
   });
 
+  // ---- Stats
+  document.getElementById("statsBtn").onclick = async ()=>{
+    const clientId = document.getElementById("statsClient").value;
+    const out = document.getElementById("statsOut");
+    if (!clientId) { out.textContent="Select a client."; return; }
+    out.textContent="Loading…";
+    const r = await fetch(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
+    const j = await r.json();
+    out.innerHTML = r.ok
+      ? `<div><strong>Drive files:</strong> ${j.driveCount ?? "—"}</div>
+         <div><strong>Library (manifest) files:</strong> ${j.libraryCount ?? "—"}</div>
+         <div class="muted" style="margin-top:6px;">clientId: ${j.clientId}</div>`
+      : (j.error || "Error");
+  };
+
+  // ---- Ingest
+  document.getElementById("ingestBtn").onclick = async ()=>{
+    const clientId = document.getElementById("ingestClient").value;
+    const out = document.getElementById("ingestOut");
+    if (!clientId) { out.textContent="Select a client."; return; }
+    out.textContent="Ingesting…";
+    const r = await fetch("/admin/ingest-client",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ clientId })});
+    const j = await r.json();
+    out.textContent = r.ok ? `OK. Upserted: ${j.summary?.upserted ?? 0}` : (j.error || "Error");
+  };
+
+  // ---- Accounts (lists + add + delete)
+  const users = await (await fetch("/admin/users/list")).json();
+
+  function renderAccounts(role, listId){
+    const el = document.getElementById(listId);
+    const arr = users.filter(u => role==="client" ? u.role!=="internal" : u.role==="internal");
+    // "Most recent 5" — show last 5 entries; allow scroll for more
+    const ordered = arr.slice().reverse(); // assume file order is creation order
+    const view = ordered; // list is scrollable; top shows most recent
+    el.innerHTML = "";
+    view.forEach(u=>{
+      const row = document.createElement("div");
+      row.className="acct";
+      row.innerHTML = `<span>${u.username}</span>`;
+      const del = document.createElement("button");
+      del.className="kill"; del.title="remove account access"; del.textContent="×";
+      del.onclick = async ()=>{
+        const ok = confirm(`Are you sure you want to remove account access for ${u.username}?`);
+        if (!ok) return;
+        const r = await fetch("/admin/users/delete", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username: u.username })});
+        if (r.ok) { row.remove(); } else { alert("Failed to remove account."); }
+      };
+      row.appendChild(del);
+      el.appendChild(row);
+    });
+  }
+
+  renderAccounts("client","clientList");
+  renderAccounts("admin","adminList");
+
+  // Add client account (link expands form)
+  const clientForm = document.getElementById("clientForm");
+  document.getElementById("addClientLink").onclick = ()=> clientForm.classList.toggle("hidden");
+  document.getElementById("createClientBtn").onclick = async ()=>{
+    const username = document.getElementById("cu_username").value.trim();
+    const password = document.getElementById("cu_password").value;
+    const confirmPassword = document.getElementById("cu_confirm").value;
+    const clientFolderId = document.getElementById("cu_client").value;
+    const msg = document.getElementById("createClientMsg"); msg.textContent = "…";
+    const r = await fetch("/admin/users/create",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username, password, confirmPassword, clientFolderId, role:"client" })});
+    const j = await r.json();
+    msg.textContent = r.ok ? "Created." : (j.error || "Failed.");
+  };
+
+  // Add admin account
+  const adminForm = document.getElementById("adminForm");
+  document.getElementById("addAdminLink").onclick = ()=> adminForm.classList.toggle("hidden");
+  document.getElementById("createAdminBtn").onclick = async ()=>{
+    const username = document.getElementById("au_username").value.trim();
+    const password = document.getElementById("au_password").value;
+    const confirmPassword = document.getElementById("au_confirm").value;
+    const msg = document.getElementById("createAdminMsg"); msg.textContent = "…";
+    const r = await fetch("/admin/users/create",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username, password, confirmPassword, clientFolderId: "DRIVE_ROOT", role:"admin" })});
+    const j = await r.json();
+    msg.textContent = r.ok ? "Created." : (j.error || "Failed.");
+  };
 })();
 </script>
 </body>
