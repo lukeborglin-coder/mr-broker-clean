@@ -1,10 +1,13 @@
-# Write a further-updated server.js that:
-# - fixes login/session reliability by making cookie.secure configurable via SECURE_COOKIES env
-# - adds no-store cache headers for html/css/js to avoid stale UI during development
-updated_server_code = r"""// server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
+// server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
 // Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
-// NEW (Fix pass): configurable secure cookies + no-store headers for HTML/CSS/JS to avoid stale UI
+// Fixes: defines chunkText() and uses it correctly; robust ingest + tags (month/year/report)
+// NEW: /api/client-libraries — live-from-Drive dropdown (cached), so no manual updates on deploy
+// 2025-08-15 Updates for Admin Page:
+// - Admin creation no longer requires a client folder; admins (role 'internal') auto-get access to all libraries.
+// - /admin/users/create returns the created user so the UI can update lists immediately.
+// - /admin/library-stats now returns: driveFiles, reportsCount, dataFilesCount, qnrsCount, and accounts[]
+// - Minor helpers added for Drive subfolder counting.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -16,15 +19,15 @@ import bcrypt from "bcryptjs";
 import OpenAI from "openai";
 import { google } from "googleapis";
 
+// -------------------- Environment --------------------
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || "change-me";
 const AUTH_TOKEN = process.env.AUTH_TOKEN || "dev-auth-token";
-const SECURE_COOKIES = String(process.env.SECURE_COOKIES || "").toLowerCase() === "true";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536 dims
 const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-4o-mini";
 const DEFAULT_TOPK = Number(process.env.DEFAULT_TOPK || 6);
 
@@ -35,26 +38,21 @@ const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || "";
 const GOOGLE_KEYFILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || "";
 
+// Cache for client libraries (so UI always loads from Drive, no redeploys)
 const CLIENT_LIB_TTL_MS = Number(process.env.CLIENT_LIB_TTL_MS || 60_000);
 
 // Internal account
 const INTERNAL_USERNAME = "cognitive_internal";
-const INTERNAL_PASSWORD = process.env.INTERNAL_PASSWORD?.trim() || "coggpt25";
-const INTERNAL_PASSWORD_HASH = process.env.INTERNAL_PASSWORD_HASH?.trim() || null;
+const INTERNAL_PASSWORD =
+  process.env.INTERNAL_PASSWORD?.trim() || "coggpt25";
+const INTERNAL_PASSWORD_HASH =
+  process.env.INTERNAL_PASSWORD_HASH?.trim() || null;
 
+// -------------------- App --------------------
 const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
-
-// Prevent stale cached UI during iteration
-app.use((req, res, next) => {
-  if (/\.(html|css|js)$/i.test(req.path)) {
-    res.set("Cache-Control", "no-store");
-  }
-  next();
-});
-
 app.use(
   session({
     secret: SESSION_SECRET,
@@ -63,7 +61,7 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: SECURE_COOKIES, // set SECURE_COOKIES=true only when serving over HTTPS end-to-end
+      secure: process.env.NODE_ENV && process.env.NODE_ENV !== "development",
       maxAge: 1000 * 60 * 60 * 8,
     },
   })
@@ -83,7 +81,9 @@ function readJSON(p, fallback) {
     return fallback;
   }
 }
-function writeJSON(p, obj) { try { fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8"); } catch {} }
+function writeJSON(p, obj) {
+  try { fs.writeFileSync(p, JSON.stringify(obj, null, 2), "utf8"); } catch {}
+}
 
 // Ensure internal account exists
 (function seedInternal() {
@@ -168,6 +168,22 @@ async function listAllFilesUnder(folderId) {
   return out;
 }
 
+// Find immediate child folder named `name` (case-insensitive). Returns folder id or null.
+async function findChildFolderIdByName(parentId, name) {
+  const drive = getDrive();
+  const r = await drive.files.list({
+    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    fields: "files(id,name)",
+    pageSize: 1000,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    orderBy: "name_natural"
+  });
+  const low = String(name).toLowerCase();
+  const match = (r.data.files || []).find(f => String(f.name).toLowerCase() === low);
+  return match ? match.id : null;
+}
+
 // -------------------- Client library cache --------------------
 let _libCache = { data: [], ts: 0 };
 async function getClientLibrariesCached(force = false) {
@@ -213,11 +229,14 @@ async function extractTextFromFile(file) {
   return "";
 }
 
-// -------------------- PDF extractor --------------------
+// PDF extractor with robust fallback (optional libs)
 async function tryExtractPdfText(file) {
+  // Download bytes
   const drive = getDrive();
   const r = await drive.files.get({ fileId: file.id, alt: "media" }, { responseType: "arraybuffer" });
   const buf = Buffer.from(r.data);
+
+  // First try pdf-parse
   try {
     const mod = await import("pdf-parse");
     const pdfParse = (mod && (mod.default || mod)) || mod;
@@ -226,10 +245,13 @@ async function tryExtractPdfText(file) {
       if (parsed?.text?.trim()) return parsed.text;
     }
   } catch {}
+
+  // Fallback to pdfjs-dist (try modern then legacy path)
   try {
     let pdfjs;
     try { pdfjs = await import("pdfjs-dist/build/pdf.mjs"); }
     catch { pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs"); }
+
     const task = pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false, useSystemFonts: false });
     const pdf = await task.promise;
     let all = [];
@@ -249,22 +271,54 @@ async function tryExtractPdfText(file) {
 function chunkText(txt, maxLen = 1800) {
   const chunks = [];
   let i = 0;
-  while (i < txt.length) { chunks.push(txt.slice(i, i + maxLen)); i += maxLen; }
+  while (i < txt.length) {
+    chunks.push(txt.slice(i, i + maxLen));
+    i += maxLen;
+  }
   return chunks;
 }
 const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
-function monthNum(name) { const idx = MONTHS.indexOf(String(name||"").toLowerCase()); return idx === -1 ? null : idx + 1; }
+function monthNum(name) {
+  const idx = MONTHS.indexOf(String(name||"").toLowerCase());
+  return idx === -1 ? null : idx + 1;
+}
 function pad2(n){ return String(n).padStart(2,"0"); }
 function latestDateFrom(text, fallbackISO) {
-  const s = `${text || ""}`; const candidates = [];
+  const s = `${text || ""}`;
+  const candidates = [];
+
+  // Month name + year (e.g., June 2025)
   const m1 = s.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+(\d{4})\b/gi);
-  for (const m of m1) { const mname = m[1]; const yr = parseInt(m[2],10); const mn = monthNum(mname.startsWith("sep")?"september":mname); if (mn) candidates.push({ y: yr, m: mn }); }
+  for (const m of m1) {
+    const mname = m[1];
+    const yr = parseInt(m[2],10);
+    const mn = monthNum(mname.startsWith("sep")?"september":mname);
+    if (mn) candidates.push({ y: yr, m: mn });
+  }
+
+  // numeric mm/yyyy or m/yyyy
   const m2 = s.matchAll(/\b(0?[1-9]|1[0-2])[\/\-_\.](\d{4})\b/g);
-  for (const m of m2) { const mn = parseInt(m[1],10); const yr = parseInt(m[2],10); candidates.push({ y: yr, m: mn }); }
+  for (const m of m2) {
+    const mn = parseInt(m[1],10);
+    const yr = parseInt(m[2],10);
+    candidates.push({ y: yr, m: mn });
+  }
+
+  // choose latest
   candidates.sort((a,b)=> a.y===b.y ? a.m-b.m : a.y-b.y);
   const best = candidates.pop();
-  if (best) return { month: MONTHS[best.m-1][0].toUpperCase()+MONTHS[best.m-1].slice(1), year: String(best.y), epoch: Date.parse(`${best.y}-${pad2(best.m)}-01T00:00:00Z`) };
-  if (fallbackISO) { const d = new Date(fallbackISO); if (!isNaN(d.getTime())) { const m = d.getUTCMonth()+1; const y = d.getUTCFullYear(); return { month: MONTHS[m-1][0].toUpperCase()+MONTHS[m-1].slice(1), year: String(y), epoch: Date.parse(`${y}-${pad2(m)}-01T00:00:00Z`) }; } }
+  if (best) {
+    return { month: MONTHS[best.m-1][0].toUpperCase()+MONTHS[best.m-1].slice(1), year: String(best.y), epoch: Date.parse(`${best.y}-${pad2(best.m)}-01T00:00:00Z`) };
+  }
+
+  if (fallbackISO) {
+    const d = new Date(fallbackISO);
+    if (!isNaN(d.getTime())) {
+      const m = d.getUTCMonth()+1;
+      const y = d.getUTCFullYear();
+      return { month: MONTHS[m-1][0].toUpperCase()+MONTHS[m-1].slice(1), year: String(y), epoch: Date.parse(`${y}-${pad2(m)}-01T00:00:00Z`) };
+    }
+  }
   return { month: "", year: "", epoch: 0 };
 }
 function inferReportTag(name, text) {
@@ -294,16 +348,21 @@ async function embedTexts(texts) {
   const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: texts });
   return r.data.map(d => d.embedding);
 }
+
 async function pineconeUpsert(vectors, namespace) {
   const r = await fetch(`${PINECONE_INDEX_HOST}/vectors/upsert`, {
-    method: "POST", headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY }, body: JSON.stringify({ vectors, namespace })
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
+    body: JSON.stringify({ vectors, namespace })
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function pineconeQuery(vector, namespace, topK = DEFAULT_TOPK) {
   const r = await fetch(`${PINECONE_INDEX_HOST}/query`, {
-    method: "POST", headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY }, body: JSON.stringify({ vector, topK, includeMetadata: true, namespace })
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
+    body: JSON.stringify({ vector, topK, includeMetadata: true, namespace })
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -311,7 +370,9 @@ async function pineconeQuery(vector, namespace, topK = DEFAULT_TOPK) {
 async function pineconeDescribe() {
   try {
     const r = await fetch(`${PINECONE_INDEX_HOST}/describe_index_stats`, {
-      method: "POST", headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY }, body: JSON.stringify({})
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Api-Key": PINECONE_API_KEY },
+      body: JSON.stringify({})
     });
     if (!r.ok) return {};
     return r.json();
@@ -359,12 +420,17 @@ app.post("/auth/login", async (req,res)=>{
 });
 app.post("/auth/logout",(req,res)=>{ req.session.destroy(()=>res.json({ok:true})); });
 
+// NOTE: Map 'internal' -> 'admin' in the /me response for the UI label
 app.get("/me", async (req,res)=>{
   if(!req.session?.user) return res.status(401).json({ error:"Not signed in" });
   const clients = await getClientLibrariesCached(false);
   const me = req.session.user;
   const roleLabel = me.role === "internal" ? "admin" : me.role;
-  res.json({ user: { username: me.username, role: roleLabel }, activeClientId: req.session.activeClientId || null, clients });
+  res.json({
+    user: { username: me.username, role: roleLabel },
+    activeClientId: req.session.activeClientId || null,
+    clients
+  });
 });
 
 // Remove a user account
@@ -391,14 +457,27 @@ app.post("/auth/switch-client", requireSession, requireInternal, async (req,res)
   res.json({ ok:true });
 });
 
-// Client libraries (cached)
+// Back-compat (public) — returns same as /api/client-libraries
+app.get("/clients/drive-folders", async (_req,res)=>{ res.json(await getClientLibrariesCached(false)); });
+
+// NEW: Public client library endpoint (cached). Use this from your dropdown.
 app.get("/api/client-libraries", async (_req, res) => {
-  try { res.json(await getClientLibrariesCached(false)); }
-  catch { res.status(500).json({ error: "Failed to load client libraries" }); }
+  try {
+    const libs = await getClientLibrariesCached(false);
+    res.json(libs);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load client libraries" });
+  }
 });
+
+// OPTIONAL: Admin-only cache refresh (e.g., to bust cache immediately after adding folders)
 app.post("/api/client-libraries/refresh", requireSession, requireInternal, async (_req, res) => {
-  try { const libs = await getClientLibrariesCached(true); res.json({ ok: true, count: libs.length }); }
-  catch { res.status(500).json({ error: "Refresh failed" }); }
+  try {
+    const libs = await getClientLibrariesCached(true);
+    res.json({ ok: true, count: libs.length });
+  } catch (e) {
+    res.status(500).json({ error: "Refresh failed" });
+  }
 });
 
 // -------------------- Admin APIs --------------------
@@ -407,7 +486,7 @@ app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
   res.json(usersDoc.users.map(u => ({ username:u.username, role:u.role, allowedClients:u.allowedClients })));
 });
 
-// Create user (admins auto-access all; return created user for instant UI)
+// UPDATED: allow role selection (admin -> internal) and return created user for instant UI updates
 app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
   try{
     const { username, password, confirmPassword, clientFolderId, role } = req.body || {};
@@ -418,17 +497,31 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
     if (usersDoc.users.some(u => u.username === username)) return res.status(400).json({ error:"Username exists" });
 
     const requestedRole = String(role || "client").toLowerCase();
-    if (requestedRole === "admin") {
-      const newUser = { username, passwordHash: await bcrypt.hash(String(password),10), role: "internal", allowedClients: "*" };
+    const isAdmin = requestedRole === "admin";
+
+    // If admin: no client folder validation; grant global access
+    if (isAdmin) {
+      const newUser = {
+        username,
+        passwordHash: await bcrypt.hash(String(password),10),
+        role: "internal",
+        allowedClients: "*"
+      };
       usersDoc.users.push(newUser);
       writeJSON(USERS_PATH, usersDoc);
       return res.json({ ok:true, user: { username, role: "internal", allowedClients: "*" } });
     }
 
+    // Else: client user requires valid client folder
     if (!clientFolderId) return res.status(400).json({ error:"clientFolderId required for client users" });
     if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
 
-    const newUser = { username, passwordHash: await bcrypt.hash(String(password),10), role: "client", allowedClients: clientFolderId };
+    const newUser = {
+      username,
+      passwordHash: await bcrypt.hash(String(password),10),
+      role: "client",
+      allowedClients: clientFolderId
+    };
     usersDoc.users.push(newUser);
     writeJSON(USERS_PATH, usersDoc);
     res.json({ ok:true, user: { username, role: "client", allowedClients: clientFolderId } });
@@ -438,39 +531,30 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
 });
 
 // -------------------- Manifest & stats --------------------
-const CONFIG_DIR2 = CONFIG_DIR;
-const MANIFEST_DIR = path.join(CONFIG_DIR2, "manifests");
+const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
 if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
 
+// UPDATED: returns driveFiles + counts for Reports/Data/QNRs + list of accounts with access
 app.get("/admin/library-stats", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = String(req.query.clientId || "").trim();
     if (!clientId) return res.status(400).json({ error: "clientId required" });
     if (!(await driveFolderExists(clientId))) return res.status(400).json({ error: "Unknown clientId" });
 
+    // Count current Drive files (non-folders) under client root (recursive)
     const all = await listAllFilesUnder(clientId);
     const driveFiles = all.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
 
-    // folders: reports / data / qnrs
-    async function findChildFolderIdByName(parentId, name) {
-      const drive = getDrive();
-      const r = await drive.files.list({
-        q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        fields: "files(id,name)", pageSize: 1000, supportsAllDrives: true, includeItemsFromAllDrives: true, orderBy: "name_natural"
-      });
-      const low = String(name).toLowerCase();
-      const match = (r.data.files || []).find(f => String(f.name).toLowerCase() === low);
-      return match ? match.id : null;
-    }
+    // Subfolder counts (recursive if subfolders exist)
     const reportsId = await findChildFolderIdByName(clientId, "reports");
     const dataId    = await findChildFolderIdByName(clientId, "data");
     const qnrsId    = await findChildFolderIdByName(clientId, "qnrs");
 
-    async function countAllUnder(id) { return id ? (await listAllFilesUnder(id)).length : 0; }
-    const reportsCount   = await countAllUnder(reportsId);
-    const dataFilesCount = await countAllUnder(dataId);
-    const qnrsCount      = await countAllUnder(qnrsId);
+    const reportsCount   = reportsId ? (await listAllFilesUnder(reportsId)).length : 0;
+    const dataFilesCount = dataId ? (await listAllFilesUnder(dataId)).length : 0;
+    const qnrsCount      = qnrsId ? (await listAllFilesUnder(qnrsId)).length : 0;
 
+    // Accounts that have access to this library (client users + all admins)
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     const accounts = (usersDoc.users || [])
       .filter(u => u.role === "internal" || u.allowedClients === "*" || u.allowedClients === clientId || (Array.isArray(u.allowedClients) && u.allowedClients.includes(clientId)))
@@ -482,10 +566,7 @@ app.get("/admin/library-stats", requireSession, requireInternal, async (req,res)
   }
 });
 
-// -------------------- Ingest --------------------
-const openaiClient = openai;
-async function pineconeQueryWrapper(vec, namespace, topK){ return pineconeQuery(vec, namespace, topK); }
-
+// Ingest library (Docs/Slides/Sheets + PDFs when possible) with auto-tagging
 app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = req.body?.clientId || req.session.activeClientId;
@@ -506,7 +587,9 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
 
     for (const f of files) {
       if (!supported.has(f.mimeType)) continue;
-      let text = ""; let status = "complete";
+
+      let text = "";
+      let status = "complete";
       try {
         if (f.mimeType === "application/pdf") {
           try { text = await tryExtractPdfText(f); }
@@ -515,11 +598,16 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
           text = await extractTextFromFile(f);
           if (!text?.trim()) status = "no text";
         }
-      } catch (e) { status = String(e?.message || e); }
+      } catch (e) {
+        status = String(e?.message || e);
+      }
 
+      // Auto-tags (even if no text, we can use name/modifiedTime)
       const tags = latestDateFrom(`${f.name}\n${text || ""}`, f.modifiedTime);
       const report = inferReportTag(f.name, text);
-      const monthTag = tags.month || ""; const yearTag = tags.year || ""; const recencyEpoch = tags.epoch || 0;
+      const monthTag = tags.month || "";
+      const yearTag = tags.year || "";
+      const recencyEpoch = tags.epoch || 0;
 
       let chunkCount = 0;
       if (status === "complete" && text?.trim()) {
@@ -529,8 +617,13 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
           id: `${sanitize(clientId)}:${sanitize(f.name)}:${i}`,
           values: vec,
           metadata: {
-            clientId, fileName: f.name, fileUrl: f.webViewLink || "", study: f.name, date: f.modifiedTime || "",
-            text: parts[i].slice(0, 4000), monthTag, yearTag, reportTag: report, recencyEpoch
+            clientId,
+            fileName: f.name,
+            fileUrl: f.webViewLink || "",
+            study: f.name,
+            date: f.modifiedTime || "",
+            text: parts[i].slice(0, 4000),
+            monthTag, yearTag, reportTag: report, recencyEpoch
           }
         }));
         if (vectors.length) {
@@ -539,53 +632,96 @@ app.post("/admin/ingest-client", requireSession, requireInternal, async (req,res
           chunkCount = vectors.length;
         }
       } else {
+        // mark as error
         errors.push({ file: f.name, msg: status });
       }
 
-      ingested.push({ id: f.id, name: f.name, mimeType: f.mimeType, chunks: chunkCount, status, monthTag, yearTag, reportTag: report });
+      ingested.push({
+        id: f.id, name: f.name, mimeType: f.mimeType,
+        chunks: chunkCount, status,
+        monthTag, yearTag, reportTag: report
+      });
     }
 
     let namespaceVectorCount;
     const stats = await pineconeDescribe();
     try { namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount; } catch {}
 
+    // --- NEW: write/update manifest with distinct ingested file names
     try {
       const distinct = Array.from(new Set(ingested.filter(x => x.status === "complete").map(x => x.name)));
-      const MANIFEST_DIR_LOC = MANIFEST_DIR;
-      const manifestPath = path.join(MANIFEST_DIR_LOC, `${clientId}.json`);
+      const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
       writeJSON(manifestPath, { clientId, updatedAt: new Date().toISOString(), files: distinct });
-    } catch(e) { console.warn("[manifest] write failed:", e); }
+    } catch(e) {
+      console.warn("[manifest] write failed:", e);
+    }
 
-    res.json({ ok: true, summary: {
-      filesSeen: files.length,
-      ingestedCount: ingested.filter(x => x.status === "complete").length,
-      skippedCount: files.filter(f => !supported.has(f.mimeType)).length,
-      errorsCount: errors.length,
-      upserted, namespaceVectorCount
-    }, ingested, errors });
+    res.json({
+      ok: true,
+      summary: {
+        filesSeen: files.length,
+        ingestedCount: ingested.filter(x => x.status === "complete").length,
+        skippedCount: files.filter(f => !supported.has(f.mimeType)).length,
+        errorsCount: errors.length,
+        upserted,
+        namespaceVectorCount
+      },
+      ingested,
+      errors
+    });
   }catch(e){
     res.status(500).json({ error:"Failed to ingest", detail:String(e?.message||e) });
   }
 });
 
-// -------------------- Secondary info & search --------------------
+// -------------------- Secondary search (no API key) --------------------
+// Focuses on reputable medical/public-health domains
 async function fetchSecondaryInfo(query, max = 5) {
-  const whitelist = "site:fda.gov OR site:ncbi.nlm.nih.gov OR site:who.int OR site:cdc.gov OR site:nejm.org OR site:bmj.com OR site:nature.com OR site:thelancet.com";
+  const whitelist =
+    "site:fda.gov OR site:ncbi.nlm.nih.gov OR site:who.int OR site:cdc.gov OR site:nejm.org OR site:bmj.com OR site:nature.com OR site:thelancet.com";
   const url = "https://duckduckgo.com/html/?q=" + encodeURIComponent(`${query} ${whitelist}`);
+
   try {
-    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 Chrome Safari" }, redirect: "follow" });
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari",
+      },
+      redirect: "follow",
+    });
     const html = await res.text();
+
     const items = [];
     const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const snipRe = /<a[^>]*class="[^"]*result__snippet"[^>]*>([\s\S]*?)<\/a>|<a[^>]*>[\s\S]*?<\/a>\s*-\s*<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
-    let m, links = [], snippets = [];
-    while ((m = linkRe.exec(html)) && links.length < max * 2) { const url = m[1].replace(/&amp;/g, "&"); const title = m[2].replace(/<[^>]+>/g, "").trim(); if (url && title) links.push({ url, title }); }
-    let s; while ((s = snipRe.exec(html)) && snippets.length < links.length) { const snippet = (s[1] || s[2] || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim(); if (snippet) snippets.push(snippet); }
-    const out = []; for (let i = 0; i < links.length && out.length < max; i++) out.push({ title: links[i].title, url: links[i].url, snippet: snippets[i] || "" });
+
+    let m;
+    const links = [];
+    while ((m = linkRe.exec(html)) && links.length < max * 2) {
+      const url = m[1].replace(/&amp;/g, "&");
+      const title = m[2].replace(/<[^>]+>/g, "").trim();
+      if (url && title) links.push({ url, title });
+    }
+
+    const snippets = [];
+    let s;
+    while ((s = snipRe.exec(html)) && snippets.length < links.length) {
+      const snippet = (s[1] || s[2] || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      if (snippet) snippets.push(snippet);
+    }
+
+    const out = [];
+    for (let i = 0; i < links.length && out.length < max; i++) {
+      out.push({ title: links[i].title, url: links[i].url, snippet: snippets[i] || "" });
+    }
     return out;
-  } catch { return []; }
+  } catch (e) {
+    console.error("[secondary] failed:", e);
+    return [];
+  }
 }
 
+// -------------------- Search --------------------
 app.post("/search", requireSession, async (req,res)=>{
   try{
     const body = req.body || {};
@@ -594,29 +730,39 @@ app.post("/search", requireSession, async (req,res)=>{
     const q = String(body.userQuery || "").trim();
     if (!q) return res.status(400).json({ error:"userQuery required" });
 
+    // Embedding for the query
     const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: [q] });
     const vec = emb.data[0].embedding;
-    const result = await pineconeQueryWrapper(vec, clientId, DEFAULT_TOPK);
+
+    const result = await pineconeQuery(vec, clientId, DEFAULT_TOPK);
     let matches = Array.isArray(result.matches) ? result.matches : [];
     if (!matches.length) {
       const secondary = await fetchSecondaryInfo(q, 5);
       return res.json({ answer:"", references:{ chunks:[] }, visuals:[], secondary });
     }
 
+    // Recency-aware sort (use tags if present)
     const maxEpoch = Math.max(...matches.map(m => Number(m.metadata?.recencyEpoch || 0)), 0);
-    matches = matches.map(m => {
-      const base = Number(m.score || 0);
-      const epoch = Number(m.metadata?.recencyEpoch || 0);
-      const rec = maxEpoch ? epoch / maxEpoch : 0;
-      const blend = base * 0.85 + rec * 0.15;
-      return { ...m, _blend: blend };
-    }).sort((a,b)=> b._blend - a._blend);
+    matches = matches
+      .map(m => {
+        const base = Number(m.score || 0);
+        const epoch = Number(m.metadata?.recencyEpoch || 0);
+        const rec = maxEpoch ? epoch / maxEpoch : 0;
+        const blend = base * 0.85 + rec * 0.15; // small recency boost
+        return { ...m, _blend: blend };
+      })
+      .sort((a,b)=> b._blend - a._blend);
 
     const refs = matches.map(m => ({
-      id: m.id, score: m.score,
-      fileName: m.metadata?.fileName || "", fileUrl: m.metadata?.fileUrl || "",
-      study: m.metadata?.study || "", date: m.metadata?.date || "",
-      monthTag: m.metadata?.monthTag || "", yearTag: m.metadata?.yearTag || "", reportTag: m.metadata?.reportTag || "",
+      id: m.id,
+      score: m.score,
+      fileName: m.metadata?.fileName || "",
+      fileUrl: m.metadata?.fileUrl || "",
+      study: m.metadata?.study || "",
+      date: m.metadata?.date || "",
+      monthTag: m.metadata?.monthTag || "",
+      yearTag: m.metadata?.yearTag || "",
+      reportTag: m.metadata?.reportTag || "",
       textSnippet: (m.metadata?.text || "").slice(0, 600)
     }));
 
@@ -630,36 +776,50 @@ app.post("/search", requireSession, async (req,res)=>{
       temperature: 0.2
     });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "";
+
     const secondary = await fetchSecondaryInfo(q, 5);
+
     res.json({ answer, references: { chunks: refs }, visuals: [], secondary });
   }catch(e){
     res.status(500).json({ error:"Search failed", detail:String(e?.message||e) });
   }
 });
 
-// Drive children
+// --- Drive children listing for admin tree ----
 app.get("/admin/drive/children", requireSession, requireInternal, async (req, res) => {
   try {
     const parentId = String(req.query.parentId || "").trim();
     if (!parentId) return res.status(400).json({ error: "parentId required" });
+
     const drive = getDrive();
+    // Folders
     const fr = await drive.files.list({
       q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       fields: "files(id,name)",
-      pageSize: 1000, supportsAllDrives: true, includeItemsFromAllDrives: true, orderBy: "name_natural"
+      pageSize: 1000,
+      supportsAllDrives: true, includeItemsFromAllDrives: true,
+      orderBy: "name_natural"
     });
+    // Files (non-folders)
     const r = await drive.files.list({
       q: `'${parentId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
       fields: "files(id,name,mimeType)",
-      pageSize: 1000, supportsAllDrives: true, includeItemsFromAllDrives: true, orderBy: "name_natural"
+      pageSize: 1000,
+      supportsAllDrives: true, includeItemsFromAllDrives: true,
+      orderBy: "name_natural"
     });
+
     res.json({
       folders: (fr.data.files || []).map(f => ({ id: f.id, name: f.name })),
       files: (r.data.files || []).map(f => ({ id: f.id, name: f.name }))
     });
-  } catch (e) { res.status(500).json({ error: "Failed to list children" }); }
+  } catch (e) {
+    res.status(500).json({ error: "Failed to list children" });
+  }
 });
 
+
+// -------------------- Health --------------------
 app.get("/health", (_req,res)=>res.json({ok:true}));
 
 app.listen(PORT, ()=>{
@@ -667,12 +827,4 @@ app.listen(PORT, ()=>{
   if (!OPENAI_API_KEY) console.warn("[boot] OPENAI_API_KEY missing");
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
-  console.log(`[session] SECURE_COOKIES=${SECURE_COOKIES}`);
 });
-"""
-
-out_path = "/mnt/data/server_updated_fix.txt"
-with open(out_path, "w", encoding="utf-8") as f:
-    f.write(updated_server_code)
-
-out_path
