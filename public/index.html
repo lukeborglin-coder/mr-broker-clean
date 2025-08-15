@@ -18,7 +18,6 @@
     .brand .cog{font-weight:800;color:#2b2f36;font-size:24px;letter-spacing:.1px}
     .brand .gpt{font-weight:400;color:var(--brand);font-size:24px;margin-left:-2px}
     .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
-
     .nav{display:flex;align-items:center;gap:10px}
     #who{color:var(--muted);font-size:.85rem}
     .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none}
@@ -27,25 +26,22 @@
     .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
     .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 24px;border-radius:18px;font-size:1.05rem}
 
-    /* compact admin dropdown (top-right) */
-    .client-top{display:none;min-width:240px}
-    .client-top select{
+    /* admin client dropdown (below header, right-aligned) */
+    .client-top-below{display:none;max-width:1280px;margin:8px auto 0;padding:0 16px;display:flex;justify-content:flex-end}
+    .client-top-below select{
       height:40px;border-radius:10px;border:1px solid var(--line);
-      background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);
+      background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:240px;
     }
 
     /* page as dashboard (full width) */
     main{max-width:1280px;margin:32px auto;padding:0 16px}
-    .hero{text-align:left;margin:0 0 8px}
+    .hero{text-align:center;margin:0 0 8px}
     .hero h1{font-size:34px;margin:0 0 6px}
     .hero h1 .dot{color:var(--brand)}
     .hero p{margin:0;color:var(--muted)}
 
     .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
     .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
-    .askbox .thinking{display:none;align-items:center;gap:8px;color:var(--muted);font-size:.9rem}
-    .spinner{width:16px;height:16px;border:2px solid #ddd;border-top-color:var(--brand);border-radius:50%;animation:spin .9s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
 
     .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
     .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
@@ -55,9 +51,6 @@
     .answer-head{font-weight:800;margin:0 0 6px}
     .answer-bullets{margin:8px 0 0;padding-left:18px}
     .answer-bullets li{margin:4px 0}
-    .refs-ol{padding-left:20px;margin:0}
-    .refs-ol li{margin:6px 0}
-    .ref-link{margin-left:6px}
 
     /* supporting lists */
     #supportCard ul{margin:0;padding-left:18px}
@@ -79,7 +72,7 @@
     .msg.error{background:#fff5f5;color:#8b0000;display:block}
     .msg.info{display:block}
 
-    /* under-input client row (kept for clients; hidden for admins) */
+    /* under-input client row (clients only) */
     .client-under{margin:10px 0 0}
     .client-under select{
       width:100%; text-align:center; color:var(--muted);
@@ -94,16 +87,17 @@
         <span class="cog">COG</span><span class="gpt">gpt</span><span class="beta">(BETA)</span>
       </div>
       <div class="nav">
-        <!-- compact admin client select (top-right) -->
-        <div class="client-top" id="clientTopWrap">
-          <select id="clientTop"></select>
-        </div>
         <div id="who"></div>
         <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
         <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
+
+  <!-- Admin-only client picker, shown under the top bar -->
+  <div class="client-top-below" id="clientTopRow" style="display:none;">
+    <select id="clientTop"></select>
+  </div>
 
   <main>
     <div class="hero">
@@ -114,7 +108,6 @@
     <div class="askbox">
       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
       <button id="ask" class="btn primary" disabled>Ask</button>
-      <div class="thinking" id="thinking"><span class="spinner"></span><span>Thinking…</span></div>
     </div>
 
     <!-- client select below input (clients only) -->
@@ -152,12 +145,26 @@
         <div id="dataGrid"></div>
       </div>
 
-      <div id="refsCard" class="panel" style="display:none;">
-        <h3>References</h3>
-        <ol id="refs" class="refs-ol"></ol>
-      </div>
+      <!-- Collapsed references table -->
+      <details id="refsDetails" class="panel" style="display:none;">
+        <summary><h3 style="display:inline;">References</h3></summary>
+        <div class="table-wrap">
+          <table class="data-table" id="refsTable">
+            <thead>
+              <tr><th>#</th><th>Name</th><th>Month</th><th>Year</th><th>Methodology</th><th>Link</th></tr>
+            </thead>
+            <tbody id="refsBody"></tbody>
+          </table>
+        </div>
+      </details>
     </div>
   </main>
+
+  <!-- Full-screen loading overlay -->
+  <div id="overlay" class="overlay hidden">
+    <div class="spinner"></div>
+    <div class="overlay-text">Thinking…</div>
+  </div>
 
 <script>
 // --- Role-aware header + client library placement ---
@@ -171,11 +178,11 @@ async function fetchMe(){
     ME = me;
     document.getElementById("who").textContent = `${me.user.username} — ${me.user.role}`;
     if(me.user.role === "admin"){
-      // show small top-right dropdown for admins
-      document.getElementById("clientTopWrap").style.display = "block";
+      // show small dropdown BELOW header for admins
+      document.getElementById("clientTopRow").style.display = "flex";
       document.getElementById("clientRow").style.display = "none";
     }else{
-      document.getElementById("clientTopWrap").style.display = "none";
+      document.getElementById("clientTopRow").style.display = "none";
       document.getElementById("clientRow").style.display = "block";
     }
     document.getElementById("adminLink").style.display = (me.user.role === "admin") ? "inline-flex" : "none";
@@ -212,8 +219,10 @@ async function loadClientLibraries(){
 
 // basic helpers
 function setThinking(on){
-  document.getElementById("thinking").style.display = on ? "flex" : "none";
-  document.getElementById("ask").disabled = on;
+  const ov = document.getElementById("overlay");
+  if (ov) ov.classList.toggle("hidden", !on);
+  const ask = document.getElementById("ask");
+  if (ask) ask.disabled = on;
 }
 function showMsg(text, type="info"){
   const el = document.getElementById("msg");
@@ -238,8 +247,6 @@ function renderCharts(series){
   const grid = document.getElementById("dataGrid");
   grid.innerHTML = "";
   if(!Array.isArray(series) || !series.length) return;
-
-  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
   series.slice(0,5).forEach(s=>{
     const wrap = document.createElement("div");
@@ -302,7 +309,6 @@ function renderCharts(series){
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
-  const btn = document.getElementById("ask");
   const isAdmin = (ME?.user?.role === "admin");
   const clientSel = isAdmin ? document.getElementById("clientTop") : document.getElementById("client");
   const clientId = clientSel?.value || null;
@@ -332,13 +338,12 @@ async function doAsk(){
     ans.innerHTML = "";
     if(data?.answer){
       ansPanel.style.display = "block";
-      // keep answer as-is; bullets cleanup handled in support section
       ans.textContent = data.answer;
     }else{
       ansPanel.style.display = "none";
     }
 
-    // Additional Support (clean, concise bullets; no trailing periods; drop duplicates of headline sentences)
+    // Additional Support (clean bullets; no trailing periods; avoid duplicates of headline)
     const support = document.getElementById("supportList");
     const supportCard = document.getElementById("supportCard");
     support.innerHTML = "";
@@ -348,11 +353,10 @@ async function doAsk(){
       const s = String(c.textSnippet||"").split(/\n+/).map(t=>t.trim()).filter(Boolean).slice(0,2);
       s.forEach(t=> bulletPool.push(t));
     });
-    // remove exact duplicates & trim periods
     const seen = new Set();
     bulletPool
       .map(cleanBullet)
-      .filter(b=>b && !seen.has(b) && !data?.answer?.includes(b))
+      .filter(b=>b && !seen.has(b) && !(data?.answer||"").includes(b))
       .slice(0,6)
       .forEach(b=>{
         seen.add(b);
@@ -367,7 +371,7 @@ async function doAsk(){
     quotesEl.innerHTML = "";
     const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
     quotes.forEach(q=>{
-      const bq=document.createElement("blockquote"); bq.textContent = q.endsWith(".")? q : q;
+      const bq=document.createElement("blockquote"); bq.textContent = q;
       quotesEl.appendChild(bq);
     });
     quotesCard.style.display = quotes.length ? "block" : "none";
@@ -384,30 +388,32 @@ async function doAsk(){
     });
     document.getElementById("slidesCard").style.display = slides.length ? "block" : "none";
 
-    // Supporting Data (interactive-ish SVG charts)
+    // Supporting Data (SVG charts)
     const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
     document.getElementById("dataCard").style.display = series.length ? "block" : "none";
     renderCharts(series);
 
-    // References (fix spacing around "(" and "open source)")
-    const refs = document.getElementById("refs");
-    const refsCard = document.getElementById("refsCard");
-    refs.innerHTML = "";
+    // References table (collapsed by default)
+    const refsDetails = document.getElementById("refsDetails");
+    const tbody = document.getElementById("refsBody");
+    tbody.innerHTML = "";
     ctxChunks.forEach((r,i)=>{
-      const li=document.createElement("li");
-      const title=(r.study || r.fileName || "").trim();
-      const meta = `(${(r.monthTag||"").trim()} ${(r.yearTag||"").trim()} • ${(r.reportTag||"").trim()})`.replace(/\(\s+/,"(").replace(/\s+\)/,")");
-      const a = document.createElement("a");
-      a.href = r.fileUrl || "#";
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.className = "ref-link";
-      a.textContent = "open source";
-      li.textContent = `${title} ${meta} `;
-      li.appendChild(a);
-      refs.appendChild(li);
+      const tr = document.createElement("tr");
+      const name = (r.study || r.fileName || "").trim();
+      const month = (r.monthTag||"").trim();
+      const year = (r.yearTag||"").trim();
+      const method = (r.reportTag||"").trim();
+      tr.innerHTML = `
+        <td>${i+1}</td>
+        <td>${name}</td>
+        <td>${month}</td>
+        <td>${year}</td>
+        <td>${method}</td>
+        <td><a href="${r.fileUrl||"#"}" target="_blank" rel="noopener">open source</a></td>
+      `;
+      tbody.appendChild(tr);
     });
-    refsCard.style.display = refs.children.length ? "block" : "none";
+    refsDetails.style.display = ctxChunks.length ? "block" : "none";
 
   }catch(e){
     showMsg("Search failed. Try again.", "error");
