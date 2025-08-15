@@ -31,7 +31,7 @@
     /* admin client dropdown (below header, right-aligned) */
     .client-top-below{display:none;width:100%;margin:8px 0 0;padding:0 24px;display:flex;justify-content:flex-end}
     .client-top-below select{
-      height:40px;border-radius:10px;border:1px solid var(--line);
+      height:40px;border-radius:10px;border:1px solid(var(--line));
       background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:260px;
     }
 
@@ -61,7 +61,7 @@
 
     /* Report Slides */
     #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
-    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line);background:#fff}
+    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line);background:#f8fafc;aspect-ratio:16/9;object-fit:cover}
 
     /* supporting data (charts) */
     #dataGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
@@ -250,14 +250,10 @@ function renderSupportList(limit = 5){
     const li = document.createElement("li");
     // Remove trailing period per requirement
     const noPeriod = stripTrailPunct(b);
-    if (window.App?.formatRefsToSup) {
-      li.innerHTML = window.App.formatRefsToSup(noPeriod);
-    } else {
-      li.innerHTML = String(noPeriod)
-        .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
-        .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
-        .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
-    }
+    li.innerHTML = String(noPeriod)
+      .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
+      .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+      .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
     ul.appendChild(li);
   });
 
@@ -391,11 +387,11 @@ function renderCharts(series){
       });
       const lmin=document.createElementNS("http://www.w3.org/2000/svg","text");
       lmin.setAttribute("x",2); lmin.setAttribute("y",padT+h); lmin.setAttribute("font-size","10");
-      lmin.textContent = `${Math.round(vmin)}%`;
+      lmin.textContent = `${Math.round(vmin)}%";
       svg.appendChild(lmin);
       const lmax=document.createElementNS("http://www.w3.org/2000/svg","text");
       lmax.setAttribute("x",2); lmax.setAttribute("y",padT+8); lmax.setAttribute("font-size","10");
-      lmax.textContent = `${Math.round(vmax)}%`;
+      lmax.textContent = `${Math.round(vmax)}%";
       svg.appendChild(lmax);
     }
     wrap.appendChild(title);
@@ -494,14 +490,10 @@ async function doAsk(){
     if (ans) ans.innerHTML = "";
     if(data?.answer && ansPanel && ans){
       ansPanel.style.display = "block";
-      if (window.App?.setHTMLWithRefs) {
-        window.App.setHTMLWithRefs(ans, data.answer);
-      } else {
-        ans.innerHTML = String(data.answer)
-          .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
-          .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
-          .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
-      }
+      ans.innerHTML = String(data.answer)
+        .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
+        .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+        .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
     }else if (ansPanel){
       ansPanel.style.display = "none";
     }
@@ -523,9 +515,7 @@ async function doAsk(){
     // If nothing provided, fallback to snippet-derived bullets
     if (!structured.length) {
       const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
-      const fallback = (window.App && window.App.deriveSupportBullets)
-        ? window.App.deriveSupportBullets(snippets, { maxCount: 12, maxLen: 180 })
-        : snippets.flatMap(splitLines).map(cleanBullet);
+      const fallback = snippets.flatMap(splitLines).map(cleanBullet);
       structured = fallback.map(t => ({ text: t, recencyEpoch: 0, refs: [] }));
     }
 
@@ -560,14 +550,21 @@ async function doAsk(){
     if (slidesGrid) slidesGrid.innerHTML = "";
     const slidePairs = [];
     const seenSlide = new Set();
+    const seenFileFallback = new Set();
     (ctxChunks||[]).forEach(ch=>{
       const fid = ch.fileId || ch.id || ch.driveId || null;
       const page = ch.page || ch.pageNum || ch.pageNumber || null;
-      if (!fid || !page) return;
-      const k = `${fid}:${page}`;
-      if (seenSlide.has(k)) return;
-      seenSlide.add(k);
-      slidePairs.push({fileId: fid, page: Number(page)});
+      if (!fid) return;
+      if (page) {
+        const k = `${fid}:${page}`;
+        if (seenSlide.has(k)) return;
+        seenSlide.add(k);
+        slidePairs.push({fileId: fid, page: Number(page)});
+      } else if (!seenFileFallback.has(fid) && seenFileFallback.size < 6) {
+        // Fallback: render page 1 for files without explicit page (e.g., Google Slides).
+        seenFileFallback.add(fid);
+        slidePairs.push({ fileId: fid, page: 1 });
+      }
     });
     allSlides = slidePairs.slice(0,12).map(sp => ({...sp, dataUrl: null}));
     if (allSlides.length){
@@ -585,14 +582,10 @@ async function doAsk(){
     const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
     quotes.forEach(q=>{
       const bq=document.createElement("blockquote");
-      if (window.App?.formatRefsToSup) {
-        bq.innerHTML = window.App.formatRefsToSup(stripTrailPunct(q));
-      } else {
-        bq.innerHTML = String(stripTrailPunct(q))
-          .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
-          .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
-          .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
-      }
+      bq.innerHTML = String(stripTrailPunct(q))
+        .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
+        .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+        .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
       quotesEl?.appendChild(bq);
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
