@@ -42,13 +42,14 @@
 
     .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
     .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
+    .inline-thinking{display:none;align-items:center;gap:8px;color:var(--muted);font-size:.9rem;margin-top:6px}
+    .linklike{background:none;border:0;color:#2563eb;text-decoration:underline;cursor:pointer;font-size:.9rem;padding:0}
 
     .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
     .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
     .answer-panel{background:var(--soft);border-color:var(--soft-border);position:relative}
     .answer-panel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;border-radius:14px 0 0 14px;background:var(--accent-left)}
     .answer-body{line-height:1.55;font-size:1.02rem}
-    .answer-head{font-weight:800;margin:0 0 6px}
     .answer-bullets{margin:8px 0 0;padding-left:18px}
     .answer-bullets li{margin:4px 0}
 
@@ -68,16 +69,9 @@
     #dataGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
     .chart-card{border:1px solid var(--line);border-radius:12px;padding:10px}
 
-    .msg{margin-top:14px;border:1px solid var(--line);background:#fafbfd;color:#2b2f36;border-radius:10px;padding:10px 12px;display:none}
-    .msg.error{background:#fff5f5;color:#8b0000;display:block}
-    .msg.info{display:block}
+    .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
+    .msg.info{display:block;background:#fafbfd;color:#2b2f36}
 
-    /* under-input client row (clients only) */
-    .client-under{margin:10px 0 0}
-    .client-under select{
-      width:100%; text-align:center; color:var(--muted);
-      border:1px solid var(--line); background:#fff; border-radius:12px; padding:12px 14px; font-size:.95rem;
-    }
   </style>
 </head>
 <body>
@@ -109,14 +103,7 @@
       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
       <button id="ask" class="btn primary" disabled>Ask</button>
     </div>
-
-    <!-- client select below input (clients only) -->
-    <div class="client-under" id="clientRow" style="display:none;">
-      <select id="client">
-        <option value="">Select a client library for your query</option>
-      </select>
-    </div>
-
+    <div id="inlineStatus" class="inline-thinking"><span class="spinner sm"></span><span>Thinking…</span></div>
     <div id="msg" class="msg"></div>
 
     <div id="out" style="display:none;">
@@ -127,7 +114,7 @@
       <div id="supportCard" class="panel" style="display:none;">
         <h3>Additional Support</h3>
         <ul id="supportList"></ul>
-        <button id="showMoreBtn" class="btn small ghost" style="display:none;">Show more</button>
+        <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
       </div>
 
       <div id="quotesCard" class="panel" style="display:none;">
@@ -147,7 +134,10 @@
 
       <!-- Collapsed references table -->
       <details id="refsDetails" class="panel" style="display:none;">
-        <summary><h3 style="display:inline;">References</h3></summary>
+        <summary>
+          <h3 style="display:inline;">References</h3>
+          <span class="muted" style="margin-left:8px;">(click to expand)</span>
+        </summary>
         <div class="table-wrap">
           <table class="data-table" id="refsTable">
             <thead>
@@ -176,75 +166,98 @@ async function fetchMe(){
     if(!r.ok) throw new Error("not signed in");
     const me = await r.json();
     ME = me;
-    document.getElementById("who").textContent = `${me.user.username} — ${me.user.role}`;
+    const who = document.getElementById("who");
+    if (who) who.textContent = `${me.user.username} — ${me.user.role}`;
     if(me.user.role === "admin"){
-      // show small dropdown BELOW header for admins
-      document.getElementById("clientTopRow").style.display = "flex";
-      document.getElementById("clientRow").style.display = "none";
-    }else{
-      document.getElementById("clientTopRow").style.display = "none";
-      document.getElementById("clientRow").style.display = "block";
+      const row = document.getElementById("clientTopRow");
+      if (row) row.style.display = "flex";
     }
-    document.getElementById("adminLink").style.display = (me.user.role === "admin") ? "inline-flex" : "none";
+    const adminLink = document.getElementById("adminLink");
+    if (adminLink) adminLink.style.display = (me.user.role === "admin") ? "inline-flex" : "none";
   }catch(e){
     console.warn(e);
   }
 }
 
-// populate dropdown(s) from live Drive list
+// populate dropdown(s) from live Drive list (admin only)
 async function loadClientLibraries(){
   try {
     const res = await fetch("/api/client-libraries");
     const libs = await res.json();
 
-    const makeOpts = (sel, includePrompt=true)=>{
-      sel.innerHTML = includePrompt ? '<option value="">Select a client library for your query</option>' : "";
+    const topSel = document.getElementById("clientTop");
+    if (topSel) {
+      topSel.innerHTML = "";
       libs.forEach(({id, name})=>{
         const opt = document.createElement("option");
         opt.value = id;
         opt.textContent = name;
-        sel.appendChild(opt);
+        topSel.appendChild(opt);
       });
-    };
-
-    const topSel = document.getElementById("clientTop");
-    const underSel = document.getElementById("client");
-
-    makeOpts(topSel, false);
-    makeOpts(underSel, true);
+    }
   } catch(e) {
     console.error("Failed to load client libraries", e);
   }
 }
 
-// basic helpers
+// helpers
 function setThinking(on){
   const ov = document.getElementById("overlay");
   if (ov) ov.classList.toggle("hidden", !on);
+  const inl = document.getElementById("inlineStatus");
+  if (inl) inl.style.display = on ? "flex" : "none";
   const ask = document.getElementById("ask");
   if (ask) ask.disabled = on;
 }
-function showMsg(text, type="info"){
+function showMsg(text, type="error"){
   const el = document.getElementById("msg");
+  if (!el) return;
   el.textContent = text;
-  el.className = "msg " + type;
+  el.className = "msg " + (type==="error"?"":"info");
   el.style.display = "block";
 }
 function clearMsg(){
   const el = document.getElementById("msg");
+  if (!el) return;
   el.textContent = "";
   el.className = "msg";
   el.style.display = "none";
 }
 
-// sanitize bullet: drop trailing period
-function cleanBullet(s){
-  return String(s||"").replace(/\.\s*$/,"");
+// text cleanup
+function cleanBullet(s){ return String(s||"").replace(/\.\s*$/,""); }
+function splitLines(s){ return String(s||"").split(/\n+/).map(t=>t.trim()).filter(Boolean); }
+
+// “Show more/less” state
+let supportAllBullets = [];
+let supportCollapsed = true;
+
+function renderSupportList(limit = 5){
+  const ul = document.getElementById("supportList");
+  const btn = document.getElementById("toggleMoreBtn");
+  if (!ul || !btn) return;
+
+  ul.innerHTML = "";
+  const slice = supportCollapsed ? supportAllBullets.slice(0, limit) : supportAllBullets;
+  slice.forEach(b => { const li = document.createElement("li"); li.textContent = b; ul.appendChild(li); });
+
+  if (supportAllBullets.length > limit) {
+    btn.style.display = "inline";
+    btn.textContent = supportCollapsed ? "Show more" : "Show less";
+  } else {
+    btn.style.display = "none";
+  }
 }
 
-// render charts from supportingData [{metric, points:[{label,value,refIndex}]}]
+document.getElementById("toggleMoreBtn")?.addEventListener("click", ()=>{
+  supportCollapsed = !supportCollapsed;
+  renderSupportList();
+});
+
+// build charts from supportingData [{metric, points:[{label,value,epoch}]}]
 function renderCharts(series){
   const grid = document.getElementById("dataGrid");
+  if (!grid) return;
   grid.innerHTML = "";
   if(!Array.isArray(series) || !series.length) return;
 
@@ -309,16 +322,19 @@ function renderCharts(series){
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
+  const inlineStatus = document.getElementById("inlineStatus");
+  const question = String(qEl?.value||"").trim();
   const isAdmin = (ME?.user?.role === "admin");
-  const clientSel = isAdmin ? document.getElementById("clientTop") : document.getElementById("client");
-  const clientId = clientSel?.value || null;
+  const clientId = isAdmin ? (document.getElementById("clientTop")?.value || null) : null;
 
-  if(isAdmin && !clientId){
-    showMsg("Please select a client library.", "error");
+  if (isAdmin && !clientId) {
+    showMsg("Select a client library before asking.");
     return;
   }
-  const question = String(qEl.value||"").trim();
-  if(!question){ showMsg("Enter a question to search.", "error"); return; }
+  if(!question){
+    showMsg("Enter a question to search.");
+    return;
+  }
 
   setThinking(true);
   try{
@@ -329,74 +345,83 @@ async function doAsk(){
     });
     const data = await res.json();
 
-    // show outputs
-    document.getElementById("out").style.display = "block";
+    document.getElementById("out")?.setAttribute("style","display:block;");
 
     // Answer
     const ansPanel = document.getElementById("answerPanel");
     const ans = document.getElementById("answer");
-    ans.innerHTML = "";
-    if(data?.answer){
+    if (ans) ans.innerHTML = "";
+    if(data?.answer && ansPanel && ans){
       ansPanel.style.display = "block";
       ans.textContent = data.answer;
-    }else{
+    }else if (ansPanel){
       ansPanel.style.display = "none";
     }
 
-    // Additional Support (clean bullets; no trailing periods; avoid duplicates of headline)
+    // Build a set of phrases from the answer to de‑dupe support bullets
+    const answerLines = splitLines(data?.answer||"").map(cleanBullet);
+    const ansSet = new Set(answerLines.filter(Boolean));
+
+    // Additional Support (clean bullets; no trailing periods; avoid duplicates)
     const support = document.getElementById("supportList");
     const supportCard = document.getElementById("supportCard");
-    support.innerHTML = "";
+    if (support) support.innerHTML = "";
     const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
+
     const bulletPool = [];
-    ctxChunks.slice(0,8).forEach((c)=>{
-      const s = String(c.textSnippet||"").split(/\n+/).map(t=>t.trim()).filter(Boolean).slice(0,2);
-      s.forEach(t=> bulletPool.push(t));
+    ctxChunks.slice(0,10).forEach((c)=>{
+      splitLines(c.textSnippet||"").slice(0,3).forEach(t=> bulletPool.push(t));
     });
+
+    // normalize + dedupe
     const seen = new Set();
-    bulletPool
+    supportAllBullets = bulletPool
       .map(cleanBullet)
-      .filter(b=>b && !seen.has(b) && !(data?.answer||"").includes(b))
-      .slice(0,6)
-      .forEach(b=>{
-        seen.add(b);
-        const li=document.createElement("li"); li.textContent=b; support.appendChild(li);
-      });
-    supportCard.style.display = support.children.length ? "block" : "none";
-    document.getElementById("showMoreBtn").style.display = bulletPool.length>6 ? "inline-flex" : "none";
+      .map(s => s.replace(/\s+/g," ").trim())
+      .filter(b=>b && !seen.has(b) && !ansSet.has(b) && !(data?.answer||"").includes(b) && seen.add(b));
+
+    if (supportAllBullets.length && supportCard){
+      supportCard.style.display = "block";
+      supportCollapsed = true;
+      renderSupportList(5);
+    } else if (supportCard){
+      supportCard.style.display = "none";
+    }
 
     // Quotes
     const quotesCard = document.getElementById("quotesCard");
     const quotesEl = document.getElementById("quotes");
-    quotesEl.innerHTML = "";
+    if (quotesEl) quotesEl.innerHTML = "";
     const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
     quotes.forEach(q=>{
       const bq=document.createElement("blockquote"); bq.textContent = q;
-      quotesEl.appendChild(bq);
+      quotesEl?.appendChild(bq);
     });
-    quotesCard.style.display = quotes.length ? "block" : "none";
+    if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
 
     // Slides (report examples) - max 5 images
     const slides = Array.isArray(data?.reportExamples) ? data.reportExamples.slice(0,5) : [];
     const slidesGrid = document.getElementById("slidesGrid");
-    slidesGrid.innerHTML = "";
+    if (slidesGrid) slidesGrid.innerHTML = "";
     slides.forEach(s=>{
       const img = document.createElement("img");
       img.src = s.url;
       img.alt = "Slide";
-      slidesGrid.appendChild(img);
+      slidesGrid?.appendChild(img);
     });
-    document.getElementById("slidesCard").style.display = slides.length ? "block" : "none";
+    const slidesCard = document.getElementById("slidesCard");
+    if (slidesCard) slidesCard.style.display = slides.length ? "block" : "none";
 
     // Supporting Data (SVG charts)
     const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
-    document.getElementById("dataCard").style.display = series.length ? "block" : "none";
+    const dataCard = document.getElementById("dataCard");
+    if (dataCard) dataCard.style.display = series.length ? "block" : "none";
     renderCharts(series);
 
-    // References table (collapsed by default)
+    // References table (collapsed by default but visible)
     const refsDetails = document.getElementById("refsDetails");
     const tbody = document.getElementById("refsBody");
-    tbody.innerHTML = "";
+    if (tbody) tbody.innerHTML = "";
     ctxChunks.forEach((r,i)=>{
       const tr = document.createElement("tr");
       const name = (r.study || r.fileName || "").trim();
@@ -411,13 +436,13 @@ async function doAsk(){
         <td>${method}</td>
         <td><a href="${r.fileUrl||"#"}" target="_blank" rel="noopener">open source</a></td>
       `;
-      tbody.appendChild(tr);
+      tbody?.appendChild(tr);
     });
-    refsDetails.style.display = ctxChunks.length ? "block" : "none";
+    if (refsDetails) refsDetails.style.display = ctxChunks.length ? "block" : "none";
 
   }catch(e){
-    showMsg("Search failed. Try again.", "error");
     console.error(e);
+    showMsg("Search failed. Please try again.");
   }finally{
     setThinking(false);
   }
@@ -428,17 +453,18 @@ async function doAsk(){
   await fetchMe();
   await loadClientLibraries();
   // enable ask when ready
-  document.getElementById("ask").disabled = false;
+  const ask = document.getElementById("ask");
+  if (ask) ask.disabled = false;
 
   // submit handlers
-  document.getElementById("ask").addEventListener("click", doAsk);
-  document.getElementById("q").addEventListener("keydown", (e)=>{
+  ask?.addEventListener("click", doAsk);
+  document.getElementById("q")?.addEventListener("keydown", (e)=>{
     if(e.key === "Enter"){ e.preventDefault(); doAsk(); }
   });
 })();
 
 // logout
-document.getElementById("logoutBtn").addEventListener("click", async ()=>{
+document.getElementById("logoutBtn")?.addEventListener("click", async ()=>{
   await fetch("/auth/logout",{method:"POST"});
   location.href="/login.html";
 });
