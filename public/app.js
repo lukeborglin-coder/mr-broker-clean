@@ -1,7 +1,7 @@
 /* public/app.js — shared helpers only (no legacy Ask handlers, no alerts)
    - KEEP: fetch helpers (jget/jpost)
    - ADD: inline message + thinking + refs helpers
-   - REMOVE: any client-selector coupling + alert popups
+   - UPDATE: formatRefsToSup merges adjacent [n][m] → <sup>n;m</sup>
 */
 
 const API_BASE = (window.CONFIG || {}).API_BASE || "";
@@ -53,13 +53,28 @@ function setThinking(on) {
   if (ask) ask.disabled = !!on;
 }
 
-// --- Citation helpers ---
-// Replace [n] with <sup>n</sup> and remove any preceding space.
+/**
+ * Replace bracketed numeric citations with a single <sup> group.
+ * Examples:
+ *   "text [1]"            → "text <sup>1</sup>"
+ *   "text [1][2][5]"      → "text <sup>1;2;5</sup>"
+ *   "text ... [2] [3]"    → "text ... <sup>2</sup> <sup>3</sup>"
+ */
 function formatRefsToSup(text) {
-  return String(text || "")
+  const s = String(text || "");
+
+  // First, turn any runs like [1][2][3] into one sup with semicolons
+  const merged = s.replace(/(?:\[\d+\])+/g, (match) => {
+    const nums = Array.from(match.matchAll(/\[(\d+)\]/g)).map((m) => m[1]);
+    return `<sup>${nums.join(";")}</sup>`;
+  });
+
+  // Then, handle singletons that weren't part of a run, or were separated by spaces
+  return merged
     .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
     .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
 }
+
 function setHTMLWithRefs(el, text) {
   if (!el) return;
   el.innerHTML = formatRefsToSup(text);
