@@ -12,8 +12,6 @@
     }
     *{box-sizing:border-box}
     body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
-
-    /* Full-width header bar */
     header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
     .bar{max-width:none;width:100%;margin:0;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px}
     .brand{display:flex;align-items:baseline;gap:6px}
@@ -27,46 +25,26 @@
     .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
     .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
     .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 24px;border-radius:18px;font-size:1.05rem}
-
-    /* admin client dropdown (below header, right-aligned) */
     .client-top-below{display:none;width:100%;margin:8px 0 0;padding:0 24px;display:flex;justify-content:flex-end}
-    .client-top-below select{
-      height:40px;border-radius:10px;border:1px solid(var(--line));
-      background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:260px;
-    }
-
-    /* Full-width main */
+    .client-top-below select{height:40px;border-radius:10px;border:1px solid(var(--line));background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:260px;}
     main{max-width:none;width:100%;margin:24px 0 32px;padding:0 24px}
     .hero{text-align:center;margin:0 0 8px}
     .hero h1{font-size:34px;margin:0 0 6px}
     .hero h1 .dot{color:var(--brand)}
     .hero p{margin:0;color:var(--muted)}
-
     .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
     .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
-    .inline-thinking{display:none;align-items:center;gap:8px;color:var(--muted);font-size:.9rem;margin-top:6px}
+    .inline-thinking{display:none;align-items:center;gap:8px;color:#9aa2ad;font-size:.9rem;margin-top:6px}
     .linklike{background:none;border:0;color:#2563eb;text-decoration:underline;cursor:pointer;font-size:.9rem;padding:0}
-
     .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
     .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
     .answer-panel{background:var(--soft);border-color:var(--soft-border);position:relative}
     .answer-panel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;border-radius:14px 0 0 14px;background:var(--accent-left)}
     .answer-body{line-height:1.55;font-size:1.02rem}
-    .answer-bullets{margin:8px 0 0;padding-left:18px}
-    .answer-bullets li{margin:4px 0}
-
-    /* supporting lists */
-    #supportCard ul{margin:0;padding-left:18px}
-    #supportCard li{margin:6px 0}
-
-    /* Report Slides */
     #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
     #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line);background:#f8fafc;aspect-ratio:16/9;object-fit:cover}
-
-    /* supporting data (charts) */
     #dataGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
     .chart-card{border:1px solid var(--line);border-radius:12px;padding:10px}
-
     .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
     .msg.info{display:block;background:#fafbfd;color:#2b2f36}
   </style>
@@ -80,12 +58,11 @@
       <div class="nav">
         <div id="who"></div>
         <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
-        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
+        <button id="logoutBtn" class="btn small ghost" type="button" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
 
-  <!-- Admin-only client picker, shown under the top bar -->
   <div class="client-top-below" id="clientTopRow" style="display:none;">
     <select id="clientTop"></select>
   </div>
@@ -130,7 +107,6 @@
         <div id="dataGrid"></div>
       </div>
 
-      <!-- Collapsed references table -->
       <details id="refsDetails" class="panel" style="display:none;">
         <summary>
           <h3 style="display:inline;">References</h3>
@@ -148,17 +124,14 @@
     </div>
   </main>
 
-  <!-- Full-screen loading overlay -->
   <div id="overlay" class="overlay hidden">
     <div class="spinner"></div>
     <div class="overlay-text">Thinking…</div>
   </div>
 
-  <!-- Tooltip for charts -->
   <div id="chartTip" class="chart-tooltip"></div>
 
-  <!-- pdf.js (from CDN) for rendering PDF page snapshots -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-bb5H8qk2mZy5yAwgV8s0vH1F8v7BG7WwF1k2U6M6eS4hJt1C7y4dXyef8uG4dT+P1H4P3bS9hN5kYbGqkq1lXQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
     if (window.pdfjsLib) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -166,46 +139,57 @@
   </script>
 
 <script>
-// --- Role-aware header + client library placement ---
 let ME = null;
 
+// Make logout always work (even if server errors) and then hard-redirect to login
+function wireLogout(){
+  const btn = document.getElementById("logoutBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async ()=>{
+    try { await fetch("/auth/logout", { method:"POST" }); } catch {}
+    // Clear SPA state just in case and go to login
+    window.location.replace("/login.html");
+  }, { once:false });
+}
+
+// Robust /me: show role, map "internal"->"admin", and redirect to login on 401
 async function fetchMe(){
   try{
-    const r = await fetch("/me");
-    if(!r.ok) throw new Error("not signed in");
+    const r = await fetch("/me", { credentials:"same-origin" });
+    if (r.status === 401) {
+      return window.location.replace("/login.html");
+    }
     const me = await r.json();
     ME = me;
+    const roleLabel = (me?.user?.role === "internal") ? "admin" : (me?.user?.role || "");
     const who = document.getElementById("who");
-    if (who) who.textContent = `${me.user.username} — ${me.user.role}`;
-    if(me.user.role === "admin"){
-      const row = document.getElementById("clientTopRow");
-      if (row) row.style.display = "flex";
-    }
-    const adminLink = document.getElementById("adminLink");
-    if (adminLink) adminLink.style.display = (me.user.role === "admin") ? "inline-flex" : "none";
+    if (who) who.textContent = `${me?.user?.username || ""} — ${roleLabel}`;
+
+    const isAdmin = (roleLabel === "admin");
+    document.getElementById("adminLink")?.setAttribute("style", isAdmin ? "display:inline-flex" : "display:none");
+    const row = document.getElementById("clientTopRow");
+    if (row) row.style.display = isAdmin ? "flex" : "none";
   }catch(e){
-    console.warn(e);
+    // If something went wrong parsing /me, force the user to login again
+    window.location.replace("/login.html");
   }
 }
 
-// populate admin dropdown (no preselected library)
+// Load libraries for admin dropdown
 async function loadClientLibraries(){
   try {
-    const res = await fetch("/api/client-libraries");
+    const res = await fetch("/api/client-libraries", { credentials:"same-origin" });
+    if (!res.ok) return;
     const libs = await res.json();
     const topSel = document.getElementById("clientTop");
-    if (topSel) {
-      topSel.innerHTML = '<option value="" selected disabled>Select a client library</option>';
-      libs.forEach(({id, name})=>{
-        const opt = document.createElement("option");
-        opt.value = id;
-        opt.textContent = name;
-        topSel.appendChild(opt);
-      });
-    }
-  } catch(e) {
-    console.error("Failed to load client libraries", e);
-  }
+    if (!topSel) return;
+    topSel.innerHTML = '<option value="" selected disabled>Select a client library</option>';
+    libs.forEach(({id, name})=>{
+      const opt = document.createElement("option");
+      opt.value = id; opt.textContent = name;
+      topSel.appendChild(opt);
+    });
+  } catch {}
 }
 
 // helpers
@@ -230,25 +214,20 @@ function clearMsg(){
   el.className = "msg";
   el.style.display = "none";
 }
-
-// text cleanup
 function cleanBullet(s){ return String(s||"").replace(/\s+/g," ").trim(); }
 function stripTrailPunct(s){ return String(s||"").replace(/\s*[.!?]+$/,""); }
 function splitLines(s){ return String(s||"").split(/\n+/).map(t=>t.trim()).filter(Boolean); }
 
-// “Show more/less” state
 let supportAllBullets = [];
 let supportCollapsed = true;
 function renderSupportList(limit = 5){
   const ul = document.getElementById("supportList");
   const btn = document.getElementById("toggleMoreBtn");
   if (!ul || !btn) return;
-
   ul.innerHTML = "";
   const slice = supportCollapsed ? supportAllBullets.slice(0, limit) : supportAllBullets;
   slice.forEach(b => {
     const li = document.createElement("li");
-    // Remove trailing period per requirement
     const noPeriod = stripTrailPunct(b);
     li.innerHTML = String(noPeriod)
       .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
@@ -256,187 +235,104 @@ function renderSupportList(limit = 5){
       .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
     ul.appendChild(li);
   });
-
   if (supportAllBullets.length > limit) {
     btn.style.display = "inline";
     btn.textContent = supportCollapsed ? "Show more" : "Show less";
-  } else {
-    btn.style.display = "none";
-  }
+  } else btn.style.display = "none";
 }
 document.getElementById("toggleMoreBtn")?.addEventListener("click", ()=>{
-  supportCollapsed = !supportCollapsed;
-  renderSupportList();
+  supportCollapsed = !supportCollapsed; renderSupportList();
 });
 
-// Slides show more/less
 let allSlides = []; // [{fileId,page,dataUrl?}]
 let slidesCollapsed = true;
-function renderSlides(limit = 3){
+async function renderSlides(limit = 3){
   const grid = document.getElementById("slidesGrid");
   const btn  = document.getElementById("toggleSlidesBtn");
   if (!grid || !btn) return;
-
   grid.innerHTML = "";
   const slice = slidesCollapsed ? allSlides.slice(0, limit) : allSlides;
   slice.forEach(s=>{
     const img = document.createElement("img");
-    img.alt = `Slide ${s.page || ""}`;
-    img.style.opacity = "0.85";
+    img.alt = `Slide ${s.page || ""}`; img.style.opacity = "0.85";
     grid.appendChild(img);
-    // Attempt render; retry once at lower scale on failure
     (async ()=>{
       try{
         const url = await renderPdfPageToDataUrl(s.fileId, s.page, 1.6);
-        s.dataUrl = url;
-        img.src = url;
-        img.style.opacity = "1";
+        s.dataUrl = url; img.src = url; img.style.opacity = "1";
       }catch(e1){
         try{
           const url2 = await renderPdfPageToDataUrl(s.fileId, s.page, 1.2);
-          s.dataUrl = url2;
-          img.src = url2;
-          img.style.opacity = "1";
-        }catch(e2){
-          img.alt = "Slide unavailable";
-          img.style.opacity = "1";
-          img.style.background = "#fafafa";
-        }
+          s.dataUrl = url2; img.src = url2; img.style.opacity = "1";
+        }catch{ img.alt = "Slide unavailable"; img.style.opacity = "1"; img.style.background = "#fafafa"; }
       }
     })();
   });
-
   if (allSlides.length > limit) {
     btn.style.display = "inline";
     btn.textContent = slidesCollapsed ? "Show more" : "Show less";
-  } else {
-    btn.style.display = "none";
-  }
+  } else btn.style.display = "none";
 }
 document.getElementById("toggleSlidesBtn")?.addEventListener("click", ()=>{
-  slidesCollapsed = !slidesCollapsed;
-  renderSlides();
+  slidesCollapsed = !slidesCollapsed; renderSlides();
 });
 
-// charts (SVG, with hover tooltip + highlight)
 const chartTip = document.getElementById("chartTip");
 function showTip(text, x, y){
   if (!chartTip) return;
-  chartTip.textContent = text;
-  chartTip.style.display = "block";
-  const off = 12;
-  chartTip.style.left = (x + off) + "px";
-  chartTip.style.top  = (y + off) + "px";
+  chartTip.textContent = text; chartTip.style.display = "block";
+  const off = 12; chartTip.style.left = (x + off) + "px"; chartTip.style.top  = (y + off) + "px";
 }
-function hideTip(){
-  if (chartTip) chartTip.style.display = "none";
-}
+function hideTip(){ if (chartTip) chartTip.style.display = "none"; }
 
 function renderCharts(series){
-  const grid = document.getElementById("dataGrid");
-  if (!grid) return;
-  grid.innerHTML = "";
-  if(!Array.isArray(series) || !series.length) return;
-
+  const grid = document.getElementById("dataGrid"); if (!grid) return;
+  grid.innerHTML = ""; if(!Array.isArray(series) || !series.length) return;
   series.slice(0,5).forEach(s=>{
-    const wrap = document.createElement("div");
-    wrap.className = "chart-card";
-    const title = document.createElement("div");
-    title.style.fontWeight = "600";
-    title.style.marginBottom = "6px";
-    title.textContent = s.metric;
-    const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-    svg.setAttribute("width","100%");
-    svg.setAttribute("height","180");
-    svg.setAttribute("viewBox","0 0 340 180");
-    svg.style.display = "block";
+    const wrap = document.createElement("div"); wrap.className = "chart-card";
+    const title = document.createElement("div"); title.style.fontWeight = "600"; title.style.marginBottom = "6px"; title.textContent = s.metric;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg","svg"); svg.setAttribute("width","100%"); svg.setAttribute("height","180"); svg.setAttribute("viewBox","0 0 340 180"); svg.style.display = "block";
     const pts = (s.points||[]).slice().sort((a,b)=>a.epoch-b.epoch);
     if(pts.length>=2){
       const vals = pts.map(p=>Number(p.value||0));
-      const vmin = Math.min(...vals);
-      const vmax = Math.max(...vals);
+      const vmin = Math.min(...vals), vmax = Math.max(...vals);
       const padL=34,padR=8,padT=12,padB=28,w=340-padL-padR,h=180-padT-padB;
       const x = (i)=> padL + (w * (i/(pts.length-1||1)));
       const y = (v)=> padT + (h - (h * ((v - vmin)/(vmax - vmin || 1))));
-      const axis = document.createElementNS("http://www.w3.org/2000/svg","path");
-      axis.setAttribute("d",`M${padL},${padT} L${padL},${padT+h} L${padL+w},${padT+h}`);
-      axis.setAttribute("stroke","#cfd6dd"); axis.setAttribute("fill","none");
-      svg.appendChild(axis);
+      const axis = document.createElementNS("http://www.w3.org/2000/svg","path"); axis.setAttribute("d",`M${padL},${padT} L${padL},${padT+h} L${padL+w},${padT+h}`); axis.setAttribute("stroke","#cfd6dd"); axis.setAttribute("fill","none"); svg.appendChild(axis);
       const d = pts.map((p,i)=> (i? "L":"M")+x(i)+","+y(p.value)).join(" ");
-      const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-      path.setAttribute("d",d); path.setAttribute("stroke","#ff7a00"); path.setAttribute("fill","none"); path.setAttribute("stroke-width","2");
-      svg.appendChild(path);
+      const path = document.createElementNS("http://www.w3.org/2000/svg","path"); path.setAttribute("d",d); path.setAttribute("stroke","#ff7a00"); path.setAttribute("fill","none"); path.setAttribute("stroke-width","2"); svg.appendChild(path);
       pts.forEach((p,i)=>{
         const cx=x(i), cy=y(p.value);
-        const dot=document.createElementNS("http://www.w3.org/2000/svg","circle");
-        dot.setAttribute("cx",cx); dot.setAttribute("cy",cy); dot.setAttribute("r","3");
-        dot.setAttribute("fill","#ff7a00");
-        dot.addEventListener("mouseenter",(ev)=>{
-          dot.setAttribute("r","5");
-          const label=(p.label||"").replace(/\s+/g," ").trim();
-          showTip(`${Math.round(p.value)}% — ${label}`, ev.clientX, ev.clientY);
-        });
+        const dot=document.createElementNS("http://www.w3.org/2000/svg","circle"); dot.setAttribute("cx",cx); dot.setAttribute("cy",cy); dot.setAttribute("r","3"); dot.setAttribute("fill","#ff7a00");
+        dot.addEventListener("mouseenter",(ev)=>{ dot.setAttribute("r","5"); const label=(p.label||"").replace(/\s+/g," ").trim(); showTip(`${Math.round(p.value)}% — ${label}`, ev.clientX, ev.clientY); });
         dot.addEventListener("mousemove",(ev)=>{ showTip(chartTip.textContent, ev.clientX, ev.clientY); });
         dot.addEventListener("mouseleave",()=>{ dot.setAttribute("r","3"); hideTip(); });
         svg.appendChild(dot);
-        const lbl=document.createElementNS("http://www.w3.org/2000/svg","text");
-        lbl.setAttribute("x",cx); lbl.setAttribute("y",padT+h+14);
-        lbl.setAttribute("text-anchor","middle"); lbl.setAttribute("font-size","10");
-        lbl.textContent=(p.label||"").replace(/\s+/g," ").trim();
-        svg.appendChild(lbl);
+        const lbl=document.createElementNS("http://www.w3.org/2000/svg","text"); lbl.setAttribute("x",cx); lbl.setAttribute("y",padT+h+14); lbl.setAttribute("text-anchor","middle"); lbl.setAttribute("font-size","10"); lbl.textContent=(p.label||"").replace(/\s+/g," ").trim(); svg.appendChild(lbl);
       });
-      const lmin=document.createElementNS("http://www.w3.org/2000/svg","text");
-      lmin.setAttribute("x",2); lmin.setAttribute("y",padT+h); lmin.setAttribute("font-size","10");
-      lmin.textContent = `${Math.round(vmin)}%";
-      svg.appendChild(lmin);
-      const lmax=document.createElementNS("http://www.w3.org/2000/svg","text");
-      lmax.setAttribute("x",2); lmax.setAttribute("y",padT+8); lmax.setAttribute("font-size","10");
-      lmax.textContent = `${Math.round(vmax)}%";
-      svg.appendChild(lmax);
+      const lmin=document.createElementNS("http://www.w3.org/2000/svg","text"); lmin.setAttribute("x",2); lmin.setAttribute("y",padT+h); lmin.setAttribute("font-size","10"); lmin.textContent = `${Math.round(vmin)}%`; svg.appendChild(lmin);
+      const lmax=document.createElementNS("http://www.w3.org/2000/svg","text"); lmax.setAttribute("x",2); lmax.setAttribute("y",padT+8); lmax.setAttribute("font-size","10"); lmax.textContent = `${Math.round(vmax)}%`; svg.appendChild(lmax);
     }
-    wrap.appendChild(title);
-    wrap.appendChild(svg);
-    grid.appendChild(wrap);
+    wrap.appendChild(title); wrap.appendChild(svg); grid.appendChild(wrap);
   });
 }
 
-function dedupeAgainstAnswer(bullets, answerText){
-  const a = String(answerText||"").toLowerCase().replace(/\s+/g," ").trim();
-  const out = [];
-  const seen = new Set();
-  for (const b of bullets){
-    const key = String(b).toLowerCase().replace(/\s+/g," ").trim();
-    if (a.includes(key)) continue;
-    if (seen.has(key)) continue;
-    seen.add(key); out.push(b);
-  }
-  return out;
-}
-
 function normalizeSupportFromAPI(raw){
-  // Normalize to: [{ text: "Sentence with [1][2].", recencyEpoch: 1710000000, refs:[1,2] }, ...]
   if (!raw) return [];
   const arr = Array.isArray(raw) ? raw : (Array.isArray(raw?.items) ? raw.items : []);
   return arr.map((it)=>{
-    if (typeof it === "string") {
-      return { text: it, recencyEpoch: 0, refs: [] };
-    }
+    if (typeof it === "string") return { text: it, recencyEpoch: 0, refs: [] };
     const text = it.text ?? it.sentence ?? it.summary ?? "";
-    const refs = Array.isArray(it.refs) ? it.refs
-      : Array.isArray(it.citations) ? it.citations
-      : [];
+    const refs = Array.isArray(it.refs) ? it.refs : (Array.isArray(it.citations) ? it.citations : []);
     const rec = Number(it.recencyEpoch ?? it.epoch ?? it.timestamp ?? 0) || 0;
-
-    // If refs provided but not embedded, append as bracketed numbers at end (no period).
     let t = String(text || "").trim().replace(/\s*[.!?]+$/,"");
-    if (refs.length && !/\[\d+\]/.test(t)) {
-      t += " " + refs.map(n => `[${n}]`).join("");
-    }
+    if (refs.length && !/\[\d+\]/.test(t)) t += " " + refs.map(n => `[${n}]`).join("");
     return { text: t, recencyEpoch: rec, refs };
   });
 }
 
-// --- PDF rendering: turn (fileId,page) into a PNG data URL via /api/drive-pdf + pdf.js
+// Render a PDF page to PNG data URL using server proxy
 async function renderPdfPageToDataUrl(fileId, pageNum, scale=1.6){
   if (!window.pdfjsLib) throw new Error("pdf.js not loaded");
   const url = `/api/drive-pdf?fileId=${encodeURIComponent(fileId)}`;
@@ -447,8 +343,7 @@ async function renderPdfPageToDataUrl(fileId, pageNum, scale=1.6){
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  canvas.width = viewport.width; canvas.height = viewport.height;
   await page.render({ canvasContext: ctx, viewport }).promise;
   return canvas.toDataURL("image/png");
 }
@@ -457,28 +352,17 @@ async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
   const question = String(qEl?.value||"").trim();
-  const isAdmin = (ME?.user?.role === "admin");
+  const isAdmin = ((ME?.user?.role === "admin") || (ME && (ME.user?.role === "internal"))); // be tolerant
   const clientId = isAdmin ? (document.getElementById("clientTop")?.value || "") : "";
 
-  if (isAdmin && !clientId) {
-    showMsg("Select a client library before asking.");
-    return;
-  }
-  if(!question){
-    showMsg("Enter a question to search.");
-    return;
-  }
+  if (isAdmin && !clientId) return showMsg("Select a client library before asking.");
+  if (!question) return showMsg("Enter a question to search.");
 
   setThinking(true);
   try{
     const res = await fetch("/search", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({
-        userQuery: question,
-        clientId: clientId || null,
-        generateSupport: true
-      })
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ userQuery: question, clientId: clientId || null, generateSupport: true })
     });
     const data = await res.json();
 
@@ -488,101 +372,67 @@ async function doAsk(){
     const ansPanel = document.getElementById("answerPanel");
     const ans = document.getElementById("answer");
     if (ans) ans.innerHTML = "";
-    if(data?.answer && ansPanel && ans){
+    if (data?.answer && ansPanel && ans){
       ansPanel.style.display = "block";
       ans.innerHTML = String(data.answer)
         .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
         .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
         .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
-    }else if (ansPanel){
-      ansPanel.style.display = "none";
-    }
+    } else if (ansPanel){ ansPanel.style.display = "none"; }
 
-    // ---------- Additional Support (GENERATIVE-first, no trailing periods) ----------
+    // Additional Support
     const supportCard = document.getElementById("supportCard");
     const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
-
-    // Prefer structured/generative support from API
-    let structured = normalizeSupportFromAPI(
-      data?.supportingBullets ||
-      data?.supporting ||
-      data?.structured?.supporting
-    );
-
-    // Sort by recency if available (desc)
+    let structured = normalizeSupportFromAPI(data?.supportingBullets || data?.supporting || data?.structured?.supporting);
     structured.sort((a,b) => (b.recencyEpoch||0) - (a.recencyEpoch||0));
-
-    // If nothing provided, fallback to snippet-derived bullets
     if (!structured.length) {
       const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
-      const fallback = snippets.flatMap(splitLines).map(cleanBullet);
+      const fallback = snippets.flatMap(s=>String(s).split(/\n+/)).map(t=>t.trim()).filter(Boolean);
       structured = fallback.map(t => ({ text: t, recencyEpoch: 0, refs: [] }));
     }
-
-    // De-dupe against the main answer text and between themselves
     const answerText = String(data?.answer || "");
-    const seen = new Set();
-    const bullets = [];
+    const seen = new Set(); const bullets = [];
     for (const s of structured) {
-      const trimmed = cleanBullet(s.text);
+      const trimmed = String(s.text||"").replace(/\s+/g," ").trim();
       if (!trimmed) continue;
       const key = trimmed.toLowerCase();
       if (answerText.toLowerCase().includes(key)) continue;
       if (seen.has(key)) continue;
       seen.add(key);
-      // IMPORTANT: remove any trailing period/?! to meet requirement
-      bullets.push(stripTrailPunct(trimmed));
+      bullets.push(trimmed.replace(/\s*[.!?]+$/,""));
     }
-
-    // Expose to renderer and draw with show more/less
     supportAllBullets = bullets;
-    if (supportAllBullets.length && supportCard){
-      supportCard.style.display = "block";
-      supportCollapsed = true;
-      renderSupportList(5);
-    } else if (supportCard){
-      supportCard.style.display = "none";
-    }
+    if (supportAllBullets.length && supportCard){ supportCard.style.display = "block"; supportCollapsed = true; renderSupportList(5); }
+    else if (supportCard){ supportCard.style.display = "none"; }
 
-    // ---------- Report Slides ----------
+    // Slides
     const slidesCard = document.getElementById("slidesCard");
     const slidesGrid = document.getElementById("slidesGrid");
     if (slidesGrid) slidesGrid.innerHTML = "";
-    const slidePairs = [];
-    const seenSlide = new Set();
-    const seenFileFallback = new Set();
+    const slidePairs = []; const seenSlide = new Set(); const seenFileFallback = new Set();
     (ctxChunks||[]).forEach(ch=>{
       const fid = ch.fileId || ch.id || ch.driveId || null;
       const page = ch.page || ch.pageNum || ch.pageNumber || null;
       if (!fid) return;
       if (page) {
-        const k = `${fid}:${page}`;
-        if (seenSlide.has(k)) return;
-        seenSlide.add(k);
+        const k = `${fid}:${page}`; if (seenSlide.has(k)) return; seenSlide.add(k);
         slidePairs.push({fileId: fid, page: Number(page)});
       } else if (!seenFileFallback.has(fid) && seenFileFallback.size < 6) {
-        // Fallback: render page 1 for files without explicit page (e.g., Google Slides).
-        seenFileFallback.add(fid);
-        slidePairs.push({ fileId: fid, page: 1 });
+        seenFileFallback.add(fid); slidePairs.push({ fileId: fid, page: 1 });
       }
     });
     allSlides = slidePairs.slice(0,12).map(sp => ({...sp, dataUrl: null}));
-    if (allSlides.length){
-      slidesCard.style.display = "block";
-      slidesCollapsed = true;
-      renderSlides(3);
-    } else {
-      slidesCard.style.display = "none";
-    }
+    if (allSlides.length){ slidesCard.style.display = "block"; slidesCollapsed = true; renderSlides(3); }
+    else { slidesCard.style.display = "none"; }
 
-    // ---------- Quotes ----------
+    // Quotes
     const quotesCard = document.getElementById("quotesCard");
     const quotesEl = document.getElementById("quotes");
     if (quotesEl) quotesEl.innerHTML = "";
     const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
     quotes.forEach(q=>{
       const bq=document.createElement("blockquote");
-      bq.innerHTML = String(stripTrailPunct(q))
+      bq.innerHTML = String(q).replace(/\s*[.!?]+$/,"")
         .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
         .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
         .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
@@ -590,28 +440,24 @@ async function doAsk(){
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
 
-    // ---------- Supporting Data ----------
+    // Supporting Data
     const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
     const dataCard = document.getElementById("dataCard");
     if (dataCard) dataCard.style.display = series.length ? "block" : "none";
     renderCharts(series);
 
-    // ---------- References table ----------
+    // References
     const refsDetails = document.getElementById("refsDetails");
     const tbody = document.getElementById("refsBody");
     if (tbody) tbody.innerHTML = "";
     ctxChunks.forEach((r,i)=>{
       const tr = document.createElement("tr");
-      const name = (r.study || r.fileName || "").trim();
-      const month = (r.monthTag||"").trim();
-      const year = (r.yearTag||"").trim();
-      const method = (r.reportTag||"").trim();
       tr.innerHTML = `
         <td>${i+1}</td>
-        <td>${name}</td>
-        <td>${month}</td>
-        <td>${year}</td>
-        <td>${method}</td>
+        <td>${(r.study || r.fileName || "").trim()}</td>
+        <td>${(r.monthTag||"").trim()}</td>
+        <td>${(r.yearTag||"").trim()}</td>
+        <td>${(r.reportTag||"").trim()}</td>
         <td><a href="${r.fileUrl||"#"}" target="_blank" rel="noopener">open source</a></td>
       `;
       tbody?.appendChild(tr);
@@ -619,32 +465,24 @@ async function doAsk(){
     if (refsDetails) refsDetails.style.display = ctxChunks.length ? "block" : "none";
 
   }catch(e){
-    console.error(e);
     showMsg("Search failed. Please try again.");
   }finally{
     setThinking(false);
   }
 }
 
-// init
+// init on first paint
 (async function init(){
+  wireLogout();
   await fetchMe();
   await loadClientLibraries();
   const ask = document.getElementById("ask");
   if (ask) ask.disabled = false;
-
-  // submit handlers
   ask?.addEventListener("click", doAsk);
   document.getElementById("q")?.addEventListener("keydown", (e)=>{
     if(e.key === "Enter"){ e.preventDefault(); doAsk(); }
   });
 })();
-
-// logout
-document.getElementById("logoutBtn")?.addEventListener("click", async ()=>{
-  await fetch("/auth/logout",{method:"POST"});
-  location.href="/login.html";
-});
 </script>
 
 <!-- keep for any shared functionality that your project already uses -->
