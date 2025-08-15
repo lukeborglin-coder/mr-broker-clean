@@ -7,11 +7,12 @@
 // - Admin creation no longer requires a client folder; admins get access to all libraries ("*").
 // - Session cookie security is controlled by SECURE_COOKIES env (false OK for local/dev).
 // - Send Cache-Control: no-store for .html/.css/.js (and for "/" + "/admin") to avoid stale UI.
-// - Minor: /auth/login now stores allowedClients consistently.
 // - NEW: /api/drive-pdf (secure PDF proxy) for slide snapshots.
 // - Ingest: store fileId for all vectors; for PDFs, also store page numbers in metadata.
 // - /search: optional generateSupport -> returns supportingBullets [{text, recencyEpoch, refs[]}], recency-sorted.
-// - Auto-ingest support: /admin/ingest/sync (token-protected) and driveSignature in manifest.
+// - Auto-ingest support:
+//    (a) /admin/ingest/sync (token-protected; for cron)
+//    (b) Drive push notifications (changes.watch) → /webhooks/drive triggers ingest automatically.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -23,6 +24,7 @@ import bcrypt from "bcryptjs";
 import OpenAI from "openai";
 import { google } from "googleapis";
 import crypto from "node:crypto";
+import { v4 as uuidv4 } from "uuid";
 
 // -------------------- Environment --------------------
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
@@ -42,6 +44,10 @@ const PINECONE_INDEX_HOST = process.env.PINECONE_INDEX_HOST || "";
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || "";
 const GOOGLE_KEYFILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || "";
+
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "";
+const DRIVE_WEBHOOK_VERIFY_TOKEN =
+  process.env.DRIVE_WEBHOOK_VERIFY_TOKEN || "";
 
 // Cache for client libraries (so UI always loads from Drive, no redeploys)
 const CLIENT_LIB_TTL_MS = Number(process.env.CLIENT_LIB_TTL_MS || 60_000);
@@ -120,6 +126,19 @@ function writeJSON(p, obj) {
   } catch {}
 }
 
+// Store for watch channel + tokens
+const WATCH_STATE_PATH = path.join(CONFIG_DIR, "drive_watch.json");
+function readWatchState() {
+  return readJSON(WATCH_STATE_PATH, {
+    channels: {},
+    startPageToken: null,
+    lastChecked: 0,
+  });
+}
+function writeWatchState(s) {
+  writeJSON(WATCH_STATE_PATH, s);
+}
+
 // Ensure internal account exists
 (function seedInternal() {
   const usersDoc = readJSON(USERS_PATH, { users: [] });
@@ -174,6 +193,167 @@ function getSheets() {
   return google.sheets({ version: "v4", auth: getAuth() });
 }
 
+// ---------- Drive push notifications (changes.watch) ----------
+async function getStartPageToken() {
+  const drive = getDrive();
+  const r = await drive.changes.getStartPageToken({
+    supportsAllDrives: true,
+  });
+  return r.data.startPageToken;
+}
+
+// Start a single "changes" channel; Google will POST to /webhooks/drive
+async function startChangesWatch() {
+  if (!PUBLIC_BASE_URL) throw new Error("PUBLIC_BASE_URL required for Drive webhooks");
+  const drive = getDrive();
+  const id = uuidv4();
+  const address = `${PUBLIC_BASE_URL.replace(/\/+$/, "")}/webhooks/drive?token=${encodeURIComponent(
+    DRIVE_WEBHOOK_VERIFY_TOKEN
+  )}`;
+
+  const r = await drive.changes.watch({
+    requestBody: {
+      id,
+      type: "web_hook",
+      address,
+      params: { includeCorpusRemovals: "true", includeTeamDriveItems: "true" },
+    },
+    supportsAllDrives: true,
+  });
+
+  const state = readWatchState();
+  state.channels["changes"] = {
+    id,
+    resourceId: r.data.resourceId,
+    address,
+    expiration: Number(r.data.expiration || 0),
+    createdAt: Date.now(),
+  };
+  if (!state.startPageToken) {
+    state.startPageToken = await getStartPageToken();
+  }
+  writeWatchState(state);
+  return state.channels["changes"];
+}
+
+async function stopChangesWatch() {
+  const drive = getDrive();
+  const state = readWatchState();
+  const ch = state.channels["changes"];
+  if (!ch) return false;
+  try {
+    await drive.channels.stop({ requestBody: { id: ch.id, resourceId: ch.resourceId } });
+  } catch {
+    // ignore; may already be expired
+  }
+  delete state.channels["changes"];
+  writeWatchState(state);
+  return true;
+}
+
+// Debounce map to avoid hammering ingest for the same clientId
+const _ingestCooldown = new Map();
+async function scheduleIngest(clientId, minMs = 120000) {
+  const now = Date.now();
+  const last = _ingestCooldown.get(clientId) || 0;
+  if (now - last < minMs) return; // cooling down
+  _ingestCooldown.set(clientId, now);
+  try {
+    console.log(`[drive-watch] ingest ${clientId}`);
+    await ingestClientLibrary(clientId);
+  } catch (e) {
+    console.warn("[drive-watch] ingest failed", clientId, e);
+  }
+}
+
+// Find which client folder a changed file belongs to
+async function findOwningClientId(fileId) {
+  try {
+    const drive = getDrive();
+    const meta = await drive.files.get({
+      fileId,
+      fields: "id,name,parents",
+      supportsAllDrives: true,
+    });
+    const parents = meta.data.parents || [];
+    if (!parents.length) return null;
+
+    const ancestors = new Set(parents);
+    const stack = [...parents];
+    while (stack.length) {
+      const cur = stack.pop();
+      try {
+        const r = await drive.files.get({
+          fileId: cur,
+          fields: "id,parents,mimeType",
+          supportsAllDrives: true,
+        });
+        (r.data.parents || []).forEach((p) => {
+          if (!ancestors.has(p)) {
+            ancestors.add(p);
+            stack.push(p);
+          }
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const libs = await getClientLibrariesCached(false);
+    const match = libs.find((l) => ancestors.has(l.id));
+    return match ? match.id : null;
+  } catch {
+    return null;
+  }
+}
+
+// Process a webhook ping: list deltas and trigger ingest
+async function processDrivePing(_headers) {
+  const state = readWatchState();
+  if (!state.startPageToken) {
+    state.startPageToken = await getStartPageToken();
+    writeWatchState(state);
+    return;
+  }
+
+  const drive = getDrive();
+  let pageToken = state.startPageToken;
+  const touched = new Set();
+
+  while (pageToken) {
+    const r = await drive.changes.list({
+      pageToken,
+      fields:
+        "changes(fileId,removed,file(id,parents,mimeType,trashed)),newStartPageToken,nextPageToken",
+      includeRemoved: true,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      pageSize: 100,
+      spaces: "drive",
+    });
+
+    for (const ch of r.data.changes || []) {
+      const fid = ch.fileId || ch?.file?.id;
+      if (!fid) continue;
+      const clientId = await findOwningClientId(fid);
+      if (clientId && !touched.has(clientId)) {
+        touched.add(clientId);
+        scheduleIngest(clientId); // debounced
+      }
+    }
+
+    if (r.data.nextPageToken) {
+      pageToken = r.data.nextPageToken;
+    } else {
+      if (r.data.newStartPageToken) {
+        state.startPageToken = r.data.newStartPageToken;
+        writeWatchState(state);
+      }
+      break;
+    }
+  }
+}
+
 // -------------------- Drive helpers --------------------
 async function listClientFolders() {
   if (!DRIVE_ROOT_FOLDER_ID) return [];
@@ -212,7 +392,7 @@ async function listAllFilesUnder(folderId) {
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
     });
-    for (const f of (r.data.files || [])) {
+    for (const f of r.data.files || []) {
       if (f.mimeType === "application/vnd.google-apps.folder") stack.push(f.id);
       else out.push(f);
     }
@@ -306,7 +486,7 @@ async function extractPdfWithPages(file) {
       const text = content.items.map((it) => it.str || "").join(" ").trim();
       pages.push({ page: i, text });
     }
-    return { text: pages.map(p => p.text).join("\n\n"), pages };
+    return { text: pages.map((p) => p.text).join("\n\n"), pages };
   } catch (e) {
     // Fallback to pdf-parse (no page granularity)
     try {
@@ -344,7 +524,6 @@ function latestDateFrom(text, fallbackISO) {
   const s = `${text || ""}`;
   const candidates = [];
 
-  // Month name + year
   const m1 = s.matchAll(
     /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+(\d{4})\b/gi
   );
@@ -355,7 +534,6 @@ function latestDateFrom(text, fallbackISO) {
     if (mn) candidates.push({ y: yr, m: mn });
   }
 
-  // numeric mm/yyyy or m/yyyy
   const m2 = s.matchAll(/\b(0?[1-9]|1[0-2])[\/\-_\.](\d{4})\b/g);
   for (const m of m2) {
     const mn = parseInt(m[1], 10);
@@ -363,7 +541,6 @@ function latestDateFrom(text, fallbackISO) {
     candidates.push({ y: yr, m: mn });
   }
 
-  // choose latest
   candidates.sort((a, b) => (a.y === b.y ? a.m - b.m : a.y - b.y));
   const best = candidates.pop();
   if (best) {
@@ -598,8 +775,8 @@ if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true }
 // ---- Drive change signature helpers ----
 function calcSignatureFromFiles(files) {
   const basis = (files || [])
-    .filter(f => f && f.id && f.modifiedTime)
-    .map(f => `${f.id}:${f.modifiedTime}`)
+    .filter((f) => f && f.id && f.modifiedTime)
+    .map((f) => `${f.id}:${f.modifiedTime}`)
     .sort()
     .join("|");
   return crypto.createHash("sha1").update(basis).digest("hex");
@@ -612,7 +789,6 @@ function writeManifestDoc(clientId, payload) {
   const p = path.join(MANIFEST_DIR, `${clientId}.json`);
   writeJSON(p, payload);
 }
-// Compare live Drive signature vs manifest
 async function isLibraryStale(clientId) {
   const files = await listAllFilesUnder(clientId);
   const liveSig = calcSignatureFromFiles(files);
@@ -789,13 +965,11 @@ app.get(
       if (!(await driveFolderExists(clientId)))
         return res.status(400).json({ error: "Unknown clientId" });
 
-      // Count current Drive files (non-folders)
       const all = await listAllFilesUnder(clientId);
       const driveCount = all.filter(
         (f) => f.mimeType !== "application/vnd.google-apps.folder"
       ).length;
 
-      // Count library (manifest) files if present
       const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
       const manifest = readJSON(manifestPath, { files: [] });
       const libraryCount = Array.isArray(manifest.files) ? manifest.files.length : 0;
@@ -871,6 +1045,48 @@ app.post("/admin/ingest/sync", async (req, res) => {
     res.json({ ok: true, count: results.length, results });
   } catch (e) {
     res.status(500).json({ error: "sync failed", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Drive-watch admin controls --------------------
+app.post("/admin/drive-watch/start", async (req, res) => {
+  const token = req.get("x-auth-token");
+  if (!token || token !== AUTH_TOKEN) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const ch = await startChangesWatch();
+    res.json({ ok: true, channel: ch, startPageToken: readWatchState().startPageToken });
+  } catch (e) {
+    res.status(500).json({ error: "failed to start watch", detail: String(e?.message || e) });
+  }
+});
+app.post("/admin/drive-watch/stop", async (req, res) => {
+  const token = req.get("x-auth-token");
+  if (!token || token !== AUTH_TOKEN) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const ok = await stopChangesWatch();
+    res.json({ ok });
+  } catch (e) {
+    res.status(500).json({ error: "failed to stop watch", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Webhook receiver --------------------
+// Google will POST here on every Drive change event for the channel we created.
+// We verify a shared token on the query string, ACK immediately, and process async.
+app.post("/webhooks/drive", express.text({ type: "*/*" }), async (req, res) => {
+  try {
+    if (!DRIVE_WEBHOOK_VERIFY_TOKEN || req.query.token !== DRIVE_WEBHOOK_VERIFY_TOKEN) {
+      return res.status(401).end("unauthorized");
+    }
+    res.status(200).end(); // Ack fast
+    processDrivePing({
+      resourceState: req.get("x-goog-resource-state"),
+      resourceId: req.get("x-goog-resource-id"),
+      channelId: req.get("x-goog-channel-id"),
+      messageNumber: req.get("x-goog-message-number"),
+    }).catch((e) => console.warn("[drive-webhook] process error", e));
+  } catch {
+    try { res.status(200).end(); } catch {}
   }
 });
 
@@ -965,13 +1181,11 @@ async function generateSupportBullets({ question, refs, answer }) {
   });
   const raw = chat.choices?.[0]?.message?.content?.trim() || "";
 
-  // Parse into lines
   const lines = raw
     .split(/\r?\n/)
     .map((s) => s.replace(/^[\-\u2022\*\d\.\s]+/, "").trim())
     .filter(Boolean);
 
-  // Attach refs + recencyEpoch per bullet
   return lines.slice(0, 8).map((line) => {
     const refsCited = extractCitedNumbers(line);
     const epochs = refsCited
@@ -996,7 +1210,6 @@ app.post("/search", requireSession, async (req, res) => {
     if (!q) return res.status(400).json({ error: "userQuery required" });
     const wantSupport = !!body.generateSupport;
 
-    // Embedding for the query
     const emb = await openai.embeddings.create({
       model: EMBEDDING_MODEL,
       input: [q],
@@ -1016,7 +1229,6 @@ app.post("/search", requireSession, async (req, res) => {
       });
     }
 
-    // Recency-aware sort (use tags if present)
     const maxEpoch = Math.max(
       ...matches.map((m) => Number(m.metadata?.recencyEpoch || 0)),
       0
@@ -1026,12 +1238,11 @@ app.post("/search", requireSession, async (req, res) => {
         const base = Number(m.score || 0);
         const epoch = Number(m.metadata?.recencyEpoch || 0);
         const rec = maxEpoch ? epoch / maxEpoch : 0;
-        const blend = base * 0.85 + rec * 0.15; // small recency boost
+        const blend = base * 0.85 + rec * 0.15;
         return { ...m, _blend: blend };
       })
       .sort((a, b) => b._blend - a._blend);
 
-    // Build reference list in the chosen order
     const refs = matches.map((m) => ({
       id: m.id,
       score: m.score,
@@ -1051,9 +1262,7 @@ app.post("/search", requireSession, async (req, res) => {
     const ctx = refs
       .map(
         (r, i) =>
-          `[${i + 1}] (${r.study || r.fileName} – ${r.monthTag} ${
-            r.yearTag
-          } • ${r.reportTag}) ${r.textSnippet}`
+          `[${i + 1}] (${r.study || r.fileName} – ${r.monthTag} ${r.yearTag} • ${r.reportTag}) ${r.textSnippet}`
       )
       .join("\n\n");
     const system =
@@ -1067,15 +1276,10 @@ app.post("/search", requireSession, async (req, res) => {
     });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "";
 
-    // Optional: generate supporting bullets
     let supportingBullets = [];
     if (wantSupport) {
       try {
-        supportingBullets = await generateSupportBullets({
-          question: q,
-          refs,
-          answer,
-        });
+        supportingBullets = await generateSupportBullets({ question: q, refs, answer });
         supportingBullets.sort((a, b) => (b.recencyEpoch || 0) - (a.recencyEpoch || 0));
       } catch (e) {
         console.warn("[support] generation failed:", e);
@@ -1108,7 +1312,6 @@ app.get(
       if (!parentId) return res.status(400).json({ error: "parentId required" });
 
       const drive = getDrive();
-      // Folders
       const fr = await drive.files.list({
         q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         fields: "files(id,name)",
@@ -1117,7 +1320,6 @@ app.get(
         includeItemsFromAllDrives: true,
         orderBy: "name_natural",
       });
-      // Files (non-folders)
       const r = await drive.files.list({
         q: `'${parentId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
         fields: "files(id,name,mimeType)",
@@ -1171,5 +1373,6 @@ app.listen(PORT, () => {
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST)
     console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
+  if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
