@@ -8,9 +8,7 @@
   <style>
     :root{
       --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2;
-      --soft:#fff7ed; --soft-border:#ffead6;
-      --danger:#b91c1c; --danger-bg:#fff1f2;
-      --link:#2563eb;
+      --danger:#b91c1c; --danger-bg:#fff1f2; --link:#2563eb;
     }
     *{box-sizing:border-box}
     body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
@@ -34,9 +32,8 @@
     @media (max-width: 900px){ .grid{grid-template-columns:1fr} }
 
     .card{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
-    .card h2{margin:0 0 6px;font-size:1.1rem}
+    .card h2{margin:0 0 6px;font-size:1.1rem;text-transform:capitalize}
     .muted{color:var(--muted)}
-    .soft{background:var(--soft);border-color:var(--soft-border)}
 
     /* Tree list — no nested boxes */
     .tree{list-style:none;padding-left:0;margin:0}
@@ -44,6 +41,8 @@
     .tree summary{cursor:pointer;font-weight:600;list-style:none}
     .tree summary::-webkit-details-marker{display:none}
     .tree ul{list-style:disc;padding-left:20px;margin:6px 0 0}
+
+    /* little gray labels */
     .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:.8rem;color:var(--muted);margin-left:8px}
 
     /* Selects/inputs */
@@ -51,7 +50,7 @@
     select, input{border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:.95rem}
     label{font-size:.9rem;color:var(--muted)}
 
-    /* Account lists (show ~5, scroll for more) */
+    /* Account lists */
     .list{border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-height:220px;overflow:auto}
     .acct{display:flex;align-items:center;justify-content:space-between;padding:6px 6px;border-bottom:1px solid #f2f4f7}
     .acct:last-child{border-bottom:0}
@@ -60,6 +59,9 @@
     .link{color:var(--link);text-decoration:underline;cursor:pointer;font-size:.9rem}
     .hidden{display:none}
     .tiny{font-size:.85rem}
+
+    /* Plain stat/result blocks (removed orange "soft" boxes) */
+    .statblock{background:#f9fafb;border:1px dashed var(--line);border-radius:10px;padding:10px 12px}
   </style>
 </head>
 <body>
@@ -93,7 +95,7 @@
         <div class="row">
           <select id="statsClient"><option value="">Select a client library</option></select>
         </div>
-        <div id="statsOut" class="soft" style="margin-top:10px;padding:10px 12px;border-radius:10px;"></div>
+        <div id="statsOut" class="statblock" style="margin-top:10px;"></div>
       </section>
 
       <!-- Update Library -->
@@ -103,7 +105,7 @@
           <select id="ingestClient"><option value="">Select a client library</option></select>
           <button id="ingestBtn" class="btn small ghost">Update</button>
         </div>
-        <div id="ingestOut" class="soft" style="margin-top:10px;padding:10px 12px;border-radius:10px;"></div>
+        <div id="ingestOut" class="statblock" style="margin-top:10px;"></div>
       </section>
     </section>
 
