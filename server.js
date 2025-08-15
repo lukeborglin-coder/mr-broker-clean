@@ -1,13 +1,9 @@
 // server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
 // Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
-// Fixes: defines chunkText() and uses it correctly; robust ingest + tags (month/year/report)
 // NEW: /api/client-libraries — live-from-Drive dropdown (cached), so no manual updates on deploy
-// 2025-08-15 Updates for Admin Page:
-// - Admin creation no longer requires a client folder; admins (role 'internal') auto-get access to all libraries.
-// - /admin/users/create returns the created user so the UI can update lists immediately.
-// - /admin/library-stats now returns: driveFiles, reportsCount, dataFilesCount, qnrsCount, and accounts[]
-// - Minor helpers added for Drive subfolder counting.
+// FIX: admin create doesn’t require client folder; /admin/library-stats shows requested counts + accounts
+// DEV: optional SECURE_COOKIES env + no-store for html/css/js to prevent stale UI during iteration
 
 import fs from "node:fs";
 import path from "node:path";
@@ -25,6 +21,10 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || "change-me";
 const AUTH_TOKEN = process.env.AUTH_TOKEN || "dev-auth-token";
+
+// allow overriding cookie.secure explicitly if needed
+const SECURE_COOKIES =
+  String(process.env.SECURE_COOKIES || "").toLowerCase() === "true";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536 dims
@@ -53,6 +53,13 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
+
+// prevent stale UI while iterating
+app.use((req, res, next) => {
+  if (/\.(html|css|js)$/i.test(req.path)) res.set("Cache-Control", "no-store");
+  next();
+});
+
 app.use(
   session({
     secret: SESSION_SECRET,
@@ -61,7 +68,9 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV && process.env.NODE_ENV !== "development",
+      secure:
+        SECURE_COOKIES ||
+        (process.env.NODE_ENV && process.env.NODE_ENV !== "development"),
       maxAge: 1000 * 60 * 60 * 8,
     },
   })
@@ -166,22 +175,6 @@ async function listAllFilesUnder(folderId) {
     }
   }
   return out;
-}
-
-// Find immediate child folder named `name` (case-insensitive). Returns folder id or null.
-async function findChildFolderIdByName(parentId, name) {
-  const drive = getDrive();
-  const r = await drive.files.list({
-    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-    fields: "files(id,name)",
-    pageSize: 1000,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-    orderBy: "name_natural"
-  });
-  const low = String(name).toLowerCase();
-  const match = (r.data.files || []).find(f => String(f.name).toLowerCase() === low);
-  return match ? match.id : null;
 }
 
 // -------------------- Client library cache --------------------
@@ -486,7 +479,7 @@ app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
   res.json(usersDoc.users.map(u => ({ username:u.username, role:u.role, allowedClients:u.allowedClients })));
 });
 
-// UPDATED: allow role selection (admin -> internal) and return created user for instant UI updates
+// UPDATED: /admin/users/create — admins auto-allowed "*" and clientFolderId not required; returns created user
 app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
   try{
     const { username, password, confirmPassword, clientFolderId, role } = req.body || {};
@@ -496,32 +489,20 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     if (usersDoc.users.some(u => u.username === username)) return res.status(400).json({ error:"Username exists" });
 
-    const requestedRole = String(role || "client").toLowerCase();
-    const isAdmin = requestedRole === "admin";
+    const normalizedRole = (String(role||"client").toLowerCase() === "admin") ? "internal" : "client";
 
-    // If admin: no client folder validation; grant global access
-    if (isAdmin) {
-      const newUser = {
-        username,
-        passwordHash: await bcrypt.hash(String(password),10),
-        role: "internal",
-        allowedClients: "*"
-      };
+    if (normalizedRole === "internal") {
+      const newUser = { username, passwordHash: await bcrypt.hash(String(password),10), role: "internal", allowedClients: "*" };
       usersDoc.users.push(newUser);
       writeJSON(USERS_PATH, usersDoc);
       return res.json({ ok:true, user: { username, role: "internal", allowedClients: "*" } });
     }
 
-    // Else: client user requires valid client folder
-    if (!clientFolderId) return res.status(400).json({ error:"clientFolderId required for client users" });
+    // client users must have a valid folder
+    if (!clientFolderId) return res.status(400).json({ error:"clientFolderId required" });
     if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
 
-    const newUser = {
-      username,
-      passwordHash: await bcrypt.hash(String(password),10),
-      role: "client",
-      allowedClients: clientFolderId
-    };
+    const newUser = { username, passwordHash: await bcrypt.hash(String(password),10), role: "client", allowedClients: clientFolderId };
     usersDoc.users.push(newUser);
     writeJSON(USERS_PATH, usersDoc);
     res.json({ ok:true, user: { username, role: "client", allowedClients: clientFolderId } });
@@ -534,30 +515,48 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
 const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
 if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
 
-// UPDATED: returns driveFiles + counts for Reports/Data/QNRs + list of accounts with access
+// UPDATED: library stats with counts + accounts
 app.get("/admin/library-stats", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = String(req.query.clientId || "").trim();
     if (!clientId) return res.status(400).json({ error: "clientId required" });
     if (!(await driveFolderExists(clientId))) return res.status(400).json({ error: "Unknown clientId" });
 
-    // Count current Drive files (non-folders) under client root (recursive)
+    // total Drive files (non-folders)
     const all = await listAllFilesUnder(clientId);
-    const driveFiles = all.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
+    const driveFiles = all.length;
 
-    // Subfolder counts (recursive if subfolders exist)
+    // helper: find a direct child folder by name and count files under it
+    async function findChildFolderIdByName(parentId, name) {
+      const drive = getDrive();
+      const r = await drive.files.list({
+        q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: "files(id,name)",
+        pageSize: 1000,
+        supportsAllDrives: true, includeItemsFromAllDrives: true,
+        orderBy: "name_natural"
+      });
+      const low = String(name).toLowerCase();
+      const match = (r.data.files || []).find(f => String(f.name).toLowerCase() === low);
+      return match ? match.id : null;
+    }
     const reportsId = await findChildFolderIdByName(clientId, "reports");
     const dataId    = await findChildFolderIdByName(clientId, "data");
     const qnrsId    = await findChildFolderIdByName(clientId, "qnrs");
 
     const reportsCount   = reportsId ? (await listAllFilesUnder(reportsId)).length : 0;
-    const dataFilesCount = dataId ? (await listAllFilesUnder(dataId)).length : 0;
-    const qnrsCount      = qnrsId ? (await listAllFilesUnder(qnrsId)).length : 0;
+    const dataFilesCount = dataId    ? (await listAllFilesUnder(dataId)).length    : 0;
+    const qnrsCount      = qnrsId    ? (await listAllFilesUnder(qnrsId)).length    : 0;
 
-    // Accounts that have access to this library (client users + all admins)
+    // accounts with access to this library
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     const accounts = (usersDoc.users || [])
-      .filter(u => u.role === "internal" || u.allowedClients === "*" || u.allowedClients === clientId || (Array.isArray(u.allowedClients) && u.allowedClients.includes(clientId)))
+      .filter(u =>
+        u.role === "internal" ||
+        u.allowedClients === "*" ||
+        u.allowedClients === clientId ||
+        (Array.isArray(u.allowedClients) && u.allowedClients.includes(clientId))
+      )
       .map(u => ({ username: u.username, role: u.role }));
 
     res.json({ clientId, driveFiles, reportsCount, dataFilesCount, qnrsCount, accounts });
@@ -827,4 +826,5 @@ app.listen(PORT, ()=>{
   if (!OPENAI_API_KEY) console.warn("[boot] OPENAI_API_KEY missing");
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
+  console.log(`[session] SECURE_COOKIES=${SECURE_COOKIES}`);
 });
