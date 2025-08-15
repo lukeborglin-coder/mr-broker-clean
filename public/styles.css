@@ -20,6 +20,7 @@ body {
   --border: #d6dae0;
   --muted: #666;
   --shadow: 0 6px 18px rgba(0,0,0,.04);
+  --ok:#16a34a; --warn:#b45309; --error:#b91c1c;
 }
 
 /* =========================
@@ -31,6 +32,7 @@ body {
 .small { font-size: 12px; color: var(--muted); }
 .text-sm { font-size: 12px; }
 .uppercase { text-transform: uppercase; }
+.right { margin-left:auto; }
 
 /* Generic inputs/selects */
 .input, .select, .textarea {
@@ -54,17 +56,27 @@ body {
 /* =========================
    Layout
    ========================= */
-.page { max-width: 1000px; margin: 24px auto 60px; padding: 0 16px; }
+.page { max-width: 1400px; margin: 24px auto 60px; padding: 0 16px; } /* wider dashboard */
 
 /* =========================
    Header
    ========================= */
-.header { display:flex; align-items:center; position:relative; min-height: 40px; justify-content: space-between; gap: 8px; }
+.header { display:flex; align-items:center; position:sticky; top:0; z-index:10; background:#fff; min-height: 56px; justify-content: space-between; gap: 8px; border-bottom:1px solid #eceff3; }
 .title { margin: 0; display:flex; align-items: baseline; gap: 4px; }
 .title-cog { font-size: 36px; font-weight: 800; letter-spacing: .2px; }
-.title-gpt { font-size: 36px; font-weight: 400; color: var(--orange); }
+.title-gpt { font-size: 36px; font-weight: 600; color: var(--orange); }
 .beta-badge { color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px; }
 .header-actions { display:flex; align-items:center; gap:8px; }
+
+/* Admin-only library dropdown (compact, top-right) */
+.lib-wrap{ display:none; align-items:center; gap:8px; }
+.lib-select{
+  appearance:none; border:1px solid var(--border); background:#fff; border-radius:10px;
+  padding:8px 12px; padding-right:28px; font-size:.9rem; color:#2b2f36; min-width:240px;
+  background-image:linear-gradient(45deg,transparent 50%,#999 50%),linear-gradient(135deg,#999 50%,transparent 50%),linear-gradient(to right,#ddd,#ddd);
+  background-position:calc(100% - 18px) 16px,calc(100% - 12px) 16px,calc(100% - 2.2rem) 50%;
+  background-size:6px 6px,6px 6px,1px 60%; background-repeat:no-repeat;
+}
 
 /* Make the first letter of h2 titles capitalized across the app (helps Admin page) */
 .card h2, section > h2, .panel h3, .panel h2 {
@@ -90,16 +102,16 @@ body {
 .btn.ghost { background: transparent; color: #1c1d1f; }
 .btn.ghost:hover { color: #fff; }
 
-/* Ask button (home page) */
+/* Ask button (home page) — bump font size a bit */
 .btn-ask {
-  padding: 0 16px;
+  padding: 0 18px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--orange);
   color: #fff; font-weight: 800;
   cursor: pointer;
   height: 100%;
-  font-size: 16px;
+  font-size: 17px; /* bigger "Ask" */
 }
 .btn-ask:hover { filter: brightness(.95); }
 
@@ -120,13 +132,13 @@ body {
 .search { margin: 18px 0 10px; }
 #qform {
   display: grid;
-  grid-template-columns: 1fr 140px;
+  grid-template-columns: 1fr 160px;
   gap: 8px;
   align-items: stretch;
 }
 #q {
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid var(--border);
   background: #fff;
   font-size: 15px;
@@ -135,7 +147,14 @@ body {
   min-height: 76px;
   line-height: 1.35;
 }
-#inlineErr { margin-top: 6px; }
+#inlineErr { margin-top: 6px; color: var(--error); }
+
+/* =========================
+   Thinking loader
+   ========================= */
+.loader{ display:none; align-items:center; gap:8px; color:var(--muted); font-size:.95rem }
+.dotting::after{ content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:#999; box-shadow:10px 0 0 #bbb,20px 0 0 #ddd; animation:blink 1s infinite }
+@keyframes blink{ 50%{ opacity:.25 } }
 
 /* =========================
    Loading overlay
@@ -156,7 +175,7 @@ body {
    Panels & Callout
    ========================= */
 .panel {
-  margin: 14px 0;
+  margin: 16px 0;
   padding: 16px;
   background: var(--panel);
   border-radius: 12px;
@@ -190,20 +209,38 @@ body {
 }
 
 /* =========================
-   Lists
+   Lists (remove trailing periods visually if present in markup)
    ========================= */
 ul { margin: 0; padding-left: 18px; }
 li { margin: 6px 0; }
+.answer-bullets li::marker,
+#supportList li::marker { content: "• "; }
+.answer-bullets li, #supportList li { list-style: disc; }
+.answer-bullets li, #supportList li { }
+.answer-bullets li p, #supportList li p { margin:0; }
+
+/* =========================
+   Dashboard grid
+   ========================= */
+.grid{ display:grid; grid-template-columns:2fr 1fr; gap:16px; }
+.col{ display:flex; flex-direction:column; gap:16px; }
+@media (max-width:1100px){ .grid{ grid-template-columns:1fr } }
 
 /* =========================
    Visuals (slides + secondary info)
    ========================= */
 .slides-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-.slides-grid img { width:100%; border-radius:8px; }
+.slides-grid img { width:100%; border-radius:8px; border:1px solid #eceff3; }
 .secondary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .secondary-item { border:1px solid var(--border); border-radius:12px; padding:10px; background:#fff; }
 .secondary-item h4 { margin:0 0 6px; font-size:0.95rem; }
 .secondary-item p { margin:0; color:var(--muted); font-size:0.85rem; }
+
+/* =========================
+   Chart placeholder
+   ========================= */
+#chartWrap{ padding:8px }
+#chart{ width:100%; height:320px; border:1px dashed #e5e7eb; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#6b7280; background:#fff }
 
 /* =========================
    Table
@@ -218,6 +255,13 @@ li { margin: 6px 0; }
    ========================= */
 #quotes .quote-item { margin:0 0 14px 0; }
 #quotes .quote-text { font-style: italic; margin:0; }
+
+/* =========================
+   Messages
+   ========================= */
+.msg{ border:1px solid #e9edf2; background:#fafbfd; color:#2b2f36; border-radius:10px; padding:10px 12px; display:none }
+.msg.error{ background:#fff5f5; color:#8b0000; display:block }
+.msg.info{ display:block }
 
 /* =========================
    Secondary content
@@ -243,12 +287,23 @@ li { margin: 6px 0; }
 }
 
 /* =========================
-   Admin page layout
+   Admin page layout & spacing
    ========================= */
 .admin-grid { display:grid; grid-template-columns:1.6fr 1fr; gap:20px; }
 @media (max-width: 959px) { .admin-grid { grid-template-columns:1fr; } }
 .panel-toggle { margin-top: 8px; }
 .form-grid { display:grid; grid-template-columns: 1fr; gap: 10px; }
+.admin .panel + .panel { margin-top: 18px; } /* extra space between stacked panels */
+
+/* Row selection styles for client accounts table */
+.row-selectable tbody tr{ cursor:pointer }
+.row-selectable tbody tr.selected{ outline:2px solid var(--orange); background:#fff9f1 }
+.row-actions{ display:flex; gap:8px; align-items:center; }
+
+/* Carets for available client libraries (make dropdown affordance obvious) */
+.caret-title{ position:relative; padding-right:18px; cursor:pointer; user-select:none }
+.caret-title::after{ content:"▾"; position:absolute; right:0; top:0; color:#9aa2ad }
+.caret-title.open::after{ content:"▴" }
 
 /* Smaller controls right under a .label */
 .label + .select.text-sm,
