@@ -198,7 +198,8 @@ li { margin: 6px 0; }
    Visuals (slides + secondary info)
    ========================= */
 .slides-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-.slides-grid img { width:100%; border-radius:8px; }
+.slides-grid img,
+#slidesGrid img { width:100%; border-radius:8px; aspect-ratio:16/9; object-fit:cover; background:#f8fafc; }
 .secondary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .secondary-item { border:1px solid var(--border); border-radius:12px; padding:10px; background:#fff; }
 .secondary-item h4 { margin:0 0 6px; font-size:0.95rem; }
