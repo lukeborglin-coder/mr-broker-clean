@@ -13,31 +13,40 @@
     *{box-sizing:border-box}
     body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
     header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
-    .bar{max-width:1080px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .bar{max-width:1280px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
     .brand{display:flex;align-items:baseline;gap:6px}
     .brand .cog{font-weight:800;color:#2b2f36;font-size:24px;letter-spacing:.1px}
     .brand .gpt{font-weight:400;color:var(--brand);font-size:24px;margin-left:-2px}
     .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
+
     .nav{display:flex;align-items:center;gap:10px}
     #who{color:var(--muted);font-size:.85rem}
     .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none}
     .btn.small{padding:10px 14px;font-size:.92rem;line-height:1;height:40px}
     .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
     .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
-    .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 22px;border-radius:18px}
-    main{max-width:960px;margin:56px auto;padding:0 16px}
-    .hero{text-align:center;margin:8px 0 8px}
+    .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 24px;border-radius:18px;font-size:1.05rem}
+
+    /* compact admin dropdown (top-right) */
+    .client-top{display:none;min-width:240px}
+    .client-top select{
+      height:40px;border-radius:10px;border:1px solid var(--line);
+      background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);
+    }
+
+    /* page as dashboard (full width) */
+    main{max-width:1280px;margin:32px auto;padding:0 16px}
+    .hero{text-align:left;margin:0 0 8px}
     .hero h1{font-size:34px;margin:0 0 6px}
     .hero h1 .dot{color:var(--brand)}
     .hero p{margin:0;color:var(--muted)}
-    .askbox{display:grid;grid-template-columns:1fr 120px;gap:12px;width:100%;margin:18px auto 0}
+
+    .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
     .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
-    .client-under{margin:10px 0 0}
-    .client-under select{
-      width:100%; max-width:9999px;
-      text-align:center; color:var(--muted);
-      border:1px solid var(--line); background:#fff; border-radius:12px; padding:12px 14px; font-size:.95rem;
-    }
+    .askbox .thinking{display:none;align-items:center;gap:8px;color:var(--muted);font-size:.9rem}
+    .spinner{width:16px;height:16px;border:2px solid #ddd;border-top-color:var(--brand);border-radius:50%;animation:spin .9s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
     .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
     .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
     .answer-panel{background:var(--soft);border-color:var(--soft-border);position:relative}
@@ -45,18 +54,37 @@
     .answer-body{line-height:1.55;font-size:1.02rem}
     .answer-head{font-weight:800;margin:0 0 6px}
     .answer-bullets{margin:8px 0 0;padding-left:18px}
+    .answer-bullets li{margin:4px 0}
     .refs-ol{padding-left:20px;margin:0}
     .refs-ol li{margin:6px 0}
     .ref-link{margin-left:6px}
+
+    /* supporting lists */
     #supportCard ul{margin:0;padding-left:18px}
-    #showMoreBtn{margin-top:8px}
+    #supportCard li{margin:6px 0}
+
+    /* quotes */
     #quotesCard blockquote{margin:0 0 10px 0;font-style:italic}
     #quotesCard .tag{color:var(--muted)}
+
+    /* report examples (slides) */
     #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
     #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line)}
+
+    /* supporting data (charts) */
+    #dataGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .chart-card{border:1px solid var(--line);border-radius:12px;padding:10px}
+
     .msg{margin-top:14px;border:1px solid var(--line);background:#fafbfd;color:#2b2f36;border-radius:10px;padding:10px 12px;display:none}
     .msg.error{background:#fff5f5;color:#8b0000;display:block}
     .msg.info{display:block}
+
+    /* under-input client row (kept for clients; hidden for admins) */
+    .client-under{margin:10px 0 0}
+    .client-under select{
+      width:100%; text-align:center; color:var(--muted);
+      border:1px solid var(--line); background:#fff; border-radius:12px; padding:12px 14px; font-size:.95rem;
+    }
   </style>
 </head>
 <body>
@@ -66,6 +94,10 @@
         <span class="cog">COG</span><span class="gpt">gpt</span><span class="beta">(BETA)</span>
       </div>
       <div class="nav">
+        <!-- compact admin client select (top-right) -->
+        <div class="client-top" id="clientTopWrap">
+          <select id="clientTop"></select>
+        </div>
         <div id="who"></div>
         <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
         <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
@@ -82,10 +114,12 @@
     <div class="askbox">
       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
       <button id="ask" class="btn primary" disabled>Ask</button>
+      <div class="thinking" id="thinking"><span class="spinner"></span><span>Thinking…</span></div>
     </div>
 
+    <!-- client select below input (clients only) -->
     <div class="client-under" id="clientRow" style="display:none;">
-      <select id="client" required>
+      <select id="client">
         <option value="">Select a client library for your query</option>
       </select>
     </div>
@@ -113,6 +147,11 @@
         <div id="slidesGrid"></div>
       </div>
 
+      <div id="dataCard" class="panel" style="display:none;">
+        <h3>Supporting Data</h3>
+        <div id="dataGrid"></div>
+      </div>
+
       <div id="refsCard" class="panel" style="display:none;">
         <h3>References</h3>
         <ol id="refs" class="refs-ol"></ol>
@@ -121,27 +160,285 @@
   </main>
 
 <script>
-// populate dropdown from live Drive list
+// --- Role-aware header + client library placement ---
+let ME = null;
+
+async function fetchMe(){
+  try{
+    const r = await fetch("/me");
+    if(!r.ok) throw new Error("not signed in");
+    const me = await r.json();
+    ME = me;
+    document.getElementById("who").textContent = `${me.user.username} — ${me.user.role}`;
+    if(me.user.role === "admin"){
+      // show small top-right dropdown for admins
+      document.getElementById("clientTopWrap").style.display = "block";
+      document.getElementById("clientRow").style.display = "none";
+    }else{
+      document.getElementById("clientTopWrap").style.display = "none";
+      document.getElementById("clientRow").style.display = "block";
+    }
+    document.getElementById("adminLink").style.display = (me.user.role === "admin") ? "inline-flex" : "none";
+  }catch(e){
+    console.warn(e);
+  }
+}
+
+// populate dropdown(s) from live Drive list
 async function loadClientLibraries(){
   try {
     const res = await fetch("/api/client-libraries");
     const libs = await res.json();
-    const sel = document.getElementById("client");
-    sel.innerHTML = '<option value="">Select a client library for your query</option>';
-    libs.forEach(({id, name})=>{
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = name;
-      sel.appendChild(opt);
-    });
-    document.getElementById("clientRow").style.display = libs.length ? "block" : "none";
+
+    const makeOpts = (sel, includePrompt=true)=>{
+      sel.innerHTML = includePrompt ? '<option value="">Select a client library for your query</option>' : "";
+      libs.forEach(({id, name})=>{
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      });
+    };
+
+    const topSel = document.getElementById("clientTop");
+    const underSel = document.getElementById("client");
+
+    makeOpts(topSel, false);
+    makeOpts(underSel, true);
   } catch(e) {
     console.error("Failed to load client libraries", e);
   }
 }
-loadClientLibraries();
+
+// basic helpers
+function setThinking(on){
+  document.getElementById("thinking").style.display = on ? "flex" : "none";
+  document.getElementById("ask").disabled = on;
+}
+function showMsg(text, type="info"){
+  const el = document.getElementById("msg");
+  el.textContent = text;
+  el.className = "msg " + type;
+  el.style.display = "block";
+}
+function clearMsg(){
+  const el = document.getElementById("msg");
+  el.textContent = "";
+  el.className = "msg";
+  el.style.display = "none";
+}
+
+// sanitize bullet: drop trailing period
+function cleanBullet(s){
+  return String(s||"").replace(/\.\s*$/,"");
+}
+
+// render charts from supportingData [{metric, points:[{label,value,refIndex}]}]
+function renderCharts(series){
+  const grid = document.getElementById("dataGrid");
+  grid.innerHTML = "";
+  if(!Array.isArray(series) || !series.length) return;
+
+  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+
+  series.slice(0,5).forEach(s=>{
+    const wrap = document.createElement("div");
+    wrap.className = "chart-card";
+    const title = document.createElement("div");
+    title.style.fontWeight = "600";
+    title.style.marginBottom = "6px";
+    title.textContent = s.metric;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+    svg.setAttribute("width","100%");
+    svg.setAttribute("height","160");
+    svg.setAttribute("viewBox","0 0 320 160");
+    svg.style.display = "block";
+    const pts = (s.points||[]).slice().sort((a,b)=>a.epoch-b.epoch);
+    if(pts.length>=2){
+      const vals = pts.map(p=>Number(p.value||0));
+      const vmin = Math.min(...vals);
+      const vmax = Math.max(...vals);
+      const padL=28,padR=8,padT=12,padB=22,w=320-padL-padR,h=160-padT-padB;
+      const x = (i)=> padL + (w * (i/(pts.length-1||1)));
+      const y = (v)=> padT + (h - (h * ((v - vmin)/(vmax - vmin || 1))));
+      // axes
+      const axis = document.createElementNS("http://www.w3.org/2000/svg","path");
+      axis.setAttribute("d",`M${padL},${padT} L${padL},${padT+h} L${padL+w},${padT+h}`);
+      axis.setAttribute("stroke","#cfd6dd"); axis.setAttribute("fill","none");
+      svg.appendChild(axis);
+      // line
+      const d = pts.map((p,i)=> (i? "L":"M")+x(i)+","+y(p.value)).join(" ");
+      const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+      path.setAttribute("d",d); path.setAttribute("stroke","#ff7a00"); path.setAttribute("fill","none"); path.setAttribute("stroke-width","2");
+      svg.appendChild(path);
+      // points + labels
+      pts.forEach((p,i)=>{
+        const cx=x(i), cy=y(p.value);
+        const dot=document.createElementNS("http://www.w3.org/2000/svg","circle");
+        dot.setAttribute("cx",cx); dot.setAttribute("cy",cy); dot.setAttribute("r","3"); dot.setAttribute("fill","#ff7a00");
+        svg.appendChild(dot);
+        const lbl=document.createElementNS("http://www.w3.org/2000/svg","text");
+        lbl.setAttribute("x",cx); lbl.setAttribute("y",padT+h+14);
+        lbl.setAttribute("text-anchor","middle"); lbl.setAttribute("font-size","10");
+        lbl.textContent=(p.label||"").replace(/\s+/g," ").trim();
+        svg.appendChild(lbl);
+      });
+      // y labels (min/max)
+      const lmin=document.createElementNS("http://www.w3.org/2000/svg","text");
+      lmin.setAttribute("x",2); lmin.setAttribute("y",padT+h); lmin.setAttribute("font-size","10");
+      lmin.textContent = `${Math.round(vmin)}%`;
+      svg.appendChild(lmin);
+      const lmax=document.createElementNS("http://www.w3.org/2000/svg","text");
+      lmax.setAttribute("x",2); lmax.setAttribute("y",padT+8); lmax.setAttribute("font-size","10");
+      lmax.textContent = `${Math.round(vmax)}%`;
+      svg.appendChild(lmax);
+    }
+    wrap.appendChild(title);
+    wrap.appendChild(svg);
+    grid.appendChild(wrap);
+  });
+}
+
+async function doAsk(){
+  clearMsg();
+  const qEl = document.getElementById("q");
+  const btn = document.getElementById("ask");
+  const isAdmin = (ME?.user?.role === "admin");
+  const clientSel = isAdmin ? document.getElementById("clientTop") : document.getElementById("client");
+  const clientId = clientSel?.value || null;
+
+  if(isAdmin && !clientId){
+    showMsg("Please select a client library.", "error");
+    return;
+  }
+  const question = String(qEl.value||"").trim();
+  if(!question){ showMsg("Enter a question to search.", "error"); return; }
+
+  setThinking(true);
+  try{
+    const res = await fetch("/search", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ userQuery: question, clientId })
+    });
+    const data = await res.json();
+
+    // show outputs
+    document.getElementById("out").style.display = "block";
+
+    // Answer
+    const ansPanel = document.getElementById("answerPanel");
+    const ans = document.getElementById("answer");
+    ans.innerHTML = "";
+    if(data?.answer){
+      ansPanel.style.display = "block";
+      // keep answer as-is; bullets cleanup handled in support section
+      ans.textContent = data.answer;
+    }else{
+      ansPanel.style.display = "none";
+    }
+
+    // Additional Support (clean, concise bullets; no trailing periods; drop duplicates of headline sentences)
+    const support = document.getElementById("supportList");
+    const supportCard = document.getElementById("supportCard");
+    support.innerHTML = "";
+    const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
+    const bulletPool = [];
+    ctxChunks.slice(0,8).forEach((c)=>{
+      const s = String(c.textSnippet||"").split(/\n+/).map(t=>t.trim()).filter(Boolean).slice(0,2);
+      s.forEach(t=> bulletPool.push(t));
+    });
+    // remove exact duplicates & trim periods
+    const seen = new Set();
+    bulletPool
+      .map(cleanBullet)
+      .filter(b=>b && !seen.has(b) && !data?.answer?.includes(b))
+      .slice(0,6)
+      .forEach(b=>{
+        seen.add(b);
+        const li=document.createElement("li"); li.textContent=b; support.appendChild(li);
+      });
+    supportCard.style.display = support.children.length ? "block" : "none";
+    document.getElementById("showMoreBtn").style.display = bulletPool.length>6 ? "inline-flex" : "none";
+
+    // Quotes
+    const quotesCard = document.getElementById("quotesCard");
+    const quotesEl = document.getElementById("quotes");
+    quotesEl.innerHTML = "";
+    const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
+    quotes.forEach(q=>{
+      const bq=document.createElement("blockquote"); bq.textContent = q.endsWith(".")? q : q;
+      quotesEl.appendChild(bq);
+    });
+    quotesCard.style.display = quotes.length ? "block" : "none";
+
+    // Slides (report examples) - max 5 images
+    const slides = Array.isArray(data?.reportExamples) ? data.reportExamples.slice(0,5) : [];
+    const slidesGrid = document.getElementById("slidesGrid");
+    slidesGrid.innerHTML = "";
+    slides.forEach(s=>{
+      const img = document.createElement("img");
+      img.src = s.url;
+      img.alt = "Slide";
+      slidesGrid.appendChild(img);
+    });
+    document.getElementById("slidesCard").style.display = slides.length ? "block" : "none";
+
+    // Supporting Data (interactive-ish SVG charts)
+    const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
+    document.getElementById("dataCard").style.display = series.length ? "block" : "none";
+    renderCharts(series);
+
+    // References (fix spacing around "(" and "open source)")
+    const refs = document.getElementById("refs");
+    const refsCard = document.getElementById("refsCard");
+    refs.innerHTML = "";
+    ctxChunks.forEach((r,i)=>{
+      const li=document.createElement("li");
+      const title=(r.study || r.fileName || "").trim();
+      const meta = `(${(r.monthTag||"").trim()} ${(r.yearTag||"").trim()} • ${(r.reportTag||"").trim()})`.replace(/\(\s+/,"(").replace(/\s+\)/,")");
+      const a = document.createElement("a");
+      a.href = r.fileUrl || "#";
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.className = "ref-link";
+      a.textContent = "open source";
+      li.textContent = `${title} ${meta} `;
+      li.appendChild(a);
+      refs.appendChild(li);
+    });
+    refsCard.style.display = refs.children.length ? "block" : "none";
+
+  }catch(e){
+    showMsg("Search failed. Try again.", "error");
+    console.error(e);
+  }finally{
+    setThinking(false);
+  }
+}
+
+// init
+(async function init(){
+  await fetchMe();
+  await loadClientLibraries();
+  // enable ask when ready
+  document.getElementById("ask").disabled = false;
+
+  // submit handlers
+  document.getElementById("ask").addEventListener("click", doAsk);
+  document.getElementById("q").addEventListener("keydown", (e)=>{
+    if(e.key === "Enter"){ e.preventDefault(); doAsk(); }
+  });
+})();
+
+// logout
+document.getElementById("logoutBtn").addEventListener("click", async ()=>{
+  await fetch("/auth/logout",{method:"POST"});
+  location.href="/login.html";
+});
 </script>
 
+<!-- keep for any shared functionality that your project already uses -->
 <script src="/app.js" defer></script>
 </body>
 </html>
