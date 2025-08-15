@@ -64,10 +64,10 @@ app.use(
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: {
+      cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV && process.env.NODE_ENV !== "development",
+      secure: "auto",              // ← fixes the login loop on HTTP / mixed proxy setups
       maxAge: 1000 * 60 * 60 * 8,
     },
   })
