@@ -59,13 +59,9 @@
     #supportCard ul{margin:0;padding-left:18px}
     #supportCard li{margin:6px 0}
 
-    /* quotes */
-    #quotesCard blockquote{margin:0 0 10px 0;font-style:italic}
-    #quotesCard .tag{color:var(--muted)}
-
-    /* report examples (slides) */
+    /* Report Slides */
     #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
-    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line)}
+    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line);background:#fff}
 
     /* supporting data (charts) */
     #dataGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
@@ -158,6 +154,15 @@
     <div class="overlay-text">Thinking…</div>
   </div>
 
+  <!-- pdf.js (from CDN) for rendering PDF page snapshots -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-bb5H8qk2mZy5yAwgV8s0vH1F8v7BG7WwF1k2U6M6eS4hJt1C7y4dXyef8uG4dT+P1H4P3bS9hN5kYbGqkq1lXQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // Set pdf.js worker (must match the version above)
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  </script>
+
 <script>
 // --- Role-aware header + client library placement ---
 let ME = null;
@@ -243,7 +248,7 @@ function renderSupportList(limit = 5){
     if (window.App?.formatRefsToSup) {
       li.innerHTML = window.App.formatRefsToSup(b);
     } else {
-      li.textContent = b;
+      li.innerHTML = String(b).replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>").replace(/\[(\d+)\]/g, "<sup>$1</sup>");
     }
     ul.appendChild(li);
   });
@@ -261,7 +266,7 @@ document.getElementById("toggleMoreBtn")?.addEventListener("click", ()=>{
 });
 
 // Slides show more/less
-let allSlides = []; // [{fileId,page,url}] (url will be built later after server adds proxy)
+let allSlides = []; // [{fileId,page,dataUrl?}]
 let slidesCollapsed = true;
 function renderSlides(limit = 3){
   const grid = document.getElementById("slidesGrid");
@@ -272,10 +277,18 @@ function renderSlides(limit = 3){
   const slice = slidesCollapsed ? allSlides.slice(0, limit) : allSlides;
   slice.forEach(s=>{
     const img = document.createElement("img");
-    // Temporary placeholder (we’ll swap to /api/drive-pdf + pdf.js render after server step)
-    img.src = s.url || ""; // leave blank for now if not provided
     img.alt = `Slide ${s.page || ""}`;
+    if (s.dataUrl) img.src = s.dataUrl; // if already rendered
     grid.appendChild(img);
+    // Lazy render if not yet rendered
+    if (!s.dataUrl) {
+      renderPdfPageToDataUrl(s.fileId, s.page).then(url=>{
+        s.dataUrl = url;
+        img.src = url;
+      }).catch(()=> {
+        img.alt = "Slide unavailable";
+      });
+    }
   });
 
   if (allSlides.length > limit) {
@@ -365,8 +378,7 @@ function dedupeAgainstAnswer(bullets, answerText){
 }
 
 function normalizeSupportFromAPI(raw){
-  // Accepts multiple possible shapes and normalizes to:
-  // [{ text: "Sentence with [1][2].", recencyEpoch: 1710000000, refs:[1,2] }, ...]
+  // Normalize to: [{ text: "Sentence with [1][2].", recencyEpoch: 1710000000, refs:[1,2] }, ...]
   if (!raw) return [];
   const arr = Array.isArray(raw) ? raw : (Array.isArray(raw?.items) ? raw.items : []);
   return arr.map((it)=>{
@@ -388,11 +400,28 @@ function normalizeSupportFromAPI(raw){
   });
 }
 
+// --- PDF rendering: turn (fileId,page) into a PNG data URL via /api/drive-pdf + pdf.js
+async function renderPdfPageToDataUrl(fileId, pageNum, scale=1.6){
+  if (!window.pdfjsLib) throw new Error("pdf.js not loaded");
+  const url = `/api/drive-pdf?fileId=${encodeURIComponent(fileId)}`;
+  const loadingTask = pdfjsLib.getDocument({ url, withCredentials: true });
+  const pdf = await loadingTask.promise;
+  const pageIndex = Math.max(1, Number(pageNum) || 1);
+  const page = await pdf.getPage(pageIndex);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas.toDataURL("image/png");
+}
+
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
   const question = String(qEl?.value||"").trim();
-  const isAdmin = (ME?.user?.role === "admin"));
+  const isAdmin = (ME?.user?.role === "admin");
   const clientId = isAdmin ? (document.getElementById("clientTop")?.value || "") : "";
 
   if (isAdmin && !clientId) {
@@ -412,7 +441,7 @@ async function doAsk(){
       body: JSON.stringify({
         userQuery: question,
         clientId: clientId || null,
-        generateSupport: true   // <-- signal to API to return structured/generative support bullets
+        generateSupport: true
       })
     });
     const data = await res.json();
@@ -425,11 +454,12 @@ async function doAsk(){
     if (ans) ans.innerHTML = "";
     if(data?.answer && ansPanel && ans){
       ansPanel.style.display = "block";
-      // Superscript [n] refs and remove preceding spaces using App helper (fallback safe)
       if (window.App?.setHTMLWithRefs) {
         window.App.setHTMLWithRefs(ans, data.answer);
       } else {
-        ans.textContent = data.answer; // safe fallback
+        ans.innerHTML = String(data.answer)
+          .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+          .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
       }
     }else if (ansPanel){
       ansPanel.style.display = "none";
@@ -449,13 +479,12 @@ async function doAsk(){
     // Sort by recency if available (desc)
     structured.sort((a,b) => (b.recencyEpoch||0) - (a.recencyEpoch||0));
 
-    // If nothing provided, graceful fallback to snippet‑derived bullets
+    // If nothing provided, fallback to snippet‑derived bullets
     if (!structured.length) {
       const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
       const fallback = window.App?.deriveSupportBullets
         ? window.App.deriveSupportBullets(snippets, { maxCount: 12, maxLen: 180 })
         : snippets.flatMap(splitLines).map(cleanBullet);
-
       structured = fallback.map(t => ({ text: t, recencyEpoch: 0, refs: [] }));
     }
 
@@ -470,7 +499,7 @@ async function doAsk(){
       if (answerText.toLowerCase().includes(key)) continue;
       if (seen.has(key)) continue;
       seen.add(key);
-      bullets.push(trimmed.endsWith(".") ? trimmed : trimmed + "."); // sentence‑style bullets
+      bullets.push(trimmed.endsWith(".") ? trimmed : trimmed + ".");
     }
 
     // Expose to renderer and draw with show more/less
@@ -483,11 +512,11 @@ async function doAsk(){
       supportCard.style.display = "none";
     }
 
-    // ---------- Report Slides (scaffold; real rendering after server update) ----------
+    // ---------- Report Slides ----------
     const slidesCard = document.getElementById("slidesCard");
     const slidesGrid = document.getElementById("slidesGrid");
     if (slidesGrid) slidesGrid.innerHTML = "";
-    // Collect up to 6 unique (fileId,page) from references
+    // Collect up to 6 unique (fileId,page) from references (in answer order)
     const slidePairs = [];
     const seenSlide = new Set();
     (ctxChunks||[]).forEach(ch=>{
@@ -497,9 +526,9 @@ async function doAsk(){
       const k = `${fid}:${page}`;
       if (seenSlide.has(k)) return;
       seenSlide.add(k);
-      slidePairs.push({fileId: fid, page});
+      slidePairs.push({fileId: fid, page: Number(page)});
     });
-    allSlides = slidePairs.slice(0,6).map(sp => ({...sp, url: ""})); // url to be filled via pdf.js after server route
+    allSlides = slidePairs.slice(0,6).map(sp => ({...sp, dataUrl: null}));
     if (allSlides.length){
       slidesCard.style.display = "block";
       slidesCollapsed = true;
@@ -514,7 +543,12 @@ async function doAsk(){
     if (quotesEl) quotesEl.innerHTML = "";
     const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
     quotes.forEach(q=>{
-      const bq=document.createElement("blockquote"); bq.textContent = q;
+      const bq=document.createElement("blockquote");
+      if (window.App?.formatRefsToSup) {
+        bq.innerHTML = window.App.formatRefsToSup(q);
+      } else {
+        bq.innerHTML = String(q).replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>").replace(/\[(\d+)\]/g, "<sup>$1</sup>");
+      }
       quotesEl?.appendChild(bq);
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
