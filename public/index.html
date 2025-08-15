@@ -154,6 +154,9 @@
     <div class="overlay-text">Thinking…</div>
   </div>
 
+  <!-- Tooltip for charts -->
+  <div id="chartTip" class="chart-tooltip"></div>
+
   <!-- pdf.js (from CDN) for rendering PDF page snapshots -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-bb5H8qk2mZy5yAwgV8s0vH1F8v7BG7WwF1k2U6M6eS4hJt1C7y4dXyef8uG4dT+P1H4P3bS9hN5kYbGqkq1lXQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
@@ -230,6 +233,7 @@ function clearMsg(){
 
 // text cleanup
 function cleanBullet(s){ return String(s||"").replace(/\s+/g," ").trim(); }
+function stripTrailPunct(s){ return String(s||"").replace(/\s*[.!?]+$/,""); }
 function splitLines(s){ return String(s||"").split(/\n+/).map(t=>t.trim()).filter(Boolean); }
 
 // “Show more/less” state
@@ -244,10 +248,15 @@ function renderSupportList(limit = 5){
   const slice = supportCollapsed ? supportAllBullets.slice(0, limit) : supportAllBullets;
   slice.forEach(b => {
     const li = document.createElement("li");
+    // Remove trailing period per requirement
+    const noPeriod = stripTrailPunct(b);
     if (window.App?.formatRefsToSup) {
-      li.innerHTML = window.App.formatRefsToSup(b);
+      li.innerHTML = window.App.formatRefsToSup(noPeriod);
     } else {
-      li.innerHTML = String(b).replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>").replace(/\[(\d+)\]/g, "<sup>$1</sup>");
+      li.innerHTML = String(noPeriod)
+        .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
+        .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+        .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
     }
     ul.appendChild(li);
   });
@@ -277,14 +286,28 @@ function renderSlides(limit = 3){
   slice.forEach(s=>{
     const img = document.createElement("img");
     img.alt = `Slide ${s.page || ""}`;
-    if (s.dataUrl) img.src = s.dataUrl;
+    img.style.opacity = "0.85";
     grid.appendChild(img);
-    if (!s.dataUrl) {
-      renderPdfPageToDataUrl(s.fileId, s.page).then(url=>{
+    // Attempt render; retry once at lower scale on failure
+    (async ()=>{
+      try{
+        const url = await renderPdfPageToDataUrl(s.fileId, s.page, 1.6);
         s.dataUrl = url;
         img.src = url;
-      }).catch(()=> { img.alt = "Slide unavailable"; });
-    }
+        img.style.opacity = "1";
+      }catch(e1){
+        try{
+          const url2 = await renderPdfPageToDataUrl(s.fileId, s.page, 1.2);
+          s.dataUrl = url2;
+          img.src = url2;
+          img.style.opacity = "1";
+        }catch(e2){
+          img.alt = "Slide unavailable";
+          img.style.opacity = "1";
+          img.style.background = "#fafafa";
+        }
+      }
+    })();
   });
 
   if (allSlides.length > limit) {
@@ -299,7 +322,20 @@ document.getElementById("toggleSlidesBtn")?.addEventListener("click", ()=>{
   renderSlides();
 });
 
-// charts
+// charts (SVG, with hover tooltip + highlight)
+const chartTip = document.getElementById("chartTip");
+function showTip(text, x, y){
+  if (!chartTip) return;
+  chartTip.textContent = text;
+  chartTip.style.display = "block";
+  const off = 12;
+  chartTip.style.left = (x + off) + "px";
+  chartTip.style.top  = (y + off) + "px";
+}
+function hideTip(){
+  if (chartTip) chartTip.style.display = "none";
+}
+
 function renderCharts(series){
   const grid = document.getElementById("dataGrid");
   if (!grid) return;
@@ -315,15 +351,15 @@ function renderCharts(series){
     title.textContent = s.metric;
     const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
     svg.setAttribute("width","100%");
-    svg.setAttribute("height","160");
-    svg.setAttribute("viewBox","0 0 320 160");
+    svg.setAttribute("height","180");
+    svg.setAttribute("viewBox","0 0 340 180");
     svg.style.display = "block";
     const pts = (s.points||[]).slice().sort((a,b)=>a.epoch-b.epoch);
     if(pts.length>=2){
       const vals = pts.map(p=>Number(p.value||0));
       const vmin = Math.min(...vals);
       const vmax = Math.max(...vals);
-      const padL=28,padR=8,padT=12,padB=22,w=320-padL-padR,h=160-padT-padB;
+      const padL=34,padR=8,padT=12,padB=28,w=340-padL-padR,h=180-padT-padB;
       const x = (i)=> padL + (w * (i/(pts.length-1||1)));
       const y = (v)=> padT + (h - (h * ((v - vmin)/(vmax - vmin || 1))));
       const axis = document.createElementNS("http://www.w3.org/2000/svg","path");
@@ -337,7 +373,15 @@ function renderCharts(series){
       pts.forEach((p,i)=>{
         const cx=x(i), cy=y(p.value);
         const dot=document.createElementNS("http://www.w3.org/2000/svg","circle");
-        dot.setAttribute("cx",cx); dot.setAttribute("cy",cy); dot.setAttribute("r","3"); dot.setAttribute("fill","#ff7a00");
+        dot.setAttribute("cx",cx); dot.setAttribute("cy",cy); dot.setAttribute("r","3");
+        dot.setAttribute("fill","#ff7a00");
+        dot.addEventListener("mouseenter",(ev)=>{
+          dot.setAttribute("r","5");
+          const label=(p.label||"").replace(/\s+/g," ").trim();
+          showTip(`${Math.round(p.value)}% — ${label}`, ev.clientX, ev.clientY);
+        });
+        dot.addEventListener("mousemove",(ev)=>{ showTip(chartTip.textContent, ev.clientX, ev.clientY); });
+        dot.addEventListener("mouseleave",()=>{ dot.setAttribute("r","3"); hideTip(); });
         svg.appendChild(dot);
         const lbl=document.createElementNS("http://www.w3.org/2000/svg","text");
         lbl.setAttribute("x",cx); lbl.setAttribute("y",padT+h+14);
@@ -387,8 +431,8 @@ function normalizeSupportFromAPI(raw){
       : [];
     const rec = Number(it.recencyEpoch ?? it.epoch ?? it.timestamp ?? 0) || 0;
 
-    // If refs provided but not embedded, append as bracketed numbers at end.
-    let t = String(text || "").trim();
+    // If refs provided but not embedded, append as bracketed numbers at end (no period).
+    let t = String(text || "").trim().replace(/\s*[.!?]+$/,"");
     if (refs.length && !/\[\d+\]/.test(t)) {
       t += " " + refs.map(n => `[${n}]`).join("");
     }
@@ -454,6 +498,7 @@ async function doAsk(){
         window.App.setHTMLWithRefs(ans, data.answer);
       } else {
         ans.innerHTML = String(data.answer)
+          .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
           .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
           .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
       }
@@ -461,7 +506,7 @@ async function doAsk(){
       ansPanel.style.display = "none";
     }
 
-    // ---------- Additional Support (GENERATIVE-first) ----------
+    // ---------- Additional Support (GENERATIVE-first, no trailing periods) ----------
     const supportCard = document.getElementById("supportCard");
     const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
 
@@ -475,16 +520,16 @@ async function doAsk(){
     // Sort by recency if available (desc)
     structured.sort((a,b) => (b.recencyEpoch||0) - (a.recencyEpoch||0));
 
-    // If nothing provided, fallback to snippet‑derived bullets
+    // If nothing provided, fallback to snippet-derived bullets
     if (!structured.length) {
       const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
-      const fallback = window.App?.deriveSupportBullets
+      const fallback = (window.App && window.App.deriveSupportBullets)
         ? window.App.deriveSupportBullets(snippets, { maxCount: 12, maxLen: 180 })
         : snippets.flatMap(splitLines).map(cleanBullet);
       structured = fallback.map(t => ({ text: t, recencyEpoch: 0, refs: [] }));
     }
 
-    // De‑dupe against the main answer text and between themselves
+    // De-dupe against the main answer text and between themselves
     const answerText = String(data?.answer || "");
     const seen = new Set();
     const bullets = [];
@@ -495,7 +540,8 @@ async function doAsk(){
       if (answerText.toLowerCase().includes(key)) continue;
       if (seen.has(key)) continue;
       seen.add(key);
-      bullets.push(trimmed.endsWith(".") ? trimmed : trimmed + ".");
+      // IMPORTANT: remove any trailing period/?! to meet requirement
+      bullets.push(stripTrailPunct(trimmed));
     }
 
     // Expose to renderer and draw with show more/less
@@ -523,7 +569,7 @@ async function doAsk(){
       seenSlide.add(k);
       slidePairs.push({fileId: fid, page: Number(page)});
     });
-    allSlides = slidePairs.slice(0,6).map(sp => ({...sp, dataUrl: null}));
+    allSlides = slidePairs.slice(0,12).map(sp => ({...sp, dataUrl: null}));
     if (allSlides.length){
       slidesCard.style.display = "block";
       slidesCollapsed = true;
@@ -540,9 +586,12 @@ async function doAsk(){
     quotes.forEach(q=>{
       const bq=document.createElement("blockquote");
       if (window.App?.formatRefsToSup) {
-        bq.innerHTML = window.App.formatRefsToSup(q);
+        bq.innerHTML = window.App.formatRefsToSup(stripTrailPunct(q));
       } else {
-        bq.innerHTML = String(q).replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>").replace(/\[(\d+)\]/g, "<sup>$1</sup>");
+        bq.innerHTML = String(stripTrailPunct(q))
+          .replace(/(?:\[\d+\])+/g, (m)=>`<sup>${Array.from(m.matchAll(/\[(\d+)\]/g)).map(x=>x[1]).join(";")}</sup>`)
+          .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+          .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
       }
       quotesEl?.appendChild(bq);
     });
