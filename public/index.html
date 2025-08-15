@@ -118,14 +118,15 @@
         <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
       </div>
 
+      <div id="slidesCard" class="panel" style="display:none;">
+        <h3>Report Slides</h3>
+        <div id="slidesGrid"></div>
+        <button id="toggleSlidesBtn" class="linklike" style="display:none;margin-top:8px;">Show more</button>
+      </div>
+
       <div id="quotesCard" class="panel" style="display:none;">
         <h3>Supporting Quotes</h3>
         <div id="quotes"></div>
-      </div>
-
-      <div id="slidesCard" class="panel" style="display:none;">
-        <h3>Supporting Slides</h3>
-        <div id="slidesGrid"></div>
       </div>
 
       <div id="dataCard" class="panel" style="display:none;">
@@ -224,13 +225,12 @@ function clearMsg(){
 }
 
 // text cleanup
-function cleanBullet(s){ return String(s||"").replace(/\.\s*$/,""); }
+function cleanBullet(s){ return String(s||"").replace(/\s+/g," ").trim(); }
 function splitLines(s){ return String(s||"").split(/\n+/).map(t=>t.trim()).filter(Boolean); }
 
 // “Show more/less” state
 let supportAllBullets = [];
 let supportCollapsed = true;
-
 function renderSupportList(limit = 5){
   const ul = document.getElementById("supportList");
   const btn = document.getElementById("toggleMoreBtn");
@@ -238,15 +238,15 @@ function renderSupportList(limit = 5){
 
   ul.innerHTML = "";
   const slice = supportCollapsed ? supportAllBullets.slice(0, limit) : supportAllBullets;
-slice.forEach(b => {
-  const li = document.createElement("li");
-  if (window.App?.formatRefsToSup) {
-    li.innerHTML = window.App.formatRefsToSup(b);
-  } else {
-    li.textContent = b;
-  }
-  ul.appendChild(li);
-});
+  slice.forEach(b => {
+    const li = document.createElement("li");
+    if (window.App?.formatRefsToSup) {
+      li.innerHTML = window.App.formatRefsToSup(b);
+    } else {
+      li.textContent = b;
+    }
+    ul.appendChild(li);
+  });
 
   if (supportAllBullets.length > limit) {
     btn.style.display = "inline";
@@ -255,10 +255,39 @@ slice.forEach(b => {
     btn.style.display = "none";
   }
 }
-
 document.getElementById("toggleMoreBtn")?.addEventListener("click", ()=>{
   supportCollapsed = !supportCollapsed;
   renderSupportList();
+});
+
+// Slides show more/less
+let allSlides = []; // [{fileId,page,url}] (url will be built later after server adds proxy)
+let slidesCollapsed = true;
+function renderSlides(limit = 3){
+  const grid = document.getElementById("slidesGrid");
+  const btn  = document.getElementById("toggleSlidesBtn");
+  if (!grid || !btn) return;
+
+  grid.innerHTML = "";
+  const slice = slidesCollapsed ? allSlides.slice(0, limit) : allSlides;
+  slice.forEach(s=>{
+    const img = document.createElement("img");
+    // Temporary placeholder (we’ll swap to /api/drive-pdf + pdf.js render after server step)
+    img.src = s.url || ""; // leave blank for now if not provided
+    img.alt = `Slide ${s.page || ""}`;
+    grid.appendChild(img);
+  });
+
+  if (allSlides.length > limit) {
+    btn.style.display = "inline";
+    btn.textContent = slidesCollapsed ? "Show more" : "Show less";
+  } else {
+    btn.style.display = "none";
+  }
+}
+document.getElementById("toggleSlidesBtn")?.addEventListener("click", ()=>{
+  slidesCollapsed = !slidesCollapsed;
+  renderSlides();
 });
 
 // charts
@@ -335,11 +364,35 @@ function dedupeAgainstAnswer(bullets, answerText){
   return out;
 }
 
+function normalizeSupportFromAPI(raw){
+  // Accepts multiple possible shapes and normalizes to:
+  // [{ text: "Sentence with [1][2].", recencyEpoch: 1710000000, refs:[1,2] }, ...]
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : (Array.isArray(raw?.items) ? raw.items : []);
+  return arr.map((it)=>{
+    if (typeof it === "string") {
+      return { text: it, recencyEpoch: 0, refs: [] };
+    }
+    const text = it.text ?? it.sentence ?? it.summary ?? "";
+    const refs = Array.isArray(it.refs) ? it.refs
+      : Array.isArray(it.citations) ? it.citations
+      : [];
+    const rec = Number(it.recencyEpoch ?? it.epoch ?? it.timestamp ?? 0) || 0;
+
+    // If refs provided but not embedded, append as bracketed numbers at end.
+    let t = String(text || "").trim();
+    if (refs.length && !/\[\d+\]/.test(t)) {
+      t += " " + refs.map(n => `[${n}]`).join("");
+    }
+    return { text: t, recencyEpoch: rec, refs };
+  });
+}
+
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
   const question = String(qEl?.value||"").trim();
-  const isAdmin = (ME?.user?.role === "admin");
+  const isAdmin = (ME?.user?.role === "admin"));
   const clientId = isAdmin ? (document.getElementById("clientTop")?.value || "") : "";
 
   if (isAdmin && !clientId) {
@@ -356,7 +409,11 @@ async function doAsk(){
     const res = await fetch("/search", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ userQuery: question, clientId: clientId || null })
+      body: JSON.stringify({
+        userQuery: question,
+        clientId: clientId || null,
+        generateSupport: true   // <-- signal to API to return structured/generative support bullets
+      })
     });
     const data = await res.json();
 
@@ -378,23 +435,45 @@ async function doAsk(){
       ansPanel.style.display = "none";
     }
 
-    // Additional Support — derive clean bullets from reference snippets
-    const support = document.getElementById("supportList");
+    // ---------- Additional Support (GENERATIVE-first) ----------
     const supportCard = document.getElementById("supportCard");
-    if (support) support.innerHTML = "";
     const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
 
-    const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
-    let bullets = [];
-    if (window.App?.deriveSupportBullets) {
-      bullets = window.App.deriveSupportBullets(snippets, { maxCount: 12, maxLen: 180 });
-    } else {
-      // minimal fallback if helper not available
-      bullets = snippets.flatMap(splitLines).map(cleanBullet);
-    }
-    // De‑dupe against the main answer text
-    bullets = dedupeAgainstAnswer(bullets, data?.answer);
+    // Prefer structured/generative support from API
+    let structured = normalizeSupportFromAPI(
+      data?.supportingBullets ||
+      data?.supporting ||
+      data?.structured?.supporting
+    );
 
+    // Sort by recency if available (desc)
+    structured.sort((a,b) => (b.recencyEpoch||0) - (a.recencyEpoch||0));
+
+    // If nothing provided, graceful fallback to snippet‑derived bullets
+    if (!structured.length) {
+      const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
+      const fallback = window.App?.deriveSupportBullets
+        ? window.App.deriveSupportBullets(snippets, { maxCount: 12, maxLen: 180 })
+        : snippets.flatMap(splitLines).map(cleanBullet);
+
+      structured = fallback.map(t => ({ text: t, recencyEpoch: 0, refs: [] }));
+    }
+
+    // De‑dupe against the main answer text and between themselves
+    const answerText = String(data?.answer || "");
+    const seen = new Set();
+    const bullets = [];
+    for (const s of structured) {
+      const trimmed = cleanBullet(s.text);
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (answerText.toLowerCase().includes(key)) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      bullets.push(trimmed.endsWith(".") ? trimmed : trimmed + "."); // sentence‑style bullets
+    }
+
+    // Expose to renderer and draw with show more/less
     supportAllBullets = bullets;
     if (supportAllBullets.length && supportCard){
       supportCard.style.display = "block";
@@ -404,7 +483,32 @@ async function doAsk(){
       supportCard.style.display = "none";
     }
 
-    // Quotes (limit 5)
+    // ---------- Report Slides (scaffold; real rendering after server update) ----------
+    const slidesCard = document.getElementById("slidesCard");
+    const slidesGrid = document.getElementById("slidesGrid");
+    if (slidesGrid) slidesGrid.innerHTML = "";
+    // Collect up to 6 unique (fileId,page) from references
+    const slidePairs = [];
+    const seenSlide = new Set();
+    (ctxChunks||[]).forEach(ch=>{
+      const fid = ch.fileId || ch.id || ch.driveId || null;
+      const page = ch.page || ch.pageNum || ch.pageNumber || null;
+      if (!fid || !page) return;
+      const k = `${fid}:${page}`;
+      if (seenSlide.has(k)) return;
+      seenSlide.add(k);
+      slidePairs.push({fileId: fid, page});
+    });
+    allSlides = slidePairs.slice(0,6).map(sp => ({...sp, url: ""})); // url to be filled via pdf.js after server route
+    if (allSlides.length){
+      slidesCard.style.display = "block";
+      slidesCollapsed = true;
+      renderSlides(3);
+    } else {
+      slidesCard.style.display = "none";
+    }
+
+    // ---------- Quotes ----------
     const quotesCard = document.getElementById("quotesCard");
     const quotesEl = document.getElementById("quotes");
     if (quotesEl) quotesEl.innerHTML = "";
@@ -415,25 +519,13 @@ async function doAsk(){
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
 
-    // Slides (limit 5)
-    const slides = Array.isArray(data?.reportExamples) ? data.reportExamples.slice(0,5) : [];
-    const slidesGrid = document.getElementById("slidesGrid");
-    if (slidesGrid) slidesGrid.innerHTML = "";
-    slides.forEach(s=>{
-      const img = document.createElement("img");
-      img.src = s.url;
-      img.alt = "Slide";
-      slidesGrid?.appendChild(img);
-    });
-    document.getElementById("slidesCard")?.setAttribute("style", slides.length ? "display:block;" : "display:none;");
-
-    // Supporting Data
+    // ---------- Supporting Data ----------
     const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
     const dataCard = document.getElementById("dataCard");
     if (dataCard) dataCard.style.display = series.length ? "block" : "none";
     renderCharts(series);
 
-    // References table
+    // ---------- References table ----------
     const refsDetails = document.getElementById("refsDetails");
     const tbody = document.getElementById("refsBody");
     if (tbody) tbody.innerHTML = "";
