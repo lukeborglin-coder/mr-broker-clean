@@ -114,7 +114,7 @@
 
       <div id="supportCard" class="panel" style="display:none;">
         <h3>Additional Support</h3>
-        <ul id="supportList"></ul>
+        <ul id="supportList" class="compact-list"></ul>
         <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
       </div>
 
@@ -314,6 +314,19 @@ function renderCharts(series){
   });
 }
 
+function dedupeAgainstAnswer(bullets, answerText){
+  const a = String(answerText||"").toLowerCase().replace(/\s+/g," ").trim();
+  const out = [];
+  const seen = new Set();
+  for (const b of bullets){
+    const key = String(b).toLowerCase().replace(/\s+/g," ").trim();
+    if (a.includes(key)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key); out.push(b);
+  }
+  return out;
+}
+
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
@@ -347,33 +360,34 @@ async function doAsk(){
     if (ans) ans.innerHTML = "";
     if(data?.answer && ansPanel && ans){
       ansPanel.style.display = "block";
-      ans.textContent = data.answer;
+      // Superscript [n] refs and remove preceding spaces using App helper (fallback safe)
+      if (window.App?.setHTMLWithRefs) {
+        window.App.setHTMLWithRefs(ans, data.answer);
+      } else {
+        ans.textContent = data.answer; // safe fallback
+      }
     }else if (ansPanel){
       ansPanel.style.display = "none";
     }
 
-    // Build a set of phrases from the answer to de‑dupe support bullets
-    const answerLines = splitLines(data?.answer||"").map(cleanBullet);
-    const ansSet = new Set(answerLines.filter(Boolean));
-
-    // Additional Support (clean bullets; no trailing periods; avoid duplicates)
+    // Additional Support — derive clean bullets from reference snippets
     const support = document.getElementById("supportList");
     const supportCard = document.getElementById("supportCard");
     if (support) support.innerHTML = "";
     const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
 
-    const bulletPool = [];
-    ctxChunks.slice(0,10).forEach((c)=>{
-      splitLines(c.textSnippet||"").slice(0,3).forEach(t=> bulletPool.push(t));
-    });
+    const snippets = ctxChunks.map(c => c?.textSnippet || "").filter(Boolean);
+    let bullets = [];
+    if (window.App?.deriveSupportBullets) {
+      bullets = window.App.deriveSupportBullets(snippets, { maxCount: 12, maxLen: 180 });
+    } else {
+      // minimal fallback if helper not available
+      bullets = snippets.flatMap(splitLines).map(cleanBullet);
+    }
+    // De‑dupe against the main answer text
+    bullets = dedupeAgainstAnswer(bullets, data?.answer);
 
-    // normalize + dedupe
-    const seen = new Set();
-    supportAllBullets = bulletPool
-      .map(cleanBullet)
-      .map(s => s.replace(/\s+/g," ").trim())
-      .filter(b=>b && !seen.has(b) && !ansSet.has(b) && !(data?.answer||"").includes(b) && seen.add(b));
-
+    supportAllBullets = bullets;
     if (supportAllBullets.length && supportCard){
       supportCard.style.display = "block";
       supportCollapsed = true;
@@ -382,7 +396,7 @@ async function doAsk(){
       supportCard.style.display = "none";
     }
 
-    // Quotes
+    // Quotes (limit 5)
     const quotesCard = document.getElementById("quotesCard");
     const quotesEl = document.getElementById("quotes");
     if (quotesEl) quotesEl.innerHTML = "";
@@ -393,7 +407,7 @@ async function doAsk(){
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
 
-    // Slides
+    // Slides (limit 5)
     const slides = Array.isArray(data?.reportExamples) ? data.reportExamples.slice(0,5) : [];
     const slidesGrid = document.getElementById("slidesGrid");
     if (slidesGrid) slidesGrid.innerHTML = "";
