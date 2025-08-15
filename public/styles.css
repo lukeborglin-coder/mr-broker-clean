@@ -278,3 +278,18 @@ details[open] summary::before{ transform: rotate(90deg); }
    Lightweight chart card (Home > Supporting Data)
    ========================= */
 .chart-card{ border:1px solid var(--border); border-radius:12px; padding:10px; background:#fff; }
+
+/* Tooltip for chart points */
+.chart-tooltip{
+  position: fixed;
+  pointer-events: none;
+  z-index: 50;
+  background: #111;
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.18);
+  display: none;
+  white-space: nowrap;
+}
