@@ -412,6 +412,22 @@ app.get("/me", async (req,res)=>{
   });
 });
 
+// Remove a user account
+app.post("/admin/users/delete", requireSession, requireInternal, async (req, res) => {
+  try {
+    const { username } = req.body || {};
+    if (!username) return res.status(400).json({ error: "username required" });
+    const usersDoc = readJSON(USERS_PATH, { users: [] });
+    const before = usersDoc.users.length;
+    usersDoc.users = usersDoc.users.filter(u => u.username !== username);
+    if (usersDoc.users.length === before) return res.status(404).json({ error: "user not found" });
+    writeJSON(USERS_PATH, usersDoc);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "failed to delete user" });
+  }
+});
+
 // Allow internal users to switch active client
 app.post("/auth/switch-client", requireSession, requireInternal, async (req,res)=>{
   const { clientId } = req.body || {};
@@ -761,4 +777,5 @@ app.listen(PORT, ()=>{
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
 });
+
 
