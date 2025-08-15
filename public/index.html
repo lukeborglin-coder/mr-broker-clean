@@ -12,8 +12,10 @@
     }
     *{box-sizing:border-box}
     body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+
+    /* Full-width header bar */
     header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
-    .bar{max-width:1280px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .bar{max-width:none;width:100%;margin:0;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px}
     .brand{display:flex;align-items:baseline;gap:6px}
     .brand .cog{font-weight:800;color:#2b2f36;font-size:24px;letter-spacing:.1px}
     .brand .gpt{font-weight:400;color:var(--brand);font-size:24px;margin-left:-2px}
@@ -27,14 +29,14 @@
     .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 24px;border-radius:18px;font-size:1.05rem}
 
     /* admin client dropdown (below header, right-aligned) */
-    .client-top-below{display:none;max-width:1280px;margin:8px auto 0;padding:0 16px;display:flex;justify-content:flex-end}
+    .client-top-below{display:none;width:100%;margin:8px 0 0;padding:0 24px;display:flex;justify-content:flex-end}
     .client-top-below select{
       height:40px;border-radius:10px;border:1px solid var(--line);
-      background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:240px;
+      background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:260px;
     }
 
-    /* page as dashboard (full width) */
-    main{max-width:1280px;margin:32px auto;padding:0 16px}
+    /* Full-width main */
+    main{max-width:none;width:100%;margin:24px 0 32px;padding:0 24px}
     .hero{text-align:center;margin:0 0 8px}
     .hero h1{font-size:34px;margin:0 0 6px}
     .hero h1 .dot{color:var(--brand)}
@@ -71,7 +73,6 @@
 
     .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
     .msg.info{display:block;background:#fafbfd;color:#2b2f36}
-
   </style>
 </head>
 <body>
@@ -179,15 +180,14 @@ async function fetchMe(){
   }
 }
 
-// populate dropdown(s) from live Drive list (admin only)
+// populate admin dropdown (no preselected library)
 async function loadClientLibraries(){
   try {
     const res = await fetch("/api/client-libraries");
     const libs = await res.json();
-
     const topSel = document.getElementById("clientTop");
     if (topSel) {
-      topSel.innerHTML = "";
+      topSel.innerHTML = '<option value="" selected disabled>Select a client library</option>';
       libs.forEach(({id, name})=>{
         const opt = document.createElement("option");
         opt.value = id;
@@ -202,8 +202,7 @@ async function loadClientLibraries(){
 
 // helpers
 function setThinking(on){
-  const ov = document.getElementById("overlay");
-  if (ov) ov.classList.toggle("hidden", !on);
+  document.getElementById("overlay")?.classList.toggle("hidden", !on);
   const inl = document.getElementById("inlineStatus");
   if (inl) inl.style.display = on ? "flex" : "none";
   const ask = document.getElementById("ask");
@@ -254,7 +253,7 @@ document.getElementById("toggleMoreBtn")?.addEventListener("click", ()=>{
   renderSupportList();
 });
 
-// build charts from supportingData [{metric, points:[{label,value,epoch}]}]
+// charts
 function renderCharts(series){
   const grid = document.getElementById("dataGrid");
   if (!grid) return;
@@ -281,17 +280,14 @@ function renderCharts(series){
       const padL=28,padR=8,padT=12,padB=22,w=320-padL-padR,h=160-padT-padB;
       const x = (i)=> padL + (w * (i/(pts.length-1||1)));
       const y = (v)=> padT + (h - (h * ((v - vmin)/(vmax - vmin || 1))));
-      // axes
       const axis = document.createElementNS("http://www.w3.org/2000/svg","path");
       axis.setAttribute("d",`M${padL},${padT} L${padL},${padT+h} L${padL+w},${padT+h}`);
       axis.setAttribute("stroke","#cfd6dd"); axis.setAttribute("fill","none");
       svg.appendChild(axis);
-      // line
       const d = pts.map((p,i)=> (i? "L":"M")+x(i)+","+y(p.value)).join(" ");
       const path = document.createElementNS("http://www.w3.org/2000/svg","path");
       path.setAttribute("d",d); path.setAttribute("stroke","#ff7a00"); path.setAttribute("fill","none"); path.setAttribute("stroke-width","2");
       svg.appendChild(path);
-      // points + labels
       pts.forEach((p,i)=>{
         const cx=x(i), cy=y(p.value);
         const dot=document.createElementNS("http://www.w3.org/2000/svg","circle");
@@ -303,7 +299,6 @@ function renderCharts(series){
         lbl.textContent=(p.label||"").replace(/\s+/g," ").trim();
         svg.appendChild(lbl);
       });
-      // y labels (min/max)
       const lmin=document.createElementNS("http://www.w3.org/2000/svg","text");
       lmin.setAttribute("x",2); lmin.setAttribute("y",padT+h); lmin.setAttribute("font-size","10");
       lmin.textContent = `${Math.round(vmin)}%`;
@@ -322,10 +317,9 @@ function renderCharts(series){
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
-  const inlineStatus = document.getElementById("inlineStatus");
   const question = String(qEl?.value||"").trim();
   const isAdmin = (ME?.user?.role === "admin");
-  const clientId = isAdmin ? (document.getElementById("clientTop")?.value || null) : null;
+  const clientId = isAdmin ? (document.getElementById("clientTop")?.value || "") : "";
 
   if (isAdmin && !clientId) {
     showMsg("Select a client library before asking.");
@@ -341,7 +335,7 @@ async function doAsk(){
     const res = await fetch("/search", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ userQuery: question, clientId })
+      body: JSON.stringify({ userQuery: question, clientId: clientId || null })
     });
     const data = await res.json();
 
@@ -399,7 +393,7 @@ async function doAsk(){
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
 
-    // Slides (report examples) - max 5 images
+    // Slides
     const slides = Array.isArray(data?.reportExamples) ? data.reportExamples.slice(0,5) : [];
     const slidesGrid = document.getElementById("slidesGrid");
     if (slidesGrid) slidesGrid.innerHTML = "";
@@ -409,16 +403,15 @@ async function doAsk(){
       img.alt = "Slide";
       slidesGrid?.appendChild(img);
     });
-    const slidesCard = document.getElementById("slidesCard");
-    if (slidesCard) slidesCard.style.display = slides.length ? "block" : "none";
+    document.getElementById("slidesCard")?.setAttribute("style", slides.length ? "display:block;" : "display:none;");
 
-    // Supporting Data (SVG charts)
+    // Supporting Data
     const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
     const dataCard = document.getElementById("dataCard");
     if (dataCard) dataCard.style.display = series.length ? "block" : "none";
     renderCharts(series);
 
-    // References table (collapsed by default but visible)
+    // References table
     const refsDetails = document.getElementById("refsDetails");
     const tbody = document.getElementById("refsBody");
     if (tbody) tbody.innerHTML = "";
@@ -452,7 +445,6 @@ async function doAsk(){
 (async function init(){
   await fetchMe();
   await loadClientLibraries();
-  // enable ask when ready
   const ask = document.getElementById("ask");
   if (ask) ask.disabled = false;
 
