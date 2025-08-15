@@ -78,6 +78,17 @@ app.use(
 );
 app.use(express.static("public"));
 
+// Helper to send files with strong no-store headers (prevents stale home/admin pages)
+function sendNoStoreFile(res, filePath) {
+  res.set("Cache-Control","no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma","no-cache");
+  res.set("Expires","0");
+  return res.sendFile(path.resolve(filePath));
+}
+
+app.get("/login.html", (_req, res) => { return sendNoStoreFile(res, "public/login.html"); });
+
+
 // -------------------- Tiny JSON store --------------------
 const CONFIG_DIR = path.resolve(process.cwd(), "config");
 const USERS_PATH = path.join(CONFIG_DIR, "users.json");
@@ -388,23 +399,11 @@ function requireInternal(req, res, next) {
 }
 
 // -------------------- Pages --------------------
-app.get("/", (req, res) => {
-  if (!req.session?.user) return res.redirect("/login.html");
-  res.set("Cache-Control","no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma","no-cache");
-  res.set("Expires","0");
-  return res.sendFile(path.resolve("public/index.html"));
-});
-app.get("/admin", (req, res) => {
-  if (!req.session?.user) return res.redirect("/login.html");
-  if (req.session.user.role !== "internal") return res.redirect("/");
-  res.set("Cache-Control","no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma","no-cache");
-  res.set("Expires","0");
-  return res.sendFile(path.resolve("public/admin.html"));
-});
+app.get("/", (req,res)=>{ if(!req.session?.user) return res.redirect("/login.html"); return sendNoStoreFile(res, "public/index.html"); });
+app.get("/admin", (req,res)=>{ if(!req.session?.user) return res.redirect("/login.html"); if(req.session.user.role!=="internal") return res.redirect("/"); return sendNoStoreFile(res, "public/admin.html"); });
 
 // -------------------- Auth APIs --------------------
+
 app.post("/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body || {};
@@ -413,9 +412,10 @@ app.post("/auth/login", async (req, res) => {
     if (!user) return res.status(401).json({ error: "Invalid credentials" });
     const ok = await bcrypt.compare(String(password||""), String(user.passwordHash||""));
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
-    // Regenerate session to prevent fixation, then save before responding
+
+    // Prevent fixation & ensure persistence before responding
     req.session.regenerate(err => {
-      if (err) return res.status(500).json({ error: "Session error" });
+      if (err) return res.status(500).json({ error: "Session init failed" });
       req.session.user = { username: user.username, role: user.role, allowed: user.allowedClients };
       if (user.role !== "internal") {
         const allowed = user.allowedClients;
@@ -432,8 +432,21 @@ app.post("/auth/login", async (req, res) => {
     res.status(500).json({ error: "Login failed" });
   }
 });
-app.post("/auth/logout",(req,res)=>{ req.session.destroy(()=>res.json({ok:true})); });,(req,res)=>{ req.session.destroy(()=>res.json({ok:true})); });
-
+const ok = await bcrypt.compare(String(password||""), String(user.passwordHash||""));
+    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+    req.session.user = { username: user.username, role: user.role, allowed: user.allowedClients };
+    if (user.role !== "internal") {
+      const allowed = user.allowedClients;
+      req.session.activeClientId = Array.isArray(allowed) ? allowed[0] : allowed || null;
+    } else {
+      req.session.activeClientId = null; // internal must choose
+    }
+    res.json({ ok:true });
+  } catch {
+    res.status(500).json({ error: "Login failed" });
+  }
+});
+app.post("/auth/logout", (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
 // NOTE: Map 'internal' -> 'admin' in the /me response for the UI label
 app.get("/me", async (req,res)=>{
   if(!req.session?.user) return res.status(401).json({ error:"Not signed in" });
