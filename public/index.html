@@ -6,76 +6,22 @@
   <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-    :root{
-      --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2;
-      --soft:#fff7ed; --soft-border:#ffead6; --accent-left:#ea580c;
-      --ok:#16a34a; --warn:#b45309; --error:#b91c1c;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
-    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
-    .bar{max-width:1400px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-    .brand{display:flex;align-items:baseline;gap:6px}
-    .brand .cog{font-weight:800;color:#2b2f36;font-size:26px;letter-spacing:.1px}
-    .brand .gpt{font-weight:600;color:var(--brand);font-size:26px;margin-left:-2px}
-    .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
-    .nav{display:flex;align-items:center;gap:10px}
-    #who{color:var(--muted);font-size:.85rem}
-    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:12px;font-weight:700;cursor:pointer;text-decoration:none;transition:all .15s ease}
-    .btn.small{padding:10px 14px;font-size:.92rem;line-height:1;height:40px}
-    .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
-    .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
-    .btn.primary{background:var(--brand);color:#fff;border:0;padding:18px 26px;border-radius:18px;font-size:1.05rem}
-    .caret{display:inline-block;border:1px solid var(--line);padding:8px 10px;border-radius:10px;background:#fff;min-width:220px}
-    .caret:after{content:"▾";margin-left:8px;color:var(--muted)}
-    .lib-wrap{display:none;align-items:center;gap:8px}
-    .lib-select{appearance:none;border:1px solid var(--line);background:#fff;border-radius:10px;padding:8px 12px;padding-right:28px;font-size:.9rem;color:#2b2f36;min-width:260px;background-image:linear-gradient(45deg,transparent 50%,#999 50%),linear-gradient(135deg,#999 50%,transparent 50%),linear-gradient(to right,#ddd,#ddd);background-position:calc(100% - 18px) 16px,calc(100% - 12px) 16px,calc(100% - 2.2rem) 50%;background-size:6px 6px,6px 6px,1px 60%;background-repeat:no-repeat}
-    main{max-width:1400px;margin:32px auto;padding:0 16px}
-    .hero{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:8px 0 18px}
-    .hero h1{font-size:34px;margin:0 0 6px}
-    .hero h1 .dot{color:var(--brand)}
-    .hero p{margin:0;color:var(--muted)}
-    .askrow{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    .askbox{display:flex;flex:1;gap:12px;min-width:360px}
-    .askbox input{flex:1;padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
-    .loader{display:none;align-items:center;gap:8px;color:var(--muted);font-size:.95rem}
-    .dotting::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#999;box-shadow:10px 0 0 #bbb,20px 0 0 #ddd;animation:blink 1s infinite}
-    @keyframes blink{50%{opacity:.25}}
-    .grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
-    .col{display:flex;flex-direction:column;gap:16px}
-    .panel{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
-    .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
-    .answer-panel{background:var(--soft);border-color:var(--soft-border);position:relative}
-    .answer-panel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;border-radius:14px 0 0 14px;background:var(--accent-left)}
-    .answer-body{line-height:1.55;font-size:1.02rem}
-    .answer-head{font-weight:800;margin:0 0 6px}
-    .answer-bullets{margin:8px 0 0;padding-left:18px}
-    .refs-ol{padding-left:20px;margin:0}
-    .refs-ol li{margin:6px 0}
-    .ref-link{margin-left:6px}
-    #supportList{margin:0;padding-left:18px}
-    #showMoreBtn{margin-top:8px}
-    #quotesCard blockquote{margin:0 0 10px 0;font-style:italic}
-    #quotesCard .tag{color:var(--muted)}
-    #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
-    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line)}
-    #chartWrap{padding:8px}
-    #chart{width:100%;height:320px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
-    .msg{border:1px solid var(--line);background:#fafbfd;color:#2b2f36;border-radius:10px;padding:10px 12px;display:none}
-    .msg.error{background:#fff5f5;color:#8b0000;display:block}
-    .msg.info{display:block}
-    @media (max-width:1100px){
-      .grid{grid-template-columns:1fr}
+    /* keep only an a11y helper locally to avoid a hard dependency */
+    .visually-hidden {
+      position: absolute !important;
+      height: 1px; width: 1px;
+      overflow: hidden; clip: rect(1px, 1px, 1px, 1px);
+      white-space: nowrap; border: 0; padding: 0; margin: -1px;
     }
   </style>
 </head>
 <body>
   <header>
-    <div class="bar">
-      <div class="brand">
-        <span class="cog">COG</span><span class="gpt">gpt</span><span class="beta">(BETA)</span>
+    <div class="header">
+      <div class="title">
+        <span class="title-cog">COG</span><span class="title-gpt">gpt</span><span class="beta-badge">(BETA)</span>
       </div>
-      <div class="nav">
+      <div class="header-actions">
         <div id="who"></div>
         <!-- Admin-only client library dropdown (top-right, compact) -->
         <div id="libWrap" class="lib-wrap">
@@ -84,22 +30,22 @@
             <option value="">Select a client library for your query</option>
           </select>
         </div>
-        <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
-        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
+        <a id="adminLink" class="btn ghost small" href="/admin" style="display:none;">Admin</a>
+        <button id="logoutBtn" class="btn ghost small" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
 
-  <main>
-    <div class="hero">
+  <main class="page">
+    <div class="hero" style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin:8px 0 18px">
       <div>
-        <h1>Ask about your research<span class="dot">.</span></h1>
+        <h1 style="font-size:34px;margin:0 0 6px">Ask about your research<span style="color:var(--orange)">.</span></h1>
         <p class="muted">Search across your uploaded reports, questionnaires, and data</p>
       </div>
-      <div class="askrow">
-        <div class="askbox">
-          <input id="q" placeholder="e.g., What has satisfaction for Evrysdi looked like over the past few years?" autocomplete="off"/>
-          <button id="ask" class="btn primary" disabled>Ask</button>
+      <div class="askrow" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <div class="askbox" style="display:flex;flex:1;gap:12px;min-width:360px">
+          <input id="q" class="input" placeholder="e.g., What has satisfaction for Evrysdi looked like over the past few years?" autocomplete="off"/>
+          <button id="ask" class="btn-ask" disabled>Ask</button>
         </div>
         <div id="loader" class="loader"><span class="dotting"></span><span>Thinking…</span></div>
       </div>
@@ -118,7 +64,7 @@
           <div id="supportCard" class="panel" style="display:none;">
             <h3>Additional Support</h3>
             <ul id="supportList"></ul>
-            <button id="showMoreBtn" class="btn small ghost" style="display:none;">Show more</button>
+            <button id="showMoreBtn" class="btn ghost small" style="display:none;">Show more</button>
           </div>
 
           <div id="quotesCard" class="panel" style="display:none;">
@@ -128,7 +74,7 @@
 
           <div id="slidesCard" class="panel" style="display:none;">
             <h3>Report Examples</h3>
-            <div id="slidesGrid"></div>
+            <div id="slidesGrid" class="slides-grid"></div>
           </div>
         </div>
 
@@ -136,7 +82,6 @@
           <div id="supportDataCard" class="panel" style="display:none;">
             <h3>Supporting Data</h3>
             <div id="chartWrap">
-              <!-- Your front-end JS will draw an interactive chart here -->
               <div id="chart">Chart will render here</div>
             </div>
           </div>
