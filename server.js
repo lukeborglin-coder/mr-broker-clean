@@ -2,6 +2,7 @@
 // Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
 // Fixes: defines chunkText() and uses it correctly; robust ingest + tags (month/year/report)
+// NEW: /api/client-libraries — live-from-Drive dropdown (cached), so no manual updates on deploy
 
 import fs from "node:fs";
 import path from "node:path";
@@ -31,6 +32,9 @@ const PINECONE_INDEX_HOST = process.env.PINECONE_INDEX_HOST || "";
 const DRIVE_ROOT_FOLDER_ID = process.env.DRIVE_ROOT_FOLDER_ID || "";
 const GOOGLE_KEYFILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON || "";
+
+// Cache for client libraries (so UI always loads from Drive, no redeploys)
+const CLIENT_LIB_TTL_MS = Number(process.env.CLIENT_LIB_TTL_MS || 60_000);
 
 // Internal account
 const INTERNAL_USERNAME = "cognitive_internal";
@@ -127,14 +131,15 @@ async function listClientFolders() {
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
     const r = await drive.files.list({
       q, fields: "files(id,name)", pageSize: 200,
-      supportsAllDrives: true, includeItemsFromAllDrives: true
+      supportsAllDrives: true, includeItemsFromAllDrives: true,
+      orderBy: "name_natural"
     });
     return (r.data.files || []).map(f => ({ id: f.id, name: f.name }));
   } catch { return []; }
 }
 
 async function driveFolderExists(id) {
-  const all = await listClientFolders();
+  const all = await getClientLibrariesCached(false);
   return all.some(x => x.id === id);
 }
 
@@ -150,12 +155,22 @@ async function listAllFilesUnder(folderId) {
       pageSize: 1000,
       supportsAllDrives: true, includeItemsFromAllDrives: true
     });
-    for (const f of r.data.files || []) {
+    for (const f of (r.data.files || [])) {
       if (f.mimeType === "application/vnd.google-apps.folder") stack.push(f.id);
       else out.push(f);
     }
   }
   return out;
+}
+
+// -------------------- Client library cache --------------------
+let _libCache = { data: [], ts: 0 };
+async function getClientLibrariesCached(force = false) {
+  const fresh = Date.now() - _libCache.ts < CLIENT_LIB_TTL_MS;
+  if (!force && fresh && _libCache.data?.length) return _libCache.data;
+  const libs = await listClientFolders();
+  _libCache = { data: libs, ts: Date.now() };
+  return libs;
 }
 
 // -------------------- Text extractors --------------------
@@ -387,7 +402,7 @@ app.post("/auth/logout",(req,res)=>{ req.session.destroy(()=>res.json({ok:true})
 // NOTE: Map 'internal' -> 'admin' in the /me response for the UI label
 app.get("/me", async (req,res)=>{
   if(!req.session?.user) return res.status(401).json({ error:"Not signed in" });
-  const clients = await listClientFolders();
+  const clients = await getClientLibrariesCached(false);
   const me = req.session.user;
   const roleLabel = me.role === "internal" ? "admin" : me.role;
   res.json({
@@ -397,13 +412,36 @@ app.get("/me", async (req,res)=>{
   });
 });
 
+// Allow internal users to switch active client
 app.post("/auth/switch-client", requireSession, requireInternal, async (req,res)=>{
   const { clientId } = req.body || {};
   if (!(await driveFolderExists(clientId))) return res.status(400).json({ error:"Unknown clientId" });
   req.session.activeClientId = clientId;
   res.json({ ok:true });
 });
-app.get("/clients/drive-folders", async (_req,res)=>{ res.json(await listClientFolders()); });
+
+// Back-compat (public) — returns same as /api/client-libraries
+app.get("/clients/drive-folders", async (_req,res)=>{ res.json(await getClientLibrariesCached(false)); });
+
+// NEW: Public client library endpoint (cached). Use this from your dropdown.
+app.get("/api/client-libraries", async (_req, res) => {
+  try {
+    const libs = await getClientLibrariesCached(false);
+    res.json(libs);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to load client libraries" });
+  }
+});
+
+// OPTIONAL: Admin-only cache refresh (e.g., to bust cache immediately after adding folders)
+app.post("/api/client-libraries/refresh", requireSession, requireInternal, async (_req, res) => {
+  try {
+    const libs = await getClientLibrariesCached(true);
+    res.json({ ok: true, count: libs.length });
+  } catch (e) {
+    res.status(500).json({ error: "Refresh failed" });
+  }
+});
 
 // -------------------- Admin APIs --------------------
 app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
