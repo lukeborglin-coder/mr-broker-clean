@@ -157,7 +157,6 @@
   <!-- pdf.js (from CDN) for rendering PDF page snapshots -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-bb5H8qk2mZy5yAwgV8s0vH1F8v7BG7WwF1k2U6M6eS4hJt1C7y4dXyef8uG4dT+P1H4P3bS9hN5kYbGqkq1lXQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
-    // Set pdf.js worker (must match the version above)
     if (window.pdfjsLib) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
@@ -278,16 +277,13 @@ function renderSlides(limit = 3){
   slice.forEach(s=>{
     const img = document.createElement("img");
     img.alt = `Slide ${s.page || ""}`;
-    if (s.dataUrl) img.src = s.dataUrl; // if already rendered
+    if (s.dataUrl) img.src = s.dataUrl;
     grid.appendChild(img);
-    // Lazy render if not yet rendered
     if (!s.dataUrl) {
       renderPdfPageToDataUrl(s.fileId, s.page).then(url=>{
         s.dataUrl = url;
         img.src = url;
-      }).catch(()=> {
-        img.alt = "Slide unavailable";
-      });
+      }).catch(()=> { img.alt = "Slide unavailable"; });
     }
   });
 
@@ -516,7 +512,6 @@ async function doAsk(){
     const slidesCard = document.getElementById("slidesCard");
     const slidesGrid = document.getElementById("slidesGrid");
     if (slidesGrid) slidesGrid.innerHTML = "";
-    // Collect up to 6 unique (fileId,page) from references (in answer order)
     const slidePairs = [];
     const seenSlide = new Set();
     (ctxChunks||[]).forEach(ch=>{
