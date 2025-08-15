@@ -6,21 +6,15 @@
   <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-    :root { 
-      --brand:#ff7a00; 
-      --ink:#111; 
-      --muted:#5f6570; 
-      --line:#e9edf2; 
-      --soft:#fff7ed; 
-      --soft-border:#ffead6; 
-      --left-accent:#c65f12;
-    }
+    :root { --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; --soft:#fff7ed; --soft-border:#ffead6; }
     *{box-sizing:border-box}
     body { margin:0; background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
 
     header { position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid var(--line); }
     .bar { max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .brand { font-weight:800; letter-spacing:.1px; }
+    .brand { font-weight:800; letter-spacing:.1px; display:flex; align-items:baseline; gap:4px; }
+    .brand .cog { font-weight:800; }
+    .brand .gpt { font-weight:400; color:var(--brand); } /* un-bold + orange */
     .beta { font-size:.9rem; color:var(--muted); font-weight:500; margin-left:6px; }
     .nav { display:flex; align-items:center; gap:10px; }
     #who { color:var(--muted); }
@@ -29,41 +23,40 @@
     .btn.small { padding:10px 14px; font-size:.92rem; line-height:1; height:40px; }
     .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
     .btn.ghost:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
-    .btn.primary { background:#fff; color:#111; border:1px solid var(--line); }
-    .btn.primary:hover { background:var(--brand); color:#fff; border-color:var(--brand); }
+    .btn.primary { background:var(--brand); color:#fff; border:0; padding:16px 22px; border-radius:18px; }
 
     main { max-width:960px; margin: 56px auto; padding: 0 16px; }
     .hero { text-align:center; margin: 8px 0 8px; }
     .hero h1 { font-size:34px; margin:0 0 6px 0; }
     .hero p { margin:0; color:var(--muted); }
 
+    /* Client row */
     .client-row { display:flex; gap:12px; align-items:center; justify-content:center; margin:16px 0 6px; }
-    .client-row .label { color:var(--muted); font-size:.85rem; text-transform:uppercase; }
-    .client-row select { color:var(--muted); border:1px solid var(--line); background:#fff; border-radius:12px; padding:6px 10px; min-width:300px; font-size:.85rem; }
+    .client-row .label { color:var(--muted); font-size:.95rem; }
+    .client-row select { color:var(--muted); border:1px solid var(--line); background:#fff; border-radius:12px; padding:10px 12px; min-width:300px; font-size:0.95rem; }
 
     .askbox { display:flex; gap:12px; width:100%; margin:18px auto 0; }
-    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#f0f5ff; color:var(--ink); }
+    .askbox input { flex:1; padding:18px 20px; font-size:1.05rem; border-radius:18px; border:1px solid var(--line); background:#f7f7f7; color:var(--ink); } /* light grey prompt box */
+    .askbox .btn.primary { background:var(--brand); color:#fff; } /* orange ask, white text */
 
     .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
     .panel h3 { margin:0 0 8px 0; font-size:0.95rem; color:var(--muted); font-weight:600; }
-    .answer-panel { background:var(--soft); border-left:6px solid var(--left-accent); }
+    .answer-panel { background:var(--soft); border-color:var(--soft-border); }
     .answer-body { white-space:pre-wrap; line-height:1.55; font-size:1.02rem; }
-    .prose sup { font-size:0.75em; vertical-align:super; }
 
-    .refs { display:grid; gap:10px; }
-    .ref { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; }
-    .ref small { color:var(--muted); }
+    .refs-ol { padding-left: 20px; margin: 0; } /* remove extra space between refs */
+    .refs-ol li { margin: 6px 0; }
+    .ref-link { margin-left:6px; }
     a.link { color:#0b57d0; text-decoration:none; }
     .muted { color:var(--muted); }
 
-    .slides-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-    .slide img { width:100%; border-radius:8px; }
+    /* Additional Detail bullets */
+    #supportCard ul { margin: 0; padding-left: 18px; }
+    #showMoreBtn { margin-top:8px; }
 
-    .secondary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-    .secondary-item { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; }
-    .secondary-item h4 { margin:0 0 6px; font-size:0.95rem; }
-    .secondary-item p { margin:0; color:var(--muted); font-size:0.85rem; }
-
+    /* Slide snapshots grid */
+    #slidesGrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; }
+    #slidesGrid img { width:100%; border-radius:10px; border:1px solid var(--line); }
     .msg { margin-top:14px; border:1px solid var(--line); background:#fafbfd; color:#2b2f36; border-radius:10px; padding:10px 12px; display:none; }
     .msg.error { background:#fff5f5; color:#8b0000; display:block; }
     .msg.info { display:block; }
@@ -73,7 +66,7 @@
   <header>
     <div class="bar">
       <div>
-        <span class="brand">COGgpt</span><span class="beta">(BETA)</span>
+        <span class="brand"><span class="cog">COG</span><span class="gpt">gpt</span></span><span class="beta">(BETA)</span>
       </div>
       <div class="nav">
         <div id="who"></div>
@@ -85,12 +78,12 @@
 
   <main>
     <div class="hero">
-      <h1>Ask about your research</h1>
+      <h1>Ask about your research.</h1> <!-- add period -->
       <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
     </div>
 
     <div class="client-row" id="clientRow" style="display:none;">
-      <div class="label">Client library</div>
+      <div class="label">Client Library</div> <!-- capitalization -->
       <select id="client">
         <option value="" selected disabled>Select a client</option>
       </select>
@@ -106,122 +99,30 @@
     <div id="out" style="display:none;">
       <div id="answerPanel" class="panel answer-panel" style="display:none;">
         <h3>Answer</h3>
-        <div id="answer" class="answer-body prose"></div>
+        <div id="answer" class="answer-body"></div>
       </div>
 
+      <!-- Additional Detail (bullets + show more) -->
       <div id="supportCard" class="panel" style="display:none;">
-        <h3>Additional Support</h3>
+        <h3>Additional Detail</h3>
         <ul id="supportList"></ul>
         <button id="showMoreBtn" class="btn small ghost" style="display:none;">Show more</button>
       </div>
 
+      <!-- References -->
       <div id="refsCard" class="panel" style="display:none;">
         <h3>References</h3>
-        <ol id="refs" class="refs"></ol>
+        <ol id="refs" class="refs-ol"></ol>
       </div>
 
+      <!-- Slide snapshots -->
       <div id="slidesCard" class="panel" style="display:none;">
         <h3>Report Slides</h3>
-        <div id="slidesGrid" class="slides-grid"></div>
-      </div>
-
-      <div id="secondaryCard" class="panel" style="display:none;">
-        <h3>Secondary Information</h3>
-        <div id="secondaryList" class="secondary-grid"></div>
+        <div id="slidesGrid"></div>
       </div>
     </div>
   </main>
 
-<script>
-async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-async function jpost(url, body){ const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-
-let me=null;
-async function boot() {
-  try { me = await jget('/me'); } catch { location.href = '/login.html'; return; }
-  const { user, clients } = me;
-  document.getElementById('who').textContent = user.username + (user.role==='internal'?' (admin)':'');
-  if (user.role === 'internal') document.getElementById('adminLink').style.display = 'inline-flex';
-  const row = document.getElementById('clientRow');
-  const sel = document.getElementById('client');
-  sel.innerHTML = `<option value="" selected disabled>Select a client</option>` + clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  if (user.role === 'internal') row.style.display = 'flex';
-  sel.onchange = () => { document.getElementById('ask').disabled = !sel.value; };
-}
-boot();
-
-function superscriptRefs(text){
-  return text.replace(/\s*\[(\d+)\]/g,"<sup>$1</sup>");
-}
-
-function renderResults(resp){
-  document.getElementById('out').style.display = 'block';
-
-  // Answer
-  if (resp.answer) {
-    document.getElementById('answer').innerHTML = superscriptRefs(resp.answer.trim());
-    document.getElementById('answerPanel').style.display = 'block';
-  } else document.getElementById('answerPanel').style.display = 'none';
-
-  // Additional Support
-  const bullets = (resp.structured?.headline?.bullets || []).map(b => b.replace(/\.$/, ""));
-  const supportList = document.getElementById('supportList');
-  supportList.innerHTML = "";
-  if (bullets.length) {
-    bullets.slice(0,5).forEach(b => supportList.innerHTML += `<li>${superscriptRefs(b)}</li>`);
-    document.getElementById('supportCard').style.display = 'block';
-    if (bullets.length > 5) {
-      document.getElementById('showMoreBtn').style.display = 'inline-flex';
-      document.getElementById('showMoreBtn').onclick = () => {
-        bullets.slice(5).forEach(b => supportList.innerHTML += `<li>${superscriptRefs(b)}</li>`);
-        document.getElementById('showMoreBtn').style.display = 'none';
-      };
-    }
-  } else document.getElementById('supportCard').style.display = 'none';
-
-  // References
-  const refs = resp.references?.chunks || [];
-  if (refs.length) {
-    const refsEl = document.getElementById('refs');
-    refsEl.innerHTML = refs.map((r,i) => `
-      <li>
-        <div><strong>${i+1}.</strong> ${r.study || r.fileName || ''}</div>
-        ${r.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank">open source</a>` : ""}
-      </li>`).join("");
-    document.getElementById('refsCard').style.display = 'block';
-  } else document.getElementById('refsCard').style.display = 'none';
-
-  // Report Slides
-  if (resp.visuals?.length) {
-    document.getElementById('slidesGrid').innerHTML = resp.visuals.map(v => `<div class="slide"><img src="${v}" alt="slide"></div>`).join("");
-    document.getElementById('slidesCard').style.display = 'block';
-  } else document.getElementById('slidesCard').style.display = 'none';
-
-  // Secondary Information
-  if (resp.secondary?.length) {
-    document.getElementById('secondaryList').innerHTML = resp.secondary.map(s => `
-      <div class="secondary-item">
-        <h4>${s.title || ""}</h4>
-        <p>${s.snippet || ""}</p>
-        ${s.url ? `<a class="link" href="${s.url}" target="_blank">open source</a>` : ""}
-      </div>`).join("");
-    document.getElementById('secondaryCard').style.display = 'block';
-  } else document.getElementById('secondaryCard').style.display = 'none';
-}
-
-async function doAsk() {
-  const q = document.getElementById('q').value.trim();
-  const sel = document.getElementById('client');
-  if (!q || !sel.value) return;
-  try {
-    const resp = await jpost('/search', { userQuery: q, clientId: sel.value });
-    renderResults(resp);
-  } catch (e) { alert("Search failed: " + e); }
-}
-document.getElementById('ask').onclick = doAsk;
-document.getElementById('q').addEventListener('keypress', e => { if (e.key === 'Enter' && !document.getElementById('ask').disabled) doAsk(); });
-document.getElementById('logoutBtn').onclick = async () => { await jpost('/auth/logout', {}); location.href = '/login.html'; };
-</script>
 <script src="/app.js" defer></script>
 </body>
 </html>
