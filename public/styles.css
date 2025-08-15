@@ -94,7 +94,7 @@ body {
   color: #fff; font-weight: 800;
   cursor: pointer;
   height: 100%;
-  font-size: 16px;
+  font-size: 16px; /* a bit bigger */
 }
 .btn-ask:hover { filter: brightness(.95); }
 
@@ -133,7 +133,7 @@ body {
 #inlineErr { margin-top: 6px; }
 
 /* =========================
-   Loading overlay
+   Loading overlay / spinner
    ========================= */
 .overlay {
   position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -144,6 +144,7 @@ body {
   animation: spin 0.9s linear infinite;
   margin-right: 10px;
 }
+.spinner.sm { width:16px; height:16px; border-width:2px; margin-right:6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .overlay-text { font-weight: 700; color: #333; }
 
@@ -201,12 +202,18 @@ li { margin: 6px 0; }
 .secondary-item p { margin:0; color:var(--muted); font-size:0.85rem; }
 
 /* =========================
-   Table
+   Table (generic data tables)
    ========================= */
 .table-wrap { overflow-x:auto; margin-top: 8px; }
 .data-table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
 .data-table th, .data-table td { border: 1px solid #e6e9ee; padding: 8px 10px; text-align: left; }
 .data-table thead th { background:#f4f6fa; font-weight:700; }
+
+/* Admin account table (used by admin.html) */
+.tbl{ width:100%; border-collapse:separate; border-spacing:0 6px; }
+.tbl th{ font-size:.85rem; color:var(--muted); text-align:left; padding:4px 6px; }
+.tbl td{ background:#fff; border:1px solid var(--border); padding:8px 6px; border-radius:10px; }
+.pw{ letter-spacing:.2em; color:#666; }
 
 /* =========================
    Quotes
@@ -248,3 +255,23 @@ li { margin: 6px 0; }
 /* Smaller controls right under a .label */
 .label + .select.text-sm,
 .label + .input.text-sm { font-size: 12px; }
+
+/* =========================
+   Details caret indicators (used on Admin library tree)
+   ========================= */
+details summary { list-style:none; cursor:pointer; }
+details summary::-webkit-details-marker{ display:none; }
+details summary::before{
+  content:"▸";
+  display:inline-block;
+  transform: rotate(0deg);
+  transition: transform .15s ease;
+  color:#9aa2ad;
+  margin-right:6px;
+}
+details[open] summary::before{ transform: rotate(90deg); }
+
+/* =========================
+   Lightweight chart card (Home > Supporting Data)
+   ========================= */
+.chart-card{ border:1px solid var(--border); border-radius:12px; padding:10px; background:#fff; }
