@@ -35,15 +35,16 @@
 </head>
 <body>
   <header>
-    <div class="brand">
-      <span style="font-weight:800;">COGgpt</span>
-      <span class="beta">(BETA)</span>
-    </div>
-    <div class="rows">
-      <a href="/" class="btn" id="backBtn">Back</a>
-      <button id="logoutBtn" class="btn">Sign out</button>
-    </div>
-  </header>
+  <div class="brand" style="display:flex; align-items:baseline; gap:6px; font-weight:800; letter-spacing:.1px;">
+    <span class="cog" style="font-weight:800;">COG</span>
+    <span class="gpt" style="font-weight:400; color:#ff7a00;">gpt</span>
+    <span class="beta" style="font-size:.9rem; color:#9aa2ad; font-weight:700; letter-spacing:.06em; margin-left:6px;">(BETA)</span>
+  </div>
+  <div class="rows" style="display:flex; gap:8px; align-items:center;">
+    <a href="/" class="btn" id="backBtn">Back</a>
+    <button id="logoutBtn" class="btn">Sign out</button>
+  </div>
+</header>
 
   <main>
     <!-- LEFT: Update Client Library -->
