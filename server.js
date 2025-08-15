@@ -11,6 +11,7 @@
 // - NEW: /api/drive-pdf (secure PDF proxy) for slide snapshots.
 // - Ingest: store fileId for all vectors; for PDFs, also store page numbers in metadata.
 // - /search: optional generateSupport -> returns supportingBullets [{text, recencyEpoch, refs[]}], recency-sorted.
+// - Auto-ingest support: /admin/ingest/sync (token-protected) and driveSignature in manifest.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -211,7 +212,7 @@ async function listAllFilesUnder(folderId) {
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
     });
-    for (const f of r.data.files || []) {
+    for (const f of (r.data.files || [])) {
       if (f.mimeType === "application/vnd.google-apps.folder") stack.push(f.id);
       else out.push(f);
     }
@@ -274,7 +275,7 @@ async function extractTextFromFile(file) {
   return { text: "" };
 }
 
-// Extract PDF text with per-page boundaries (prefers pdfjs)
+// Extract PDF text with per-page boundaries
 async function extractPdfWithPages(file) {
   const drive = getDrive();
   // Download bytes
@@ -313,7 +314,6 @@ async function extractPdfWithPages(file) {
       const pdfParse = (mod && (mod.default || mod)) || mod;
       const parsed = await pdfParse(buf);
       const t = parsed?.text?.trim() || "";
-      // Best effort: single page entry to keep code paths uniform
       return { text: t, pages: [{ page: 1, text: t }] };
     } catch (e2) {
       throw new Error(`PDF text extraction failed: ${String(e2?.message || e2)}`);
@@ -332,31 +332,19 @@ function chunkText(txt, maxLen = 1800) {
   return chunks;
 }
 const MONTHS = [
-  "january",
-  "february",
-  "march",
-  "april",
-  "may",
-  "june",
-  "july",
-  "august",
-  "september",
-  "october",
-  "november",
-  "december",
+  "january","february","march","april","may","june",
+  "july","august","september","october","november","december",
 ];
 function monthNum(name) {
   const idx = MONTHS.indexOf(String(name || "").toLowerCase());
   return idx === -1 ? null : idx + 1;
 }
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
+function pad2(n) { return String(n).padStart(2, "0"); }
 function latestDateFrom(text, fallbackISO) {
   const s = `${text || ""}`;
   const candidates = [];
 
-  // Month name + year (e.g., June 2025)
+  // Month name + year
   const m1 = s.matchAll(
     /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+(\d{4})\b/gi
   );
@@ -380,8 +368,7 @@ function latestDateFrom(text, fallbackISO) {
   const best = candidates.pop();
   if (best) {
     return {
-      month:
-        MONTHS[best.m - 1][0].toUpperCase() + MONTHS[best.m - 1].slice(1),
+      month: MONTHS[best.m - 1][0].toUpperCase() + MONTHS[best.m - 1].slice(1),
       year: String(best.y),
       epoch: Date.parse(`${best.y}-${pad2(best.m)}-01T00:00:00Z`),
     };
@@ -604,78 +591,6 @@ app.post(
   }
 );
 
-// -------------------- Admin APIs --------------------
-app.get(
-  "/admin/users/list",
-  requireSession,
-  requireInternal,
-  (_req, res) => {
-    const usersDoc = readJSON(USERS_PATH, { users: [] });
-    res.json(
-      usersDoc.users.map((u) => ({
-        username: u.username,
-        role: u.role,
-        allowedClients: u.allowedClients,
-      }))
-    );
-  }
-);
-
-// UPDATED: role-aware creation. Admins (role=internal) do NOT require clientFolderId.
-app.post(
-  "/admin/users/create",
-  requireSession,
-  requireInternal,
-  async (req, res) => {
-    try {
-      const {
-        username,
-        password,
-        confirmPassword,
-        clientFolderId,
-        role,
-      } = req.body || {};
-      if (!username || !password || !confirmPassword)
-        return res
-          .status(400)
-          .json({ error: "username, password, confirmPassword required" });
-      if (password !== confirmPassword)
-        return res.status(400).json({ error: "Passwords do not match" });
-
-      const normalizedRole =
-        String(role || "client").toLowerCase() === "admin" ? "internal" : "client";
-
-      // For clients, a valid Drive folder is required.
-      if (normalizedRole !== "internal") {
-        if (!clientFolderId)
-          return res.status(400).json({ error: "clientFolderId required for client" });
-        if (!(await driveFolderExists(clientFolderId)))
-          return res.status(400).json({ error: "Unknown client folder" });
-      }
-
-      const usersDoc = readJSON(USERS_PATH, { users: [] });
-      if (usersDoc.users.some((u) => u.username === username))
-        return res.status(400).json({ error: "Username exists" });
-
-      const record = {
-        username,
-        passwordHash: await bcrypt.hash(String(password), 10),
-        role: normalizedRole,
-        allowedClients: normalizedRole === "internal" ? "*" : clientFolderId,
-      };
-      usersDoc.users.push(record);
-      writeJSON(USERS_PATH, usersDoc);
-
-      res.json({
-        ok: true,
-        user: { username: record.username, role: record.role, allowedClients: record.allowedClients },
-      });
-    } catch {
-      res.status(500).json({ error: "Failed to create user" });
-    }
-  }
-);
-
 // -------------------- Manifest & stats --------------------
 const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
 if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
@@ -707,7 +622,7 @@ async function isLibraryStale(clientId) {
   return { stale, liveSig, liveCount, files };
 }
 
-// Ingest a single client's library; returns same shape your route returned
+// -------------------- Ingest (reusable) --------------------
 async function ingestClientLibrary(clientId) {
   const files = await listAllFilesUnder(clientId);
   const supported = new Set([
@@ -862,6 +777,7 @@ async function ingestClientLibrary(clientId) {
   };
 }
 
+// -------------------- Stats (simple counts) --------------------
 app.get(
   "/admin/library-stats",
   requireSession,
@@ -893,7 +809,7 @@ app.get(
   }
 );
 
-// Ingest library (Docs/Slides/Sheets + PDFs) with auto-tagging
+// -------------------- Ingest routes --------------------
 app.post(
   "/admin/ingest-client",
   requireSession,
@@ -914,7 +830,8 @@ app.post(
     }
   }
 );
-// Token-protected sync endpoint for Render Cron
+
+// Token-protected sync endpoint for Render Cron (auto-ingest)
 app.post("/admin/ingest/sync", async (req, res) => {
   try {
     const token = req.get("x-auth-token");
@@ -956,173 +873,6 @@ app.post("/admin/ingest/sync", async (req, res) => {
     res.status(500).json({ error: "sync failed", detail: String(e?.message || e) });
   }
 });
-
-      if (!clientId) return res.status(400).json({ error: "clientId required" });
-      if (!(await driveFolderExists(clientId)))
-        return res.status(400).json({ error: "Unknown clientId" });
-
-      const files = await listAllFilesUnder(clientId);
-      const supported = new Set([
-        "application/vnd.google-apps.document",
-        "application/vnd.google-apps.presentation",
-        "application/vnd.google-apps.spreadsheet",
-        "application/pdf",
-      ]);
-
-      const ingested = [];
-      const errors = [];
-      let upserted = 0;
-
-      for (const f of files) {
-        if (!supported.has(f.mimeType)) continue;
-
-        let text = "";
-        let pages = null; // [{page,text}] for PDFs
-        let status = "complete";
-        try {
-          if (f.mimeType === "application/pdf") {
-            try {
-              const resPdf = await extractPdfWithPages(f);
-              text = resPdf.text;
-              pages = resPdf.pages || null;
-            } catch (e) {
-              status = String(e?.message || e);
-            }
-          } else {
-            const t = await extractTextFromFile(f);
-            text = t.text || "";
-            if (!text?.trim()) status = "no text";
-          }
-        } catch (e) {
-          status = String(e?.message || e);
-        }
-
-        // Auto-tags (even if no text, we can use name/modifiedTime)
-        const tags = latestDateFrom(`${f.name}\n${text || ""}`, f.modifiedTime);
-        const report = inferReportTag(f.name, text);
-        const monthTag = tags.month || "";
-        const yearTag = tags.year || "";
-        const recencyEpoch = tags.epoch || 0;
-
-        let chunkCount = 0;
-        try {
-          if (status === "complete" && text?.trim()) {
-            let vectors = [];
-
-            if (f.mimeType === "application/pdf" && Array.isArray(pages) && pages.length) {
-              // Page-aware chunking for PDFs (store page in metadata)
-              for (const p of pages) {
-                if (!p.text?.trim()) continue;
-                const parts = chunkText(p.text, 1500);
-                const embs = await embedTexts(parts);
-                const v = embs.map((vec, i) => ({
-                  id: `${sanitize(clientId)}:${sanitize(f.id)}:p${p.page}:${i}`,
-                  values: vec,
-                  metadata: {
-                    clientId,
-                    fileId: f.id,
-                    fileName: f.name,
-                    fileUrl: f.webViewLink || "",
-                    study: f.name,
-                    date: f.modifiedTime || "",
-                    text: parts[i].slice(0, 4000),
-                    monthTag,
-                    yearTag,
-                    reportTag: report,
-                    recencyEpoch,
-                    page: p.page,
-                  },
-                }));
-                vectors = vectors.concat(v);
-              }
-            } else {
-              // Non-PDFs (no page granularity)
-              const parts = chunkText(text, 1800);
-              const embs = await embedTexts(parts);
-              vectors = embs.map((vec, i) => ({
-                id: `${sanitize(clientId)}:${sanitize(f.id)}:${i}`,
-                values: vec,
-                metadata: {
-                  clientId,
-                  fileId: f.id,
-                  fileName: f.name,
-                  fileUrl: f.webViewLink || "",
-                  study: f.name,
-                  date: f.modifiedTime || "",
-                  text: parts[i].slice(0, 4000),
-                  monthTag,
-                  yearTag,
-                  reportTag: report,
-                  recencyEpoch,
-                },
-              }));
-            }
-
-            if (vectors.length) {
-              await pineconeUpsert(vectors, clientId);
-              upserted += vectors.length;
-              chunkCount = vectors.length;
-            }
-          } else if (status !== "complete") {
-            errors.push({ file: f.name, msg: status });
-          }
-        } catch (e) {
-          errors.push({ file: f.name, msg: String(e?.message || e) });
-        }
-
-        ingested.push({
-          id: f.id,
-          name: f.name,
-          mimeType: f.mimeType,
-          chunks: chunkCount,
-          status,
-          monthTag,
-          yearTag,
-          reportTag: report,
-        });
-      }
-
-      let namespaceVectorCount;
-      const stats = await pineconeDescribe();
-      try {
-        namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount;
-      } catch {}
-
-      // --- write/update manifest with distinct ingested file names
-      try {
-        const distinct = Array.from(
-          new Set(ingested.filter((x) => x.status === "complete").map((x) => x.name))
-        );
-        const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
-        writeJSON(manifestPath, {
-          clientId,
-          updatedAt: new Date().toISOString(),
-          files: distinct,
-        });
-      } catch (e) {
-        console.warn("[manifest] write failed:", e);
-      }
-
-      res.json({
-        ok: true,
-        summary: {
-          filesSeen: files.length,
-          ingestedCount: ingested.filter((x) => x.status === "complete").length,
-          skippedCount: files.filter((f) => !supported.has(f.mimeType)).length,
-          errorsCount: errors.length,
-          upserted,
-          namespaceVectorCount,
-        },
-        ingested,
-        errors,
-      });
-    } catch (e) {
-      res
-        .status(500)
-        .json({ error: "Failed to ingest", detail: String(e?.message || e) });
-    }
-  }
-);
 
 // -------------------- Secondary search (no API key) --------------------
 async function fetchSecondaryInfo(query, max = 5) {
@@ -1191,7 +941,6 @@ function buildReferenceBundle(refs) {
     })
     .join("\n");
 }
-
 function extractCitedNumbers(text) {
   const out = new Set();
   if (!text) return [];
@@ -1203,7 +952,6 @@ function extractCitedNumbers(text) {
   }
   return Array.from(out).sort((a, b) => a - b);
 }
-
 async function generateSupportBullets({ question, refs, answer }) {
   const refBundle = buildReferenceBundle(refs);
   const system =
@@ -1233,7 +981,6 @@ async function generateSupportBullets({ question, refs, answer }) {
       })
       .filter((e) => e > 0);
     const recencyEpoch = epochs.length ? Math.max(...epochs) : 0;
-    // Ensure sentence end
     const text = /\.\s*$/.test(line) ? line : `${line}.`;
     return { text, refs: refsCited, recencyEpoch };
   });
@@ -1329,7 +1076,6 @@ app.post("/search", requireSession, async (req, res) => {
           refs,
           answer,
         });
-        // Sort by recency desc; if equal, keep original order
         supportingBullets.sort((a, b) => (b.recencyEpoch || 0) - (a.recencyEpoch || 0));
       } catch (e) {
         console.warn("[support] generation failed:", e);
@@ -1427,4 +1173,3 @@ app.listen(PORT, () => {
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
-
