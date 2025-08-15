@@ -8,6 +8,9 @@
 // - Session cookie security is controlled by SECURE_COOKIES env (false OK for local/dev).
 // - Send Cache-Control: no-store for .html/.css/.js (and for "/" + "/admin") to avoid stale UI.
 // - Minor: /auth/login now stores allowedClients consistently.
+// - NEW: /api/drive-pdf (secure PDF proxy) for slide snapshots.
+// - Ingest: store fileId for all vectors; for PDFs, also store page numbers in metadata.
+// - /search: optional generateSupport -> returns supportingBullets [{text, recencyEpoch, refs[]}], recency-sorted.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -236,7 +239,7 @@ async function extractTextFromFile(file) {
       { fileId: file.id, mimeType: "text/plain" },
       { responseType: "arraybuffer" }
     );
-    return Buffer.from(r.data).toString("utf8");
+    return { text: Buffer.from(r.data).toString("utf8") };
   }
   if (file.mimeType === "application/vnd.google-apps.presentation") {
     const pres = await slides.presentations.get({ presentationId: file.id });
@@ -249,7 +252,7 @@ async function extractTextFromFile(file) {
         if (s.trim()) text.push(s.trim());
       }
     }
-    return text.join("\n\n");
+    return { text: text.join("\n\n") };
   }
   if (file.mimeType === "application/vnd.google-apps.spreadsheet") {
     const s = await sheets.spreadsheets.get({ spreadsheetId: file.id });
@@ -257,7 +260,7 @@ async function extractTextFromFile(file) {
     const ranges = sheetsList
       .slice(0, 3)
       .map((sh) => `'${sh.properties.title}'!A1:Z100`);
-    if (!ranges.length) return "";
+    if (!ranges.length) return { text: "" };
     const vals = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: file.id,
       ranges,
@@ -265,32 +268,22 @@ async function extractTextFromFile(file) {
     const blocks = (vals.data.valueRanges || []).map((v) =>
       (v.values || []).map((row) => row.join(", ")).join("\n")
     );
-    return blocks.filter(Boolean).join("\n\n");
+    return { text: blocks.filter(Boolean).join("\n\n") };
   }
-  return "";
+  return { text: "" };
 }
 
-// PDF extractor with robust fallback (optional libs)
-async function tryExtractPdfText(file) {
-  // Download bytes
+// Extract PDF text with per-page boundaries (prefers pdfjs)
+async function extractPdfWithPages(file) {
   const drive = getDrive();
+  // Download bytes
   const r = await drive.files.get(
     { fileId: file.id, alt: "media" },
     { responseType: "arraybuffer" }
   );
   const buf = Buffer.from(r.data);
 
-  // First try pdf-parse
-  try {
-    const mod = await import("pdf-parse");
-    const pdfParse = (mod && (mod.default || mod)) || mod;
-    if (typeof pdfParse === "function") {
-      const parsed = await pdfParse(buf);
-      if (parsed?.text?.trim()) return parsed.text;
-    }
-  } catch {}
-
-  // Fallback to pdfjs-dist (try modern then legacy path)
+  // Prefer pdfjs-dist for page-level text
   try {
     let pdfjs;
     try {
@@ -298,23 +291,32 @@ async function tryExtractPdfText(file) {
     } catch {
       pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     }
-
     const task = pdfjs.getDocument({
       data: new Uint8Array(buf),
       isEvalSupported: false,
       useSystemFonts: false,
     });
     const pdf = await task.promise;
-    let all = [];
+    const pages = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
-      const text = content.items.map((it) => it.str || "").join(" ");
-      if (text.trim()) all.push(text.trim());
+      const text = content.items.map((it) => it.str || "").join(" ").trim();
+      pages.push({ page: i, text });
     }
-    return all.join("\n\n");
+    return { text: pages.map(p => p.text).join("\n\n"), pages };
   } catch (e) {
-    throw new Error(`PDF text extraction failed: ${String(e?.message || e)}`);
+    // Fallback to pdf-parse (no page granularity)
+    try {
+      const mod = await import("pdf-parse");
+      const pdfParse = (mod && (mod.default || mod)) || mod;
+      const parsed = await pdfParse(buf);
+      const t = parsed?.text?.trim() || "";
+      // Best effort: single page entry to keep code paths uniform
+      return { text: t, pages: [{ page: 1, text: t }] };
+    } catch (e2) {
+      throw new Error(`PDF text extraction failed: ${String(e2?.message || e2)}`);
+    }
   }
 }
 
@@ -586,7 +588,7 @@ app.get("/api/client-libraries", async (_req, res) => {
   }
 });
 
-// OPTIONAL: Admin-only cache refresh (e.g., to bust cache immediately after adding folders)
+// OPTIONAL: Admin-only cache refresh
 app.post(
   "/api/client-libraries/refresh",
   requireSession,
@@ -708,7 +710,7 @@ app.get(
   }
 );
 
-// Ingest library (Docs/Slides/Sheets + PDFs when possible) with auto-tagging
+// Ingest library (Docs/Slides/Sheets + PDFs) with auto-tagging
 app.post(
   "/admin/ingest-client",
   requireSession,
@@ -736,16 +738,20 @@ app.post(
         if (!supported.has(f.mimeType)) continue;
 
         let text = "";
+        let pages = null; // [{page,text}] for PDFs
         let status = "complete";
         try {
           if (f.mimeType === "application/pdf") {
             try {
-              text = await tryExtractPdfText(f);
+              const resPdf = await extractPdfWithPages(f);
+              text = resPdf.text;
+              pages = resPdf.pages || null;
             } catch (e) {
               status = String(e?.message || e);
             }
           } else {
-            text = await extractTextFromFile(f);
+            const t = await extractTextFromFile(f);
+            text = t.text || "";
             if (!text?.trim()) status = "no text";
           }
         } catch (e) {
@@ -760,33 +766,69 @@ app.post(
         const recencyEpoch = tags.epoch || 0;
 
         let chunkCount = 0;
-        if (status === "complete" && text?.trim()) {
-          const parts = chunkText(text, 1800);
-          const embeddings = await embedTexts(parts);
-          const vectors = embeddings.map((vec, i) => ({
-            id: `${sanitize(clientId)}:${sanitize(f.name)}:${i}`,
-            values: vec,
-            metadata: {
-              clientId,
-              fileName: f.name,
-              fileUrl: f.webViewLink || "",
-              study: f.name,
-              date: f.modifiedTime || "",
-              text: parts[i].slice(0, 4000),
-              monthTag,
-              yearTag,
-              reportTag: report,
-              recencyEpoch,
-            },
-          }));
-          if (vectors.length) {
-            await pineconeUpsert(vectors, clientId);
-            upserted += vectors.length;
-            chunkCount = vectors.length;
+        try {
+          if (status === "complete" && text?.trim()) {
+            let vectors = [];
+
+            if (f.mimeType === "application/pdf" && Array.isArray(pages) && pages.length) {
+              // Page-aware chunking for PDFs (store page in metadata)
+              for (const p of pages) {
+                if (!p.text?.trim()) continue;
+                const parts = chunkText(p.text, 1500);
+                const embs = await embedTexts(parts);
+                const v = embs.map((vec, i) => ({
+                  id: `${sanitize(clientId)}:${sanitize(f.id)}:p${p.page}:${i}`,
+                  values: vec,
+                  metadata: {
+                    clientId,
+                    fileId: f.id,
+                    fileName: f.name,
+                    fileUrl: f.webViewLink || "",
+                    study: f.name,
+                    date: f.modifiedTime || "",
+                    text: parts[i].slice(0, 4000),
+                    monthTag,
+                    yearTag,
+                    reportTag: report,
+                    recencyEpoch,
+                    page: p.page,
+                  },
+                }));
+                vectors = vectors.concat(v);
+              }
+            } else {
+              // Non-PDFs (no page granularity)
+              const parts = chunkText(text, 1800);
+              const embs = await embedTexts(parts);
+              vectors = embs.map((vec, i) => ({
+                id: `${sanitize(clientId)}:${sanitize(f.id)}:${i}`,
+                values: vec,
+                metadata: {
+                  clientId,
+                  fileId: f.id,
+                  fileName: f.name,
+                  fileUrl: f.webViewLink || "",
+                  study: f.name,
+                  date: f.modifiedTime || "",
+                  text: parts[i].slice(0, 4000),
+                  monthTag,
+                  yearTag,
+                  reportTag: report,
+                  recencyEpoch,
+                },
+              }));
+            }
+
+            if (vectors.length) {
+              await pineconeUpsert(vectors, clientId);
+              upserted += vectors.length;
+              chunkCount = vectors.length;
+            }
+          } else if (status !== "complete") {
+            errors.push({ file: f.name, msg: status });
           }
-        } else {
-          // mark as error
-          errors.push({ file: f.name, msg: status });
+        } catch (e) {
+          errors.push({ file: f.name, msg: String(e?.message || e) });
         }
 
         ingested.push({
@@ -807,7 +849,7 @@ app.post(
         namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount;
       } catch {}
 
-      // --- NEW: write/update manifest with distinct ingested file names
+      // --- write/update manifest with distinct ingested file names
       try {
         const distinct = Array.from(
           new Set(ingested.filter((x) => x.status === "complete").map((x) => x.name))
@@ -900,6 +942,64 @@ async function fetchSecondaryInfo(query, max = 5) {
   }
 }
 
+// -------------------- Support bullet generation --------------------
+function buildReferenceBundle(refs) {
+  return refs
+    .map((r, i) => {
+      const tag = `${r.monthTag || ""} ${r.yearTag || ""}`.trim();
+      const rep = r.reportTag ? ` • ${r.reportTag}` : "";
+      return `[${i + 1}] ${r.study || r.fileName}${tag ? " – " + tag : ""}${rep}`;
+    })
+    .join("\n");
+}
+
+function extractCitedNumbers(text) {
+  const out = new Set();
+  if (!text) return [];
+  const rx = /\[(\d+)\]/g;
+  let m;
+  while ((m = rx.exec(text))) {
+    const n = parseInt(m[1], 10);
+    if (!Number.isNaN(n)) out.add(n);
+  }
+  return Array.from(out).sort((a, b) => a - b);
+}
+
+async function generateSupportBullets({ question, refs, answer }) {
+  const refBundle = buildReferenceBundle(refs);
+  const system =
+    "You write 3–6 concise, well-structured support bullets that directly back up the answer, using only the provided references. Each bullet must be a complete sentence and include bracketed numeric citations like [1] that map to the numbered references list. Prefer newer references. Avoid repeating the exact same phrasing as the answer.";
+  const prompt = `Question:\n${question}\n\nAnswer draft:\n${answer}\n\nReferences (numbered):\n${refBundle}\n\nInstructions:\n- Write 3–6 bullets.\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\n- Prioritize the most recent evidence.\n- Do not invent sources.\n- Keep each bullet to 1 sentence.\n\nBullets:`;
+
+  const chat = await openai.chat.completions.create({
+    model: ANSWER_MODEL,
+    messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
+    temperature: 0.2,
+  });
+  const raw = chat.choices?.[0]?.message?.content?.trim() || "";
+
+  // Parse into lines
+  const lines = raw
+    .split(/\r?\n/)
+    .map((s) => s.replace(/^[\-\u2022\*\d\.\s]+/, "").trim())
+    .filter(Boolean);
+
+  // Attach refs + recencyEpoch per bullet
+  return lines.slice(0, 8).map((line) => {
+    const refsCited = extractCitedNumbers(line);
+    const epochs = refsCited
+      .map((n) => {
+        const idx = n - 1;
+        return idx >= 0 && refs[idx] ? Number(refs[idx].recencyEpoch || 0) : 0;
+      })
+      .filter((e) => e > 0);
+    const recencyEpoch = epochs.length ? Math.max(...epochs) : 0;
+    // Ensure sentence end
+    const text = /\.\s*$/.test(line) ? line : `${line}.`;
+    return { text, refs: refsCited, recencyEpoch };
+  });
+}
+
 // -------------------- Search --------------------
 app.post("/search", requireSession, async (req, res) => {
   try {
@@ -908,6 +1008,7 @@ app.post("/search", requireSession, async (req, res) => {
     if (!clientId) return res.status(400).json({ error: "clientId missing" });
     const q = String(body.userQuery || "").trim();
     if (!q) return res.status(400).json({ error: "userQuery required" });
+    const wantSupport = !!body.generateSupport;
 
     // Embedding for the query
     const emb = await openai.embeddings.create({
@@ -925,6 +1026,7 @@ app.post("/search", requireSession, async (req, res) => {
         references: { chunks: [] },
         visuals: [],
         secondary,
+        supportingBullets: [],
       });
     }
 
@@ -943,9 +1045,12 @@ app.post("/search", requireSession, async (req, res) => {
       })
       .sort((a, b) => b._blend - a._blend);
 
+    // Build reference list in the chosen order
     const refs = matches.map((m) => ({
       id: m.id,
       score: m.score,
+      fileId: m.metadata?.fileId || "",
+      page: m.metadata?.page || null,
       fileName: m.metadata?.fileName || "",
       fileUrl: m.metadata?.fileUrl || "",
       study: m.metadata?.study || "",
@@ -953,6 +1058,7 @@ app.post("/search", requireSession, async (req, res) => {
       monthTag: m.metadata?.monthTag || "",
       yearTag: m.metadata?.yearTag || "",
       reportTag: m.metadata?.reportTag || "",
+      recencyEpoch: Number(m.metadata?.recencyEpoch || 0) || 0,
       textSnippet: (m.metadata?.text || "").slice(0, 600),
     }));
 
@@ -975,9 +1081,32 @@ app.post("/search", requireSession, async (req, res) => {
     });
     const answer = chat.choices?.[0]?.message?.content?.trim() || "";
 
+    // Optional: generate supporting bullets
+    let supportingBullets = [];
+    if (wantSupport) {
+      try {
+        supportingBullets = await generateSupportBullets({
+          question: q,
+          refs,
+          answer,
+        });
+        // Sort by recency desc; if equal, keep original order
+        supportingBullets.sort((a, b) => (b.recencyEpoch || 0) - (a.recencyEpoch || 0));
+      } catch (e) {
+        console.warn("[support] generation failed:", e);
+        supportingBullets = [];
+      }
+    }
+
     const secondary = await fetchSecondaryInfo(q, 5);
 
-    res.json({ answer, references: { chunks: refs }, visuals: [], secondary });
+    res.json({
+      answer,
+      references: { chunks: refs },
+      visuals: [],
+      secondary,
+      supportingBullets,
+    });
   } catch (e) {
     res.status(500).json({ error: "Search failed", detail: String(e?.message || e) });
   }
@@ -1022,6 +1151,31 @@ app.get(
     }
   }
 );
+
+// -------------------- Secure PDF proxy (for slide images) --------------------
+app.get("/api/drive-pdf", requireSession, async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "").trim();
+    if (!fileId) return res.status(400).json({ error: "fileId required" });
+
+    const drive = getDrive();
+    const r = await drive.files.get(
+      { fileId, alt: "media" },
+      { responseType: "stream" }
+    );
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "no-store");
+    r.data.on("error", (err) => {
+      console.error("[drive-pdf] stream error:", err);
+      if (!res.headersSent) res.status(500).end("stream error");
+    });
+    r.data.pipe(res);
+  } catch (e) {
+    console.error("[drive-pdf] failed:", e);
+    res.status(500).json({ error: "Failed to fetch PDF" });
+  }
+});
 
 // -------------------- Health --------------------
 app.get("/health", (_req, res) => res.json({ ok: true }));
