@@ -38,10 +38,11 @@
     .muted{color:var(--muted)}
     .soft{background:var(--soft);border-color:var(--soft-border)}
 
-    /* Tree list */
+    /* Tree list — no nested boxes */
     .tree{list-style:none;padding-left:0;margin:0}
-    .tree details{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:8px 10px}
-    .tree summary{cursor:pointer;font-weight:600}
+    .tree details{border:0;margin:6px 0;padding:0}
+    .tree summary{cursor:pointer;font-weight:600;list-style:none}
+    .tree summary::-webkit-details-marker{display:none}
     .tree ul{list-style:disc;padding-left:20px;margin:6px 0 0}
     .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:.8rem;color:var(--muted);margin-left:8px}
 
@@ -70,7 +71,7 @@
       <div class="nav">
         <div id="who"></div>
         <a class="btn small ghost" href="/">Home</a>
-        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
+        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign Out</button>
       </div>
     </div>
   </header>
@@ -78,30 +79,29 @@
   <main class="grid">
     <!-- LEFT 2/3 -->
     <section>
-      <!-- Available libraries -->
+      <!-- Available Client Libraries -->
       <section class="card">
-        <h2>Available client libraries</h2>
+        <h2>Available Client Libraries</h2>
         <div class="muted tiny" id="libsNote">Click a library to view its folders, then click a folder to view file names.</div>
         <ul id="libsTree" class="tree" style="margin-top:8px;"></ul>
         <div id="libsMsg" class="muted"></div>
       </section>
 
-      <!-- Library stats -->
+      <!-- Library Stats -->
       <section class="card">
-        <h2>Library stats</h2>
+        <h2>Library Stats</h2>
         <div class="row">
           <select id="statsClient"><option value="">Select a client library</option></select>
-          <button id="statsBtn" class="btn small ghost">Refresh</button>
         </div>
         <div id="statsOut" class="soft" style="margin-top:10px;padding:10px 12px;border-radius:10px;"></div>
       </section>
 
-      <!-- Ingest -->
+      <!-- Update Library -->
       <section class="card">
-        <h2>Ingest / re‑ingest a client library</h2>
+        <h2>Update Library</h2>
         <div class="row">
           <select id="ingestClient"><option value="">Select a client library</option></select>
-          <button id="ingestBtn" class="btn small ghost">Start ingest</button>
+          <button id="ingestBtn" class="btn small ghost">Update</button>
         </div>
         <div id="ingestOut" class="soft" style="margin-top:10px;padding:10px 12px;border-radius:10px;"></div>
       </section>
@@ -114,7 +114,7 @@
         <h2>Client Accounts</h2>
         <div class="list" id="clientList"></div>
         <div style="margin-top:8px;">
-          <span id="addClientLink" class="link">Add new account</span>
+          <span id="addClientLink" class="link">Add New Account</span>
         </div>
         <div id="clientForm" class="hidden" style="margin-top:10px;">
           <div class="row">
@@ -133,7 +133,7 @@
           </div>
           <div class="row" style="margin-top:8px;">
             <div style="flex:1;min-width:220px;">
-              <label>Assign to client library</label>
+              <label>Assign To Client Library</label>
               <select id="cu_client"><option value="">Select a client library</option></select>
             </div>
           </div>
@@ -149,7 +149,7 @@
         <h2>Admin Accounts</h2>
         <div class="list" id="adminList"></div>
         <div style="margin-top:8px;">
-          <span id="addAdminLink" class="link">Add new admin</span>
+          <span id="addAdminLink" class="link">Add New Admin</span>
         </div>
         <div id="adminForm" class="hidden" style="margin-top:10px;">
           <div class="row">
@@ -198,7 +198,7 @@
     });
   }
 
-  // ---- Library tree (folders -> files)
+  // ---- Library tree (folders -> files) (no nested borders)
   const libsTree = document.getElementById("libsTree");
   const libsMsg = document.getElementById("libsMsg");
   libsMsg.textContent = libs.length ? "" : "No libraries found.";
@@ -265,27 +265,33 @@
     li.appendChild(details); libsTree.appendChild(li);
   });
 
-  // ---- Stats
-  document.getElementById("statsBtn").onclick = async ()=>{
-    const clientId = document.getElementById("statsClient").value;
+  // ---- Stats (auto-load on select change, no Refresh button)
+  const statsSelect = document.getElementById("statsClient");
+  statsSelect.addEventListener("change", loadStats);
+  async function loadStats(){
+    const clientId = statsSelect.value;
     const out = document.getElementById("statsOut");
     if (!clientId) { out.textContent="Select a client."; return; }
     out.textContent="Loading…";
     const r = await fetch(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
     const j = await r.json();
-    out.innerHTML = r.ok
-      ? `<div><strong>Drive files:</strong> ${j.driveCount ?? "—"}</div>
-         <div><strong>Library (manifest) files:</strong> ${j.libraryCount ?? "—"}</div>
-         <div class="muted" style="margin-top:6px;">clientId: ${j.clientId}</div>`
-      : (j.error || "Error");
-  };
+    if (!r.ok) { out.textContent = j.error || "Error"; return; }
+    const accounts = (j.accounts||[]).map(a=>`${a.username}${a.role==="internal"?" (admin)":""}`).join(", ");
+    out.innerHTML = `
+      <div><strong>Drive files:</strong> ${j.driveFiles ?? "—"}</div>
+      <div><strong>Reports:</strong> ${j.reportsCount ?? 0}</div>
+      <div><strong>Data files:</strong> ${j.dataFilesCount ?? 0}</div>
+      <div><strong>QNRs:</strong> ${j.qnrsCount ?? 0}</div>
+      <div style="margin-top:8px;"><strong>Accounts with access:</strong> ${accounts || "None"}</div>
+    `;
+  }
 
-  // ---- Ingest
+  // ---- Update Library (ingest)
   document.getElementById("ingestBtn").onclick = async ()=>{
     const clientId = document.getElementById("ingestClient").value;
     const out = document.getElementById("ingestOut");
     if (!clientId) { out.textContent="Select a client."; return; }
-    out.textContent="Ingesting…";
+    out.textContent="Updating…";
     const r = await fetch("/admin/ingest-client",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ clientId })});
     const j = await r.json();
     out.textContent = r.ok ? `OK. Upserted: ${j.summary?.upserted ?? 0}` : (j.error || "Error");
@@ -294,34 +300,34 @@
   // ---- Accounts (lists + add + delete)
   const users = await (await fetch("/admin/users/list")).json();
 
+  function appendAccountRow(container, user){
+    const row = document.createElement("div");
+    row.className="acct";
+    row.innerHTML = `<span>${user.username}</span>`;
+    const del = document.createElement("button");
+    del.className="kill"; del.title="remove account access"; del.textContent="×";
+    del.onclick = async ()=>{
+      const ok = confirm(`Are you sure you want to remove account access for ${user.username}?`);
+      if (!ok) return;
+      const r = await fetch("/admin/users/delete", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username: user.username })});
+      if (r.ok) { row.remove(); } else { alert("Failed to remove account."); }
+    };
+    row.appendChild(del);
+    container.prepend(row); // most recent at top
+  }
+
   function renderAccounts(role, listId){
     const el = document.getElementById(listId);
     const arr = users.filter(u => role==="client" ? u.role!=="internal" : u.role==="internal");
-    // "Most recent 5" — show last 5 entries; allow scroll for more
-    const ordered = arr.slice().reverse(); // assume file order is creation order
-    const view = ordered; // list is scrollable; top shows most recent
+    const ordered = arr.slice().reverse(); // newest first
     el.innerHTML = "";
-    view.forEach(u=>{
-      const row = document.createElement("div");
-      row.className="acct";
-      row.innerHTML = `<span>${u.username}</span>`;
-      const del = document.createElement("button");
-      del.className="kill"; del.title="remove account access"; del.textContent="×";
-      del.onclick = async ()=>{
-        const ok = confirm(`Are you sure you want to remove account access for ${u.username}?`);
-        if (!ok) return;
-        const r = await fetch("/admin/users/delete", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username: u.username })});
-        if (r.ok) { row.remove(); } else { alert("Failed to remove account."); }
-      };
-      row.appendChild(del);
-      el.appendChild(row);
-    });
+    ordered.forEach(u => appendAccountRow(el, u));
   }
 
   renderAccounts("client","clientList");
   renderAccounts("admin","adminList");
 
-  // Add client account (link expands form)
+  // Add client account (expand form)
   const clientForm = document.getElementById("clientForm");
   document.getElementById("addClientLink").onclick = ()=> clientForm.classList.toggle("hidden");
   document.getElementById("createClientBtn").onclick = async ()=>{
@@ -332,7 +338,18 @@
     const msg = document.getElementById("createClientMsg"); msg.textContent = "…";
     const r = await fetch("/admin/users/create",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username, password, confirmPassword, clientFolderId, role:"client" })});
     const j = await r.json();
-    msg.textContent = r.ok ? "Created." : (j.error || "Failed.");
+    if (r.ok && j.user){
+      users.push(j.user);
+      appendAccountRow(document.getElementById("clientList"), j.user);
+      msg.textContent = "Created.";
+      clientForm.classList.add("hidden");
+      document.getElementById("cu_username").value="";
+      document.getElementById("cu_password").value="";
+      document.getElementById("cu_confirm").value="";
+      document.getElementById("cu_client").value="";
+    } else {
+      msg.textContent = j.error || "Failed.";
+    }
   };
 
   // Add admin account
@@ -343,9 +360,20 @@
     const password = document.getElementById("au_password").value;
     const confirmPassword = document.getElementById("au_confirm").value;
     const msg = document.getElementById("createAdminMsg"); msg.textContent = "…";
-    const r = await fetch("/admin/users/create",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username, password, confirmPassword, clientFolderId: "DRIVE_ROOT", role:"admin" })});
+    // clientFolderId is ignored for admins by backend; send any placeholder
+    const r = await fetch("/admin/users/create",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ username, password, confirmPassword, clientFolderId: "ALL", role:"admin" })});
     const j = await r.json();
-    msg.textContent = r.ok ? "Created." : (j.error || "Failed.");
+    if (r.ok && j.user){
+      users.push(j.user);
+      appendAccountRow(document.getElementById("adminList"), j.user);
+      msg.textContent = "Created.";
+      adminForm.classList.add("hidden");
+      document.getElementById("au_username").value="";
+      document.getElementById("au_password").value="";
+      document.getElementById("au_confirm").value="";
+    } else {
+      msg.textContent = j.error || "Failed.";
+    }
   };
 })();
 </script>
