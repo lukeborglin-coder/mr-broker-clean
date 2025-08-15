@@ -718,6 +718,40 @@ app.post("/search", requireSession, async (req,res)=>{
   }
 });
 
+// --- Drive children listing for admin tree ----
+app.get("/admin/drive/children", requireSession, requireInternal, async (req, res) => {
+  try {
+    const parentId = String(req.query.parentId || "").trim();
+    if (!parentId) return res.status(400).json({ error: "parentId required" });
+
+    const drive = getDrive();
+    // Folders
+    const fr = await drive.files.list({
+      q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: "files(id,name)",
+      pageSize: 1000,
+      supportsAllDrives: true, includeItemsFromAllDrives: true,
+      orderBy: "name_natural"
+    });
+    // Files (non-folders)
+    const r = await drive.files.list({
+      q: `'${parentId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
+      fields: "files(id,name,mimeType)",
+      pageSize: 1000,
+      supportsAllDrives: true, includeItemsFromAllDrives: true,
+      orderBy: "name_natural"
+    });
+
+    res.json({
+      folders: (fr.data.files || []).map(f => ({ id: f.id, name: f.name })),
+      files: (r.data.files || []).map(f => ({ id: f.id, name: f.name }))
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to list children" });
+  }
+});
+
+
 // -------------------- Health --------------------
 app.get("/health", (_req,res)=>res.json({ok:true}));
 
@@ -727,3 +761,4 @@ app.listen(PORT, ()=>{
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
 });
+
