@@ -1,244 +1,152 @@
-/* public/app.js (admin-role fix)
-   - Treats both 'admin' and 'internal' as admin for UI checks
-   - Everything else unchanged (superscripts, Additional Support, References, Slides, Secondary)
+/* public/app.js
+   - Admin detection kept (admin/internal)
+   - Superscripts [#] with no preceding space
+   - Additional Detail bullets (1–5) + Show more
+   - References: single ordered numbers; "open source" after title in parentheses
+   - Report Slides: up to 5 images
 */
 
 const CONFIG = window.CONFIG || {};
 const API_BASE = CONFIG.API_BASE || "";
 
-// ------- helpers -------
-async function jget(url){
-  const r = await fetch(API_BASE + url);
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
-}
+async function jget(url){ const r = await fetch(API_BASE + url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 async function jpost(url, body){
-  const r = await fetch(API_BASE + url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {})
-  });
-  if(!r.ok) throw new Error(await r.text());
-  return r.json();
+  const r = await fetch(API_BASE + url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body||{}) });
+  if(!r.ok) throw new Error(await r.text()); return r.json();
 }
 
 function $(id){ return document.getElementById(id); }
-function show(el){ el && el.classList.remove("hidden"); el && (el.style.display = ""); }
-function hide(el){ el && el.classList.add("hidden"); el && (el.style.display = "none"); }
-function safeArray(v){
-  if(!v) return [];
-  if(Array.isArray(v)) return v;
-  if(typeof v === "object") return Object.values(v);
-  return [];
-}
+function show(el){ if(el){ el.style.display = ""; } }
+function hide(el){ if(el){ el.style.display = "none"; } }
+function safeArray(v){ return Array.isArray(v) ? v : (v ? [v] : []); }
 function isAdminRole(role){ return role === "admin" || role === "internal"; }
 
-// Turn " ... [2]" or "...[2]" into "...<sup>2</sup>"
+// Superscript [#] and ensure no preceding space
 function superscriptRefs(text){
   if(!text) return "";
-  return String(text)
-    .replace(/\s+\[(\d+)\]/g, "[$1]")      // remove space before bracket
-    .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
+  return String(text).replace(/\s+\[(\d+)\]/g,"[$1]").replace(/\[(\d+)\]/g,"<sup>$1</sup>");
 }
 
-// Extract up to N bullets from structured fields; remove ending period
-function collectBullets(resp, max = 5){
-  const fromHeadline = safeArray(resp?.structured?.headline?.bullets);
-  const fromSupporting = safeArray(resp?.supporting).map(s => typeof s === "string" ? s : s?.text).filter(Boolean);
-  const fromKeyFindings = safeArray(resp?.keyFindings);
-
-  const all = [...fromHeadline, ...fromSupporting, ...fromKeyFindings]
-    .map(s => String(s).trim().replace(/[.;\s]+$/,""))
-    .filter(Boolean);
-
-  const seen = new Set();
-  const unique = [];
-  for(const b of all){
-    const k = b.toLowerCase();
-    if(!seen.has(k)){ seen.add(k); unique.push(b); }
-  }
-  return { first: unique.slice(0, max), rest: unique.slice(max) };
+// Collect up to N bullets from likely fields
+function collectBullets(resp, max=5){
+  const fromHeadline = (resp?.structured?.headline?.bullets || []);
+  const fromSupporting = (resp?.supporting || []).map(s => typeof s === "string" ? s : s?.text).filter(Boolean);
+  const fromKey = (resp?.keyFindings || []);
+  const all = [...fromHeadline, ...fromSupporting, ...fromKey].map(s => String(s).trim()).filter(Boolean);
+  // de-dupe
+  const seen = new Set(), out = [];
+  for(const b of all){ const k=b.toLowerCase(); if(!seen.has(k)){ seen.add(k); out.push(b); } }
+  return { first: out.slice(0,max), rest: out.slice(max) };
 }
 
-// Build references (ordered list)
+// Build references: use <ol>, no manual number; link in parentheses
 function buildReferences(refs){
-  return safeArray(refs).map((r, i) => {
-    const title = r?.study || r?.fileName || "Source";
-    const link = r?.fileUrl ? `<a class="link" href="${r.fileUrl}" target="_blank" rel="noopener">open source</a>` : "";
-    return `<li>
-      <div><strong>${i+1}.</strong> ${title}</div>
-      ${link}
-    </li>`;
+  return refs.map(r => {
+    const name = r?.study || r?.fileName || "Source";
+    const link = r?.fileUrl ? ` (<a class="link ref-link" href="${r.fileUrl}" target="_blank" rel="noopener">open source</a>)` : "";
+    return `<li>${name}${link}</li>`;
   }).join("");
 }
 
 // Limit images to at most n
-function takeImages(arr, n = 6){
-  return safeArray(arr).filter(Boolean).slice(0, n);
-}
+function takeImages(arr, n=5){ return (arr || []).filter(Boolean).slice(0, n); }
 
-// Secondary info cards
-function buildSecondary(items){
-  return safeArray(items).slice(0,5).map(s => {
-    const title = s?.title || "";
-    const snippet = s?.snippet || s?.summary || "";
-    const url = s?.url || s?.link || "";
-    const link = url ? `<a class="link" href="${url}" target="_blank" rel="noopener">open source</a>` : "";
-    return `<div class="secondary-item">
-      <h4>${title}</h4>
-      <p>${snippet}</p>
-      ${link}
-    </div>`;
-  }).join("");
-}
-
-// ------- boot (user + clients) -------
-let currentUser = null;
+// ------- boot -------
+let currentUser=null;
 async function boot(){
   try{
     const { user, clients } = await jget("/me");
     currentUser = user;
-
-    // Header label and Admin link visibility
     const who = $("who");
     if(who) who.textContent = user.username + (isAdminRole(user.role) ? " (admin)" : "");
-
     const adminLink = $("adminLink");
-    if(adminLink && isAdminRole(user.role)){ adminLink.style.display = "inline-flex"; }
+    if(adminLink && isAdminRole(user.role)) adminLink.style.display = "inline-flex";
 
-    // Client selection behavior
     const row = $("clientRow");
     const sel = $("client");
     if(sel){
-      sel.innerHTML = `<option value="" selected disabled>Select a client</option>` +
-        safeArray(clients).map(c => `<option value="${c.id}">${c.name}</option>`).join("");
-
+      sel.innerHTML = `<option value="" selected disabled>Select a client</option>` + (clients||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       if(isAdminRole(user.role)){
-        // Admins must choose a client
         if(row) row.style.display = "flex";
-        const ask = $("ask");
-        if(ask) ask.disabled = !sel.value;
+        const ask = $("ask"); if(ask) ask.disabled = !sel.value;
         sel.onchange = () => { if(ask) ask.disabled = !sel.value; };
       } else {
-        // Non-admins: preselect single client if available
-        if(clients?.length === 1){
-          sel.value = clients[0].id;
-          const ask = $("ask"); if(ask) ask.disabled = false;
-        } else if(row){
-          row.style.display = "flex";
-        }
+        if(clients?.length === 1){ sel.value = clients[0].id; const ask=$("ask"); if(ask) ask.disabled=false; }
+        else if(row){ row.style.display="flex"; }
       }
     }
-  } catch {
-    location.href = "/login.html";
-  }
+  } catch { location.href = "/login.html"; }
 }
 boot();
 
-// ------- results rendering -------
+// ------- render -------
 function render(resp){
-  const out = $("out");
-  if(out) out.style.display = "block";
+  $("out").style.display = "block";
 
   // Answer
-  const hasAnswer = Boolean(resp?.answer && String(resp.answer).trim());
-  if(hasAnswer){
-    $("answer").innerHTML = superscriptRefs(String(resp.answer).trim());
-    show($("answerPanel"));
-  } else { hide($("answerPanel")); }
+  const a = (resp?.answer || "").trim();
+  if(a){ $("answer").innerHTML = superscriptRefs(a); show($("answerPanel")); }
+  else hide($("answerPanel"));
 
-  // Additional Support
-  const { first: bullets, rest: moreBullets } = collectBullets(resp, 5);
-  const supportCard = $("supportCard");
-  const supportList = $("supportList");
-  const showMoreBtn = $("showMoreBtn");
-  if(bullets.length){
-    supportList.innerHTML = bullets.map(b => `<li>${superscriptRefs(b)}</li>`).join("");
-    show(supportCard);
-    if(moreBullets.length){
-      show(showMoreBtn);
-      showMoreBtn.onclick = () => {
-        supportList.insertAdjacentHTML("beforeend",
-          moreBullets.map(b => `<li>${superscriptRefs(b)}</li>`).join(""));
-        hide(showMoreBtn);
-      };
-    } else {
-      hide(showMoreBtn);
-    }
-  } else {
-    hide(supportCard);
-  }
+  // Additional Detail bullets
+  const { first, rest } = collectBullets(resp, 5);
+  if(first.length){
+    $("supportList").innerHTML = first.map(b=>`<li>${superscriptRefs(b)}</li>`).join("");
+    show($("supportCard"));
+    if(rest.length){
+      const btn = $("showMoreBtn");
+      btn.style.display = "";
+      btn.onclick = () => { $("supportList").insertAdjacentHTML("beforeend", rest.map(b=>`<li>${superscriptRefs(b)}</li>`).join("")); hide(btn); };
+    } else hide($("showMoreBtn"));
+  } else hide($("supportCard"));
 
   // References
-  const refChunks = resp?.references?.chunks || [];
-  const refsCard = $("refsCard");
-  const refsEl = $("refs");
-  if(refChunks.length){
-    refsEl.innerHTML = buildReferences(refChunks);
-    show(refsCard);
-  } else { hide(refsCard); }
+  const refs = resp?.references?.chunks || [];
+  if(refs.length){
+    $("refs").innerHTML = buildReferences(refs);
+    show($("refsCard"));
+  } else hide($("refsCard"));
 
-  // Report Slides
-  const slides = takeImages(resp?.visuals, 6);
-  const slidesCard = $("slidesCard");
-  const slidesGrid = $("slidesGrid");
+  // Slides (snapshots)
+  const slides = takeImages(resp?.visuals, 5);
   if(slides.length){
-    slidesGrid.innerHTML = slides.map(src => `<img src="${src}" alt="report slide">`).join("");
-    show(slidesCard);
-  } else { hide(slidesCard); }
-
-  // Secondary Information
-  const secondary = safeArray(resp?.secondary);
-  const secondaryCard = $("secondaryCard");
-  const secondaryList = $("secondaryList");
-  if(secondary.length){
-    secondaryList.innerHTML = buildSecondary(secondary);
-    show(secondaryCard);
-  } else { hide(secondaryCard); }
+    $("slidesGrid").innerHTML = slides.map(src=>`<img src="${src}" alt="report slide snapshot">`).join("");
+    show($("slidesCard"));
+  } else hide($("slidesCard"));
 }
 
-// ------- ask flow -------
+// ------- ask -------
 async function doAsk(){
-  const q = $("q")?.value?.trim();
-  const clientSel = $("client");
-  const clientId = clientSel ? clientSel.value : "";
+  const q = $("q").value.trim();
+  const sel = $("client");
+  const clientId = sel ? sel.value : "";
   if(!q) return;
-
-  if(isAdminRole(currentUser?.role) && !clientId){
-    alert("Select a client library before asking.");
-    return;
-  }
+  if(isAdminRole(currentUser?.role) && !clientId){ alert("Select a client library before asking."); return; }
 
   try{
     const body = { userQuery: q };
     if(clientId) body.clientId = clientId;
-
     const resp = await jpost("/search", body);
 
     const refs = resp?.references?.chunks || [];
-    if(!refs.length && !resp?.answer){
-      const msg = document.createElement("div");
-      msg.className = "panel";
-      msg.innerHTML = `<div class="small">No matching passages found. Try Admin → Update Client Library to ingest files from Drive, then ask again.</div>`;
-      const container = document.querySelector(".results") || $("out");
-      if(container){ container.prepend(msg); setTimeout(()=>msg.remove(), 6000); }
+    if(!refs.length && !resp.answer){
+      const m = document.getElementById("msg");
+      m.className = "msg info";
+      m.textContent = "No matching passages found. Try Admin → Update Client Library to ingest files from Drive, then ask again.";
+      show(m);
+    } else {
+      const m = document.getElementById("msg");
+      m.className = "msg"; m.textContent = ""; hide(m);
     }
     render(resp);
-  } catch (e){
-    alert("Search failed: " + (e?.message || e));
+  } catch(e){
+    const m = document.getElementById("msg");
+    m.className = "msg error";
+    m.textContent = "Search failed: " + (e?.message || e);
+    show(m);
   }
 }
+$("ask").onclick = doAsk;
+$("q").addEventListener("keypress", (e)=>{ if(e.key==="Enter" && !$("ask").disabled) doAsk(); });
 
-// Bind handlers
-const askBtn = $("ask");
-if(askBtn) askBtn.addEventListener("click", doAsk);
-const qInput = $("q");
-if(qInput) qInput.addEventListener("keypress", (e) => {
-  if(e.key === "Enter" && (!askBtn || !askBtn.disabled)) doAsk();
-});
-const logoutBtn = $("logoutBtn");
-if(logoutBtn){
-  logoutBtn.onclick = async () => {
-    try { await jpost("/auth/logout", {}); } finally { location.href = "/login.html"; }
-  };
-}
+$("logoutBtn").onclick = async () => { await jpost("/auth/logout", {}); location.href = "/login.html"; };
