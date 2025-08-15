@@ -3,6 +3,11 @@
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
 // Fixes: defines chunkText() and uses it correctly; robust ingest + tags (month/year/report)
 // NEW: /api/client-libraries — live-from-Drive dropdown (cached), so no manual updates on deploy
+// 2025-08-15 Updates for Admin Page:
+// - Admin creation no longer requires a client folder; admins (role 'internal') auto-get access to all libraries.
+// - /admin/users/create returns the created user so the UI can update lists immediately.
+// - /admin/library-stats now returns: driveFiles, reportsCount, dataFilesCount, qnrsCount, and accounts[]
+// - Minor helpers added for Drive subfolder counting.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -161,6 +166,22 @@ async function listAllFilesUnder(folderId) {
     }
   }
   return out;
+}
+
+// Find immediate child folder named `name` (case-insensitive). Returns folder id or null.
+async function findChildFolderIdByName(parentId, name) {
+  const drive = getDrive();
+  const r = await drive.files.list({
+    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    fields: "files(id,name)",
+    pageSize: 1000,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    orderBy: "name_natural"
+  });
+  const low = String(name).toLowerCase();
+  const match = (r.data.files || []).find(f => String(f.name).toLowerCase() === low);
+  return match ? match.id : null;
 }
 
 // -------------------- Client library cache --------------------
@@ -465,26 +486,45 @@ app.get("/admin/users/list", requireSession, requireInternal, (_req,res)=>{
   res.json(usersDoc.users.map(u => ({ username:u.username, role:u.role, allowedClients:u.allowedClients })));
 });
 
-// UPDATED: allow role selection (admin -> internal)
+// UPDATED: allow role selection (admin -> internal) and return created user for instant UI updates
 app.post("/admin/users/create", requireSession, requireInternal, async (req,res)=>{
   try{
     const { username, password, confirmPassword, clientFolderId, role } = req.body || {};
-    if (!username || !password || !confirmPassword || !clientFolderId) return res.status(400).json({ error:"username, password, confirmPassword, clientFolderId required" });
+    if (!username || !password || !confirmPassword) return res.status(400).json({ error:"username, password, confirmPassword required" });
     if (password !== confirmPassword) return res.status(400).json({ error:"Passwords do not match" });
-    if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
 
     const usersDoc = readJSON(USERS_PATH, { users: [] });
     if (usersDoc.users.some(u => u.username === username)) return res.status(400).json({ error:"Username exists" });
 
-    const normalizedRole = (String(role||"client").toLowerCase() === "admin") ? "internal" : "client";
-    usersDoc.users.push({
+    const requestedRole = String(role || "client").toLowerCase();
+    const isAdmin = requestedRole === "admin";
+
+    // If admin: no client folder validation; grant global access
+    if (isAdmin) {
+      const newUser = {
+        username,
+        passwordHash: await bcrypt.hash(String(password),10),
+        role: "internal",
+        allowedClients: "*"
+      };
+      usersDoc.users.push(newUser);
+      writeJSON(USERS_PATH, usersDoc);
+      return res.json({ ok:true, user: { username, role: "internal", allowedClients: "*" } });
+    }
+
+    // Else: client user requires valid client folder
+    if (!clientFolderId) return res.status(400).json({ error:"clientFolderId required for client users" });
+    if (!(await driveFolderExists(clientFolderId))) return res.status(400).json({ error:"Unknown client folder" });
+
+    const newUser = {
       username,
       passwordHash: await bcrypt.hash(String(password),10),
-      role: normalizedRole,
-      allowedClients: normalizedRole === "internal" ? "*" : clientFolderId
-    });
+      role: "client",
+      allowedClients: clientFolderId
+    };
+    usersDoc.users.push(newUser);
     writeJSON(USERS_PATH, usersDoc);
-    res.json({ ok:true });
+    res.json({ ok:true, user: { username, role: "client", allowedClients: clientFolderId } });
   }catch{
     res.status(500).json({ error:"Failed to create user" });
   }
@@ -494,22 +534,33 @@ app.post("/admin/users/create", requireSession, requireInternal, async (req,res)
 const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
 if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
 
+// UPDATED: returns driveFiles + counts for Reports/Data/QNRs + list of accounts with access
 app.get("/admin/library-stats", requireSession, requireInternal, async (req,res)=>{
   try{
     const clientId = String(req.query.clientId || "").trim();
     if (!clientId) return res.status(400).json({ error: "clientId required" });
     if (!(await driveFolderExists(clientId))) return res.status(400).json({ error: "Unknown clientId" });
 
-    // Count current Drive files (non-folders)
+    // Count current Drive files (non-folders) under client root (recursive)
     const all = await listAllFilesUnder(clientId);
-    const driveCount = all.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
+    const driveFiles = all.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
 
-    // Count library (manifest) files if present
-    const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
-    const manifest = readJSON(manifestPath, { files: [] });
-    const libraryCount = Array.isArray(manifest.files) ? manifest.files.length : 0;
+    // Subfolder counts (recursive if subfolders exist)
+    const reportsId = await findChildFolderIdByName(clientId, "reports");
+    const dataId    = await findChildFolderIdByName(clientId, "data");
+    const qnrsId    = await findChildFolderIdByName(clientId, "qnrs");
 
-    res.json({ clientId, driveCount, libraryCount });
+    const reportsCount   = reportsId ? (await listAllFilesUnder(reportsId)).length : 0;
+    const dataFilesCount = dataId ? (await listAllFilesUnder(dataId)).length : 0;
+    const qnrsCount      = qnrsId ? (await listAllFilesUnder(qnrsId)).length : 0;
+
+    // Accounts that have access to this library (client users + all admins)
+    const usersDoc = readJSON(USERS_PATH, { users: [] });
+    const accounts = (usersDoc.users || [])
+      .filter(u => u.role === "internal" || u.allowedClients === "*" || u.allowedClients === clientId || (Array.isArray(u.allowedClients) && u.allowedClients.includes(clientId)))
+      .map(u => ({ username: u.username, role: u.role }));
+
+    res.json({ clientId, driveFiles, reportsCount, dataFilesCount, qnrsCount, accounts });
   } catch(e){
     res.status(500).json({ error:"Failed to get stats", detail:String(e?.message||e) });
   }
@@ -777,5 +828,3 @@ app.listen(PORT, ()=>{
   if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST) console.warn("[boot] Pinecone config missing");
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
 });
-
-
