@@ -66,6 +66,11 @@ body {
 .beta-badge { color:#b9b9b9; font-weight:700; letter-spacing:.08em; font-size:12px; }
 .header-actions { display:flex; align-items:center; gap:8px; }
 
+/* Make the first letter of h2 titles capitalized across the app (helps Admin page) */
+.card h2, section > h2, .panel h3, .panel h2 {
+  text-transform: capitalize;
+}
+
 /* =========================
    Buttons (white base, orange hover)
    ========================= */
