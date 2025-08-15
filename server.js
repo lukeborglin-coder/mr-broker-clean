@@ -7,7 +7,7 @@
 // - Admin creation no longer requires a client folder; admins get access to all libraries ("*").
 // - Session cookie security is controlled by SECURE_COOKIES env (false OK for local/dev).
 // - Send Cache-Control: no-store for .html/.css/.js (and for "/" + "/admin") to avoid stale UI.
-// - NEW: /api/drive-pdf (secure PDF proxy) for slide snapshots.
+// - NEW: /api/drive-pdf (secure PDF proxy) for slide snapshots. (Aug 15 fix: supports Slides export + Shared Drives)
 // - Ingest: store fileId for all vectors; for PDFs, also store page numbers in metadata.
 // - /search: optional generateSupport -> returns supportingBullets [{text, recencyEpoch, refs[]}], recency-sorted.
 // - Auto-ingest support:
@@ -460,7 +460,7 @@ async function extractPdfWithPages(file) {
   const drive = getDrive();
   // Download bytes
   const r = await drive.files.get(
-    { fileId: file.id, alt: "media" },
+    { fileId: file.id, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
     { responseType: "arraybuffer" }
   );
   const buf = Buffer.from(r.data);
@@ -1340,24 +1340,61 @@ app.get(
 );
 
 // -------------------- Secure PDF proxy (for slide images) --------------------
+// FIX (2025-08-15): Works for PDFs AND Google Slides/Docs in Shared Drives by exporting to PDF when needed.
 app.get("/api/drive-pdf", requireSession, async (req, res) => {
   try {
     const fileId = String(req.query.fileId || "").trim();
     if (!fileId) return res.status(400).json({ error: "fileId required" });
 
     const drive = getDrive();
-    const r = await drive.files.get(
-      { fileId, alt: "media" },
-      { responseType: "stream" }
-    );
 
-    res.setHeader("Content-Type", "application/pdf");
+    // Get mimeType to decide whether to stream or export
+    let meta;
+    try {
+      meta = await drive.files.get({
+        fileId,
+        fields: "id,name,mimeType",
+        supportsAllDrives: true,
+      });
+    } catch (e) {
+      console.error("[drive-pdf] meta error:", e?.message || e);
+      return res.status(404).json({ error: "File not found or inaccessible" });
+    }
+
+    const mt = String(meta?.data?.mimeType || "");
     res.setHeader("Cache-Control", "no-store");
-    r.data.on("error", (err) => {
-      console.error("[drive-pdf] stream error:", err);
-      if (!res.headersSent) res.status(500).end("stream error");
-    });
-    r.data.pipe(res);
+    res.setHeader("Content-Type", "application/pdf");
+
+    if (mt === "application/pdf") {
+      const r = await drive.files.get(
+        { fileId, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
+        { responseType: "stream" }
+      );
+      r.data.on("error", (err) => {
+        console.error("[drive-pdf] stream error:", err);
+        if (!res.headersSent) res.status(500).end("stream error");
+      });
+      return void r.data.pipe(res);
+    }
+
+    if (mt.startsWith("application/vnd.google-apps.")) {
+      // Export native Google files to PDF (Slides, Docs, Sheets)
+      const r = await drive.files.export(
+        { fileId, mimeType: "application/pdf" },
+        { responseType: "stream" }
+      );
+      r.data.on("error", (err) => {
+        console.error("[drive-pdf] export stream error:", err);
+        if (!res.headersSent) res.status(500).end("stream error");
+      });
+      return void r.data.pipe(res);
+    }
+
+    // For non-Google, non-PDF types (e.g., PPTX), we currently don't convert server-side.
+    // Returning 415 tells the client to skip rendering this file.
+    return res
+      .status(415)
+      .json({ error: `Unsupported mimeType for direct PDF rendering: ${mt}` });
   } catch (e) {
     console.error("[drive-pdf] failed:", e);
     res.status(500).json({ error: "Failed to fetch PDF" });
