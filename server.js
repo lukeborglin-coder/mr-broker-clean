@@ -21,6 +21,7 @@ import session from "express-session";
 import bcrypt from "bcryptjs";
 import OpenAI from "openai";
 import { google } from "googleapis";
+import crypto from "node:crypto";
 
 // -------------------- Environment --------------------
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
@@ -679,6 +680,188 @@ app.post(
 const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
 if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
 
+// ---- Drive change signature helpers ----
+function calcSignatureFromFiles(files) {
+  const basis = (files || [])
+    .filter(f => f && f.id && f.modifiedTime)
+    .map(f => `${f.id}:${f.modifiedTime}`)
+    .sort()
+    .join("|");
+  return crypto.createHash("sha1").update(basis).digest("hex");
+}
+function readManifestDoc(clientId) {
+  const p = path.join(MANIFEST_DIR, `${clientId}.json`);
+  return readJSON(p, null);
+}
+function writeManifestDoc(clientId, payload) {
+  const p = path.join(MANIFEST_DIR, `${clientId}.json`);
+  writeJSON(p, payload);
+}
+// Compare live Drive signature vs manifest
+async function isLibraryStale(clientId) {
+  const files = await listAllFilesUnder(clientId);
+  const liveSig = calcSignatureFromFiles(files);
+  const liveCount = files.length;
+  const man = readManifestDoc(clientId) || {};
+  const stale = !man || man.driveSignature !== liveSig;
+  return { stale, liveSig, liveCount, files };
+}
+
+// Ingest a single client's library; returns same shape your route returned
+async function ingestClientLibrary(clientId) {
+  const files = await listAllFilesUnder(clientId);
+  const supported = new Set([
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.presentation",
+    "application/vnd.google-apps.spreadsheet",
+    "application/pdf",
+  ]);
+
+  const ingested = [];
+  const errors = [];
+  let upserted = 0;
+
+  for (const f of files) {
+    if (!supported.has(f.mimeType)) continue;
+
+    let text = "";
+    let pages = null; // [{page,text}] for PDFs
+    let status = "complete";
+    try {
+      if (f.mimeType === "application/pdf") {
+        try {
+          const resPdf = await extractPdfWithPages(f);
+          text = resPdf.text;
+          pages = resPdf.pages || null;
+        } catch (e) {
+          status = String(e?.message || e);
+        }
+      } else {
+        const t = await extractTextFromFile(f);
+        text = t.text || "";
+        if (!text?.trim()) status = "no text";
+      }
+    } catch (e) {
+      status = String(e?.message || e);
+    }
+
+    const tags = latestDateFrom(`${f.name}\n${text || ""}`, f.modifiedTime);
+    const report = inferReportTag(f.name, text);
+    const monthTag = tags.month || "";
+    const yearTag = tags.year || "";
+    const recencyEpoch = tags.epoch || 0;
+
+    let chunkCount = 0;
+    try {
+      if (status === "complete" && text?.trim()) {
+        let vectors = [];
+
+        if (f.mimeType === "application/pdf" && Array.isArray(pages) && pages.length) {
+          for (const p of pages) {
+            if (!p.text?.trim()) continue;
+            const parts = chunkText(p.text, 1500);
+            const embs = await embedTexts(parts);
+            const v = embs.map((vec, i) => ({
+              id: `${sanitize(clientId)}:${sanitize(f.id)}:p${p.page}:${i}`,
+              values: vec,
+              metadata: {
+                clientId,
+                fileId: f.id,
+                fileName: f.name,
+                fileUrl: f.webViewLink || "",
+                study: f.name,
+                date: f.modifiedTime || "",
+                text: parts[i].slice(0, 4000),
+                monthTag,
+                yearTag,
+                reportTag: report,
+                recencyEpoch,
+                page: p.page,
+              },
+            }));
+            vectors = vectors.concat(v);
+          }
+        } else {
+          const parts = chunkText(text, 1800);
+          const embs = await embedTexts(parts);
+          vectors = embs.map((vec, i) => ({
+            id: `${sanitize(clientId)}:${sanitize(f.id)}:${i}`,
+            values: vec,
+            metadata: {
+              clientId,
+              fileId: f.id,
+              fileName: f.name,
+              fileUrl: f.webViewLink || "",
+              study: f.name,
+              date: f.modifiedTime || "",
+              text: parts[i].slice(0, 4000),
+              monthTag,
+              yearTag,
+              reportTag: report,
+              recencyEpoch,
+            },
+          }));
+        }
+
+        if (vectors.length) {
+          await pineconeUpsert(vectors, clientId);
+          upserted += vectors.length;
+          chunkCount = vectors.length;
+        }
+      } else if (status !== "complete") {
+        errors.push({ file: f.name, msg: status });
+      }
+    } catch (e) {
+      errors.push({ file: f.name, msg: String(e?.message || e) });
+    }
+
+    ingested.push({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      chunks: chunkCount,
+      status,
+      monthTag,
+      yearTag,
+      reportTag: report,
+    });
+  }
+
+  let namespaceVectorCount;
+  const stats = await pineconeDescribe();
+  try {
+    namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount;
+  } catch {}
+
+  // Manifest write (NOW includes driveSignature + driveCount)
+  const distinct = Array.from(
+    new Set(ingested.filter((x) => x.status === "complete").map((x) => x.name))
+  );
+  const signature = calcSignatureFromFiles(files);
+  const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
+  writeJSON(manifestPath, {
+    clientId,
+    updatedAt: new Date().toISOString(),
+    driveSignature: signature,
+    driveCount: files.length,
+    files: distinct,
+  });
+
+  return {
+    ok: true,
+    summary: {
+      filesSeen: files.length,
+      ingestedCount: ingested.filter((x) => x.status === "complete").length,
+      skippedCount: files.filter((f) => !supported.has(f.mimeType)).length,
+      errorsCount: errors.length,
+      upserted,
+      namespaceVectorCount,
+    },
+    ingested,
+    errors,
+  };
+}
+
 app.get(
   "/admin/library-stats",
   requireSession,
@@ -718,6 +901,62 @@ app.post(
   async (req, res) => {
     try {
       const clientId = req.body?.clientId || req.session.activeClientId;
+      if (!clientId) return res.status(400).json({ error: "clientId required" });
+      if (!(await driveFolderExists(clientId)))
+        return res.status(400).json({ error: "Unknown clientId" });
+
+      const result = await ingestClientLibrary(clientId);
+      res.json(result);
+    } catch (e) {
+      res
+        .status(500)
+        .json({ error: "Failed to ingest", detail: String(e?.message || e) });
+    }
+  }
+);
+// Token-protected sync endpoint for Render Cron
+app.post("/admin/ingest/sync", async (req, res) => {
+  try {
+    const token = req.get("x-auth-token");
+    if (!token || token !== AUTH_TOKEN) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { all, clientId, staleOnly = true, maxClients = 50 } = req.body || {};
+    let clients = [];
+
+    if (clientId) {
+      if (!(await driveFolderExists(clientId)))
+        return res.status(400).json({ error: "Unknown clientId" });
+      clients = [{ id: clientId }];
+    } else if (all) {
+      clients = (await getClientLibrariesCached(true)).slice(0, Number(maxClients) || 50);
+    } else {
+      return res.status(400).json({ error: "Provide clientId or set all:true" });
+    }
+
+    const results = [];
+    for (const c of clients) {
+      const id = c.id || c;
+      try {
+        const check = await isLibraryStale(id);
+        if (staleOnly && !check.stale) {
+          results.push({ clientId: id, status: "skipped", reason: "up-to-date" });
+          continue;
+        }
+        const r = await ingestClientLibrary(id);
+        results.push({ clientId: id, status: "ingested", summary: r.summary });
+      } catch (e) {
+        results.push({ clientId: id, status: "error", error: String(e?.message || e) });
+      }
+    }
+
+    res.json({ ok: true, count: results.length, results });
+  } catch (e) {
+    res.status(500).json({ error: "sync failed", detail: String(e?.message || e) });
+  }
+});
+
       if (!clientId) return res.status(400).json({ error: "clientId required" });
       if (!(await driveFolderExists(clientId)))
         return res.status(400).json({ error: "Unknown clientId" });
@@ -1188,3 +1427,4 @@ app.listen(PORT, () => {
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
+
