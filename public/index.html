@@ -238,7 +238,15 @@ function renderSupportList(limit = 5){
 
   ul.innerHTML = "";
   const slice = supportCollapsed ? supportAllBullets.slice(0, limit) : supportAllBullets;
-  slice.forEach(b => { const li = document.createElement("li"); li.textContent = b; ul.appendChild(li); });
+slice.forEach(b => {
+  const li = document.createElement("li");
+  if (window.App?.formatRefsToSup) {
+    li.innerHTML = window.App.formatRefsToSup(b);
+  } else {
+    li.textContent = b;
+  }
+  ul.appendChild(li);
+});
 
   if (supportAllBullets.length > limit) {
     btn.style.display = "inline";
