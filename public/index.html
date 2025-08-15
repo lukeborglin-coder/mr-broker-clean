@@ -6,87 +6,80 @@
   <title>COGgpt — Research Q&A</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-    :root {
+    :root{
       --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2;
       --soft:#fff7ed; --soft-border:#ffead6; --accent-left:#ea580c;
     }
     *{box-sizing:border-box}
-    body { margin:0; background:#fff; color:var(--ink);
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
 
-    header { position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid var(--line); }
-    .bar { max-width:1080px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
+    .bar{max-width:1080px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 
-    /* Brand: one line, no space, COG darker & larger, gpt orange, (BETA) smaller */
-    .brand { display:flex; align-items:baseline; gap:6px; }
-    .brand .cog { font-weight:800; color:#2b2f36; font-size:24px; letter-spacing:.1px; }
-    .brand .gpt { font-weight:400; color:var(--brand); font-size:24px; margin-left:-2px; }
-    .brand .beta { font-size:.78rem; color:#9aa2ad; font-weight:700; letter-spacing:.06em; }
+    /* Brand one line: COG dark, gpt orange, (BETA) small */
+    .brand{display:flex;align-items:baseline;gap:6px}
+    .brand .cog{font-weight:800;color:#2b2f36;font-size:24px;letter-spacing:.1px}
+    .brand .gpt{font-weight:400;color:var(--brand);font-size:24px;margin-left:-2px}
+    .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
 
-    /* Right nav: buttons row on top, username under it (smaller) */
-    .nav { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
-    .nav-row { display:flex; align-items:center; gap:10px; }
-    #who { color:var(--muted); font-size:.85rem; }
+    /* Right header: username LEFT of buttons (same row) */
+    .nav{display:flex;align-items:center;gap:10px}
+    #who{color:var(--muted);font-size:.85rem}
 
-    .btn { display:inline-flex; align-items:center; justify-content:center; border-radius:10px; font-weight:700; cursor:pointer; text-decoration:none; }
-    .btn.small { padding:10px 14px; font-size:.92rem; line-height:1; height:40px; }
-    .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
-    .btn.ghost:hover { background:var(--brand); border-color:var(--brand); color:#fff; }
-    .btn.primary { background:var(--brand); color:#fff; border:0; padding:16px 22px; border-radius:18px; }
+    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none}
+    .btn.small{padding:10px 14px;font-size:.92rem;line-height:1;height:40px}
+    .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
+    .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 22px;border-radius:18px}
 
-    main { max-width:960px; margin: 56px auto; padding: 0 16px; }
-    .hero { text-align:center; margin: 8px 0 8px; }
-    .hero h1 { font-size:34px; margin:0 0 6px 0; }
-    .hero h1 .dot { color:var(--brand); } /* orange period */
-    .hero p { margin:0; color:var(--muted); }
+    main{max-width:960px;margin:56px auto;padding:0 16px}
+    .hero{text-align:center;margin:8px 0 8px}
+    .hero h1{font-size:34px;margin:0 0 6px}
+    .hero h1 .dot{color:var(--brand)} /* orange period */
+    .hero p{margin:0;color:var(--muted)}
 
-    /* Ask row + lighter prompt */
-    .askbox { display:grid; grid-template-columns: 1fr 120px; gap:12px; width:100%; margin:18px auto 0; }
-    .askbox input {
-      padding:18px 20px; font-size:1.05rem; border-radius:18px;
-      border:1px solid var(--line); background:#f2f2f2; color:var(--ink);
-    }
-    .askbox .btn.primary { background:var(--brand); color:#fff; }
+    /* Ask row + very light prompt */
+    .askbox{display:grid;grid-template-columns:1fr 120px;gap:12px;width:100%;margin:18px auto 0}
+    .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
 
-    /* Client library dropdown under prompt */
-    .client-under { margin:10px 0 0; display:flex; justify-content:center; }
-    .client-under select {
-      color:var(--muted); border:1px solid var(--line); background:#fff;
-      border-radius:12px; padding:10px 12px; min-width:360px; font-size:0.95rem;
+    /* Client Library dropdown right under prompt; full width like prompt */
+    .client-under{margin:10px 0 0}
+    .client-under select{
+      width:100%; max-width:9999px; /* stretch */
+      text-align:center; color:var(--muted);
+      border:1px solid var(--line); background:#fff; border-radius:12px; padding:12px 14px; font-size:.95rem;
     }
 
-    .panel { margin-top:22px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; }
-    .panel h3 { margin:0 0 8px 0; font-size:0.95rem; color:var(--muted); font-weight:600; }
+    .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
+    .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
 
     /* Answer panel with dark orange left accent */
-    .answer-panel { background:var(--soft); border-color:var(--soft-border); position:relative; }
-    .answer-panel::before {
-      content:""; position:absolute; left:0; top:0; bottom:0; width:6px; border-radius:14px 0 0 14px; background: var(--accent-left);
-    }
-    .answer-body { line-height:1.55; font-size:1.02rem; }
-    .answer-head { font-weight:800; margin:0 0 6px 0; }
-    .answer-bullets { margin:8px 0 0 0; padding-left:18px; }
+    .answer-panel{background:var(--soft);border-color:var(--soft-border);position:relative}
+    .answer-panel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;border-radius:14px 0 0 14px;background:var(--accent-left)}
+    .answer-body{line-height:1.55;font-size:1.02rem}
+    .answer-head{font-weight:800;margin:0 0 6px}
+    .answer-bullets{margin:8px 0 0;padding-left:18px}
 
-    /* References list: single ordered numbers; tidy spacing */
-    .refs-ol { padding-left: 20px; margin: 0; }
-    .refs-ol li { margin: 6px 0; }
-    .ref-link { margin-left:6px; }
+    /* References tidy spacing */
+    .refs-ol{padding-left:20px;margin:0}
+    .refs-ol li{margin:6px 0}
+    .ref-link{margin-left:6px}
 
     /* Additional Support */
-    #supportCard ul { margin: 0; padding-left: 18px; }
-    #showMoreBtn { margin-top:8px; }
+    #supportCard ul{margin:0;padding-left:18px}
+    #showMoreBtn{margin-top:8px}
 
-    /* Supporting Quotes */
-    #quotesCard blockquote { margin:0 0 10px 0; font-style: italic; }
-    #quotesCard .tag { color:var(--muted); }
+    /* Quotes */
+    #quotesCard blockquote{margin:0 0 10px 0;font-style:italic}
+    #quotesCard .tag{color:var(--muted)}
 
-    /* Slides grid */
-    #slidesGrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; }
-    #slidesGrid img { width:100%; border-radius:10px; border:1px solid var(--line); }
+    /* Slides */
+    #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line)}
 
-    .msg { margin-top:14px; border:1px solid var(--line); background:#fafbfd; color:#2b2f36; border-radius:10px; padding:10px 12px; display:none; }
-    .msg.error { background:#fff5f5; color:#8b0000; display:block; }
-    .msg.info { display:block; }
+    .msg{margin-top:14px;border:1px solid var(--line);background:#fafbfd;color:#2b2f36;border-radius:10px;padding:10px 12px;display:none}
+    .msg.error{background:#fff5f5;color:#8b0000;display:block}
+    .msg.info{display:block}
   </style>
 </head>
 <body>
@@ -96,11 +89,9 @@
         <span class="cog">COG</span><span class="gpt">gpt</span><span class="beta">(BETA)</span>
       </div>
       <div class="nav">
-        <div class="nav-row">
-          <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
-          <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
-        </div>
         <div id="who"></div>
+        <a id="adminLink" class="btn small ghost" href="/admin" style="display:none;">Admin</a>
+        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
       </div>
     </div>
   </header>
@@ -129,26 +120,22 @@
         <div id="answer" class="answer-body"></div>
       </div>
 
-      <!-- Additional Support (bullets + show more) -->
       <div id="supportCard" class="panel" style="display:none;">
         <h3>Additional Support</h3>
         <ul id="supportList"></ul>
         <button id="showMoreBtn" class="btn small ghost" style="display:none;">Show more</button>
       </div>
 
-      <!-- Supporting Quotes -->
       <div id="quotesCard" class="panel" style="display:none;">
         <h3>Supporting Quotes</h3>
         <div id="quotes"></div>
       </div>
 
-      <!-- Supporting Slides -->
       <div id="slidesCard" class="panel" style="display:none;">
         <h3>Supporting Slides</h3>
         <div id="slidesGrid"></div>
       </div>
 
-      <!-- References -->
       <div id="refsCard" class="panel" style="display:none;">
         <h3>References</h3>
         <ol id="refs" class="refs-ol"></ol>
