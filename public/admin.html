@@ -3,299 +3,336 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Admin — COGgpt</title>
+  <title>COGgpt — Admin</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-    :root { --line:#e9edf2; --muted:#5f6570; --brand:#ff7a00; --ink:#111; --good:#0a7c2f; --bad:#a50e0e; }
-    body { background:#fff; color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; }
-    header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); }
-    .brand { display:flex; align-items:baseline; gap:6px; font-weight:800; letter-spacing:.1px; }
-    .beta { font-size:.9rem; color:#9aa2ad; font-weight:700; letter-spacing:.06em; }
-    main { max-width:1080px; margin:20px auto; padding:0 16px; display:grid; grid-template-columns:1.6fr 1fr; gap:20px; }
-    section { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px; }
-    h3 { margin:0 0 10px; }
-    label { display:block; font-size:.85rem; color:var(--muted); margin:8px 0 6px; }
-    input, select { width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:#fff; color:#222; outline:none; }
-    .btn, button, a.btn { padding:10px 14px; border-radius:10px; background:#fff; color:#111; border:1px solid var(--line); font-weight:700; cursor:pointer; transition:all .12s ease; text-decoration:none; display:inline-flex; align-items:center; }
-    .btn:hover, button:hover, a.btn:hover { background:var(--brand); border-color:var(--brand); color:#fff; transform: translateY(-1px); }
-    .btn.sm { padding:8px 12px; border-radius:10px; font-size:.9rem; }
-    .rows { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
-    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.95rem; }
-    th, td { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top; }
-    th { color:var(--muted); font-weight:600; }
-    .muted { color:var(--muted); }
-    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; border:1px solid var(--line); }
-    .ok { background:#ecfdf5; border-color:#bbf7d0; }
-    .err { background:#fee2e2; border-color:#fecaca; }
-    .hidden { display:none; }
-    .status-good { color: var(--good); font-style: italic; }
-    .status-bad { color: var(--bad); font-style: italic; }
-    .smalltext { font-size: .9rem; color: var(--muted); }
+    :root{
+      --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2;
+      --soft:#fff7ed; --soft-border:#ffead6;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
+    .bar{max-width:1080px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .brand{display:flex;align-items:baseline;gap:6px}
+    .brand .cog{font-weight:800;color:#2b2f36;font-size:24px;letter-spacing:.1px}
+    .brand .gpt{font-weight:400;color:var(--brand);font-size:24px;margin-left:-2px}
+    .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
+    .nav{display:flex;align-items:center;gap:10px}
+    #who{color:var(--muted);font-size:.85rem}
+    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none}
+    .btn.small{padding:10px 14px;font-size:.92rem;line-height:1;height:40px}
+    .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
+    .btn.primary{background:var(--brand);color:#fff;border:0;padding:12px 18px;border-radius:12px}
+
+    main{max-width:960px;margin:28px auto;padding:0 16px;display:grid;gap:18px}
+    .card{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
+    .card h2{margin:0 0 8px;font-size:1.1rem}
+    .muted{color:var(--muted)}
+
+    /* Create user section: button expands form */
+    .collapser{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .hidden{display:none}
+
+    /* Tree list */
+    .tree{list-style:none;padding-left:0;margin:0}
+    .tree details{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:8px 10px}
+    .tree summary{cursor:pointer;font-weight:600}
+    .tree ul{list-style:disc;padding-left:20px;margin:6px 0 0}
+    .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:.8rem;color:var(--muted);margin-left:8px}
+    .info{border:1px solid var(--line);background:#fafbfd;border-radius:10px;padding:10px 12px}
+    .soft{background:var(--soft);border-color:var(--soft-border)}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    select, input{border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:.95rem}
+    label{font-size:.9rem;color:var(--muted)}
   </style>
 </head>
 <body>
   <header>
-  <div class="brand" style="display:flex; align-items:baseline; gap:6px; font-weight:800; letter-spacing:.1px;">
-    <span class="cog" style="font-weight:800;">COG</span>
-    <span class="gpt" style="font-weight:400; color:#ff7a00;">gpt</span>
-    <span class="beta" style="font-size:.9rem; color:#9aa2ad; font-weight:700; letter-spacing:.06em; margin-left:6px;">(BETA)</span>
-  </div>
-  <div class="rows" style="display:flex; gap:8px; align-items:center;">
-    <a href="/" class="btn" id="backBtn">Back</a>
-    <button id="logoutBtn" class="btn">Sign out</button>
-  </div>
-</header>
+    <div class="bar">
+      <div class="brand">
+        <span class="cog">COG</span><span class="gpt">gpt</span><span class="beta">(BETA)</span>
+      </div>
+      <div class="nav">
+        <div id="who"></div>
+        <a class="btn small ghost" href="/">Home</a>
+        <button id="logoutBtn" class="btn small ghost" title="Sign out">Sign out</button>
+      </div>
+    </div>
+  </header>
 
   <main>
-    <!-- LEFT: Update Client Library -->
-    <section>
-      <h3>Update Client Library</h3>
-      <div class="smalltext">Crawls the Drive folder and ingests Google Docs, Slides, Sheets, and PDFs.</div>
-
-      <label style="margin-top:10px;">Client Library</label>
-      <select id="ingest_client">
-        <option value="" selected disabled>Select a client</option>
-      </select>
-
-      <div id="libQuick" class="muted" style="margin-top:10px; display:none;">
-        <div><strong>Files in Library:</strong> <span id="libCount">—</span></div>
-        <div id="libStatus" class="status-good hidden"></div>
+    <!-- Create Client User -->
+    <section class="card" id="createUserCard">
+      <div class="collapser">
+        <h2>Create client user</h2>
+        <button id="toggleCreate" class="btn small ghost">Open</button>
       </div>
-
-      <div style="margin-top:10px;">
-        <button id="ingestBtn" class="btn">Update Client Library</button>
+      <div id="createForm" class="hidden" style="margin-top:10px;">
+        <div class="row">
+          <div style="flex:1;min-width:220px;">
+            <label>Username</label>
+            <input id="cu_username" autocomplete="off" placeholder="client_username"/>
+          </div>
+          <div style="flex:1;min-width:220px;">
+            <label>Password</label>
+            <input id="cu_password" type="password" autocomplete="new-password" placeholder="Set password"/>
+          </div>
+          <div style="flex:1;min-width:220px;">
+            <label>Confirm password</label>
+            <input id="cu_confirm" type="password" autocomplete="new-password" placeholder="Confirm password"/>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div style="flex:1;min-width:220px;">
+            <label>Role</label>
+            <select id="cu_role">
+              <option value="client" selected>Client</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div style="flex:2;min-width:260px;">
+            <label>Assign to client library</label>
+            <select id="cu_client">
+              <option value="">Select a client library</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <button id="createBtn" class="btn primary">Create user</button>
+          <span id="createMsg" class="muted" style="margin-left:10px;"></span>
+        </div>
       </div>
-
-      <div id="ingest_summary" style="margin-top:14px;"></div>
-
-      <table id="ingest_table" style="display:none;">
-        <thead>
-          <tr>
-            <th style="width:34%;">File</th>
-            <th style="width:10%;">Type</th>
-            <th style="width:36%;">Status</th>
-            <th style="width:7%;">Month</th>
-            <th style="width:7%;">Year</th>
-            <th style="width:6%;">Report</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
     </section>
 
-    <!-- RIGHT: Available Client Libraries (moved above Accounts) -->
-    <section>
-      <h3 style="margin:0;">Available Client Libraries</h3>
-      <div class="muted">Folders under your secure Drive root.</div>
-      <table id="clientsTable" style="margin-top:10px;"><tbody></tbody></table>
+    <!-- Available Client Libraries (tree browser) -->
+    <section class="card">
+      <h2>Available client libraries</h2>
+      <div class="info soft muted" style="margin-bottom:8px;">Click a library to view its folders, then click a folder to view file names.</div>
+      <ul id="libsTree" class="tree"></ul>
+      <div id="libsMsg" class="muted"></div>
     </section>
 
-    <!-- RIGHT: Existing Accounts with Add Account -->
-    <section>
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-        <h3 style="margin:0;">Existing Accounts</h3>
-        <button id="addAccountBtn" class="btn sm">Add Account</button>
-      </div>
-
-      <div id="addForm" class="hidden" style="margin-top:10px;">
-        <label>Username</label>
-        <input id="u_username" placeholder="e.g., client.user@company.com" autocomplete="new-username"/>
-        <label>Password</label>
-        <input id="u_password" type="password" placeholder="Set a password" autocomplete="new-password"/>
-        <label>Confirm Password</label>
-        <input id="u_confirm" type="password" placeholder="Re-enter password" autocomplete="new-password"/>
-
-        <label>Role</label>
-        <select id="u_role">
-          <option value="" selected disabled>Select role</option>
-          <option value="admin">Admin</option>
-          <option value="client">Client</option>
+    <!-- Library stats (kept) -->
+    <section class="card">
+      <h2>Library stats</h2>
+      <div class="row">
+        <select id="statsClient">
+          <option value="">Select a client library</option>
         </select>
-
-        <div id="u_client_wrap" class="hidden">
-          <label>Client Library</label>
-          <select id="u_client"></select>
-        </div>
-
-        <div style="margin-top:10px; display:flex; gap:8px;">
-          <button id="createUserBtn" class="btn">Create Account</button>
-          <button id="cancelUserBtn" class="btn">Cancel</button>
-        </div>
+        <button id="statsBtn" class="btn small ghost">Refresh</button>
       </div>
+      <div id="statsOut" class="info" style="margin-top:10px;"></div>
+    </section>
 
-      <table id="usersTable" style="margin-top:12px;"><tbody></tbody></table>
+    <!-- Ingest -->
+    <section class="card">
+      <h2>Ingest / re-ingest a client library</h2>
+      <div class="row">
+        <select id="ingestClient">
+          <option value="">Select a client library</option>
+        </select>
+        <button id="ingestBtn" class="btn small ghost">Start ingest</button>
+      </div>
+      <div id="ingestOut" class="info" style="margin-top:10px;"></div>
     </section>
   </main>
 
 <script>
-async function jget(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-async function jpost(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-
-function setStatus(el, text, good){
-  el.className = good ? "status-good" : "status-bad";
-  el.textContent = text;
-  el.classList.remove("hidden");
-}
-
-async function load() {
-  // Users
-  const users = await jget('/admin/users/list');
-  document.querySelector('#usersTable tbody').innerHTML =
-    '<tr><th>Username</th><th>Role</th><th>Client Library</th></tr>' +
-    users.map(u => `<tr><td>${u.username}</td><td>${u.role === 'internal' ? 'admin' : u.role}</td><td>${Array.isArray(u.allowedClients)?u.allowedClients.join(', '):u.allowedClients||''}</td></tr>`).join('');
-
-  // Clients
-  const clients = await jget('/clients/drive-folders');
-
-  // Fill selects (with placeholder on ingest_client)
-  const ingestSel = document.getElementById('ingest_client');
-  ingestSel.innerHTML = '<option value="" selected disabled>Select a client</option>' +
-    clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-
-  const userClientSel = document.getElementById('u_client');
-  userClientSel.innerHTML = '<option value="" selected disabled>Select a client</option>' +
-    clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-
-  // Populate libraries table with counts + status
-  const tbody = document.querySelector('#clientsTable tbody');
-  tbody.innerHTML = '<tr><th>Name</th><th>Files in Library</th><th>Status</th></tr>';
-
-  for (const c of clients) {
-    let filesCount = '—', status = '—', statusClass = '';
-    try {
-      const s = await jget(`/admin/library-stats?clientId=${encodeURIComponent(c.id)}`);
-      filesCount = typeof s.libraryCount === 'number' ? s.libraryCount : '—';
-      if (typeof s.driveCount === 'number' && typeof s.libraryCount === 'number') {
-        const upToDate = s.driveCount <= s.libraryCount;
-        status = upToDate ? 'Files up to date.' : 'Files ready to be uploaded';
-        statusClass = upToDate ? 'status-good' : 'status-bad';
-      }
-    } catch {}
-    tbody.innerHTML += `<tr>
-      <td>${c.name}</td>
-      <td>${filesCount}</td>
-      <td class="${statusClass}"><em>${status}</em></td>
-    </tr>`;
+(async function init(){
+  // whoami & logout
+  const meRes = await fetch("/me");
+  if (meRes.ok) {
+    const me = await meRes.json();
+    document.getElementById("who").textContent = `${me.user.username} · ${me.user.role}`;
   }
-}
+  document.getElementById("logoutBtn").onclick = async ()=>{ await fetch("/auth/logout",{method:"POST"}); location.href="/login.html"; };
 
-// Add Account handlers
-document.getElementById('addAccountBtn').onclick = () => {
-  document.getElementById('addForm').classList.remove('hidden');
-  // reset role & hide client library picker until role chosen
-  const roleSel = document.getElementById('u_role');
-  roleSel.value = "";
-  document.getElementById('u_client_wrap').classList.add('hidden');
-};
+  // collapse create user
+  const toggle = document.getElementById("toggleCreate");
+  const form = document.getElementById("createForm");
+  toggle.onclick = ()=> {
+    const open = !form.classList.contains("hidden");
+    form.classList.toggle("hidden", open);
+    toggle.textContent = open ? "Open" : "Close";
+  };
 
-document.getElementById('u_role').addEventListener('change', (e) => {
-  const val = e.target.value;
-  const wrap = document.getElementById('u_client_wrap');
-  if (val === 'client') wrap.classList.remove('hidden');
-  else wrap.classList.add('hidden');
-});
-
-document.getElementById('cancelUserBtn').onclick = () => {
-  document.getElementById('addForm').classList.add('hidden');
-};
-
-document.getElementById('createUserBtn').onclick = async () => {
-  const username = document.getElementById('u_username').value.trim();
-  const password = document.getElementById('u_password').value;
-  const confirmPassword = document.getElementById('u_confirm').value;
-  const role = document.getElementById('u_role').value; // '' | 'admin' | 'client'
-  const clientFolderId = document.getElementById('u_client').value;
-
-  if (!role) { alert('Select a role'); return; }
-  if (role === 'client' && !clientFolderId) { alert('Select a client library'); return; }
-
-  try {
-    await jpost('/admin/users/create', { username, password, confirmPassword, clientFolderId, role });
-    document.getElementById('addForm').classList.add('hidden');
-    await load(); alert('Account created');
-  } catch (e) { alert('Failed: ' + e); }
-};
-
-// Ingest
-document.getElementById('ingestBtn').onclick = async () => {
-  const clientId = document.getElementById('ingest_client').value;
-  const summary = document.getElementById('ingest_summary');
-  const table = document.getElementById('ingest_table');
-  const tbody = table.querySelector('tbody');
-  const libQuick = document.getElementById('libQuick');
-  const libCountEl = document.getElementById('libCount');
-  const libStatusEl = document.getElementById('libStatus');
-
-  if (!clientId) { alert('Select a client'); return; }
-
-  summary.textContent = 'Ingesting… this can take several minutes.';
-  table.style.display = 'none';
-  tbody.innerHTML = '';
-
-  try {
-    const res = await jpost('/admin/ingest-client', { clientId });
-    const s = res.summary || {};
-    summary.innerHTML = `<strong>Done.</strong> Files scanned: ${s.filesSeen || 0}. Ingested: ${s.ingestedCount || 0}. Skipped: ${s.skippedCount || 0}. Errors: ${s.errorsCount || 0}. Total chunks upserted: ${s.upserted || 0}. ${typeof s.namespaceVectorCount==='number' ? 'Namespace vectors: ' + s.namespaceVectorCount + '.' : ''}`;
-
-    const rows = (res.ingested || []).map(f => `
-      <tr>
-        <td>${f.name}</td>
-        <td class="muted">${f.mimeType}</td>
-        <td>${f.status === 'complete' ? '<span class="pill ok">complete</span>' : '<span class="pill err">'+(f.status||'error')+'</span>'}</td>
-        <td>${f.monthTag || '—'}</td>
-        <td>${f.yearTag || '—'}</td>
-        <td>${f.reportTag || '—'}</td>
-      </tr>`).join('');
-    tbody.innerHTML = rows;
-    table.style.display = 'table';
-
-    // Refresh quick snapshot after ingest
-    try {
-      const stats = await jget(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
-      libCountEl.textContent = (typeof stats.libraryCount === 'number') ? stats.libraryCount : '—';
-      if (typeof stats.driveCount === 'number' && typeof stats.libraryCount === 'number') {
-        const upToDate = stats.driveCount <= stats.libraryCount;
-        setStatus(libStatusEl, upToDate ? 'Files up to date.' : 'Files ready to be uploaded', upToDate);
-      }
-      libQuick.style.display = 'block';
-    } catch {}
-  } catch (e) {
-    summary.innerHTML = '<span class="pill err">Failed</span> ' + String(e);
+  // load libraries (for dropdowns & tree)
+  const libs = await (await fetch("/api/client-libraries")).json();
+  const selects = ["cu_client","statsClient","ingestClient"].map(id=>document.getElementById(id));
+  for (const s of selects) {
+    s.innerHTML = '<option value="">Select a client library</option>';
+    libs.forEach(l=>{
+      const o=document.createElement("option");
+      o.value=l.id; o.textContent=l.name;
+      s.appendChild(o);
+    });
   }
-};
 
-// Snapshot when selecting client
-document.getElementById('ingest_client').addEventListener('change', async (e) => {
-  const clientId = e.target.value;
-  const libQuick = document.getElementById('libQuick');
-  const libCountEl = document.getElementById('libCount');
-  const libStatusEl = document.getElementById('libStatus');
-  libQuick.style.display = 'none';
-  libCountEl.textContent = '—';
-  libStatusEl.textContent = '';
-  libStatusEl.classList.add('hidden');
-
-  if (!clientId) return;
-  try {
-    const stats = await jget(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
-    libCountEl.textContent = (typeof stats.libraryCount === 'number') ? stats.libraryCount : '—';
-    if (typeof stats.driveCount === 'number' && typeof stats.libraryCount === 'number') {
-      const upToDate = stats.driveCount <= stats.libraryCount;
-      setStatus(libStatusEl, upToDate ? 'Files up to date.' : 'Files ready to be uploaded', upToDate);
+  // create user
+  document.getElementById("createBtn").onclick = async ()=>{
+    const username = document.getElementById("cu_username").value.trim();
+    const password = document.getElementById("cu_password").value;
+    const confirmPassword = document.getElementById("cu_confirm").value;
+    const clientFolderId = document.getElementById("cu_client").value;
+    const role = document.getElementById("cu_role").value; // "client" or "admin"
+    const msg = document.getElementById("createMsg");
+    msg.textContent = "…";
+    try{
+      const r = await fetch("/admin/users/create", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ username, password, confirmPassword, clientFolderId, role })
+      });
+      const j = await r.json();
+      msg.textContent = r.ok ? "User created." : (j.error || "Failed.");
+    }catch(e){
+      msg.textContent = "Failed.";
     }
-    libQuick.style.display = 'block';
-  } catch {
-    libQuick.style.display = 'block';
-  }
-});
+  };
 
-// Sign out
-document.getElementById('logoutBtn').onclick = async () => {
-  await jpost('/auth/logout', {});
-  location.href = '/login.html';
-};
+  // stats
+  document.getElementById("statsBtn").onclick = async ()=>{
+    const clientId = document.getElementById("statsClient").value;
+    const out = document.getElementById("statsOut");
+    if (!clientId) { out.textContent="Select a client."; return; }
+    out.textContent="Loading…";
+    const r = await fetch(`/admin/library-stats?clientId=${encodeURIComponent(clientId)}`);
+    const j = await r.json();
+    if (!r.ok) { out.textContent = j.error || "Error"; return; }
+    out.innerHTML = `
+      <div><strong>Drive files:</strong> ${j.driveCount ?? "—"}</div>
+      <div><strong>Library (manifest) files:</strong> ${j.libraryCount ?? "—"}</div>
+      <div class="muted" style="margin-top:6px;">clientId: ${j.clientId}</div>
+    `;
+  };
 
-load().catch(err => alert('Failed to load admin: ' + err));
+  // ingest
+  document.getElementById("ingestBtn").onclick = async ()=>{
+    const clientId = document.getElementById("ingestClient").value;
+    const out = document.getElementById("ingestOut");
+    if (!clientId) { out.textContent="Select a client."; return; }
+    out.textContent="Ingesting…";
+    const r = await fetch("/admin/ingest-client", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ clientId })
+    });
+    const j = await r.json();
+    out.textContent = r.ok ? `OK. Upserted: ${j.summary?.upserted ?? 0}` : (j.error || "Error");
+  };
+
+  // --- Library tree (folders -> files) ---
+  const libsTree = document.getElementById("libsTree");
+  const libsMsg = document.getElementById("libsMsg");
+  libsMsg.textContent = libs.length ? "" : "No libraries found.";
+
+  libs.forEach(lib=>{
+    const li = document.createElement("li");
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = lib.name;
+    const pill = document.createElement("span"); pill.className="pill"; pill.textContent="library";
+    summary.appendChild(pill);
+    details.appendChild(summary);
+
+    const container = document.createElement("div");
+    container.className = "muted";
+    container.textContent = "Loading folders…";
+    details.appendChild(container);
+
+    details.addEventListener("toggle", async ()=>{
+      if (!details.open) return;
+      // fetch immediate children (folders + files) of library root
+      container.textContent = "Loading folders…";
+      try{
+        const r = await fetch(`/admin/drive/children?parentId=${encodeURIComponent(lib.id)}`);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || "error");
+        // Build folder list
+        const ul = document.createElement("ul");
+        ul.className="tree";
+        // Folders first
+        (j.folders || []).forEach(f=>{
+          const d = document.createElement("details");
+          const s = document.createElement("summary");
+          s.textContent = f.name;
+          const fp = document.createElement("span"); fp.className="pill"; fp.textContent="folder";
+          s.appendChild(fp);
+          d.appendChild(s);
+          const inner = document.createElement("div");
+          inner.className = "muted";
+          inner.textContent = "Loading…";
+          d.appendChild(inner);
+          d.addEventListener("toggle", async ()=>{
+            if (!d.open) return;
+            inner.textContent = "Loading…";
+            const rr = await fetch(`/admin/drive/children?parentId=${encodeURIComponent(f.id)}`);
+            const jj = await rr.json();
+            if (!rr.ok) { inner.textContent = jj.error || "Error"; return; }
+            const list = document.createElement("ul");
+            // Subfolders (one more level, lazy)
+            (jj.folders || []).forEach(sf=>{
+              const d2 = document.createElement("details");
+              const s2 = document.createElement("summary");
+              s2.textContent = sf.name;
+              const p2 = document.createElement("span"); p2.className="pill"; p2.textContent="folder";
+              s2.appendChild(p2);
+              d2.appendChild(s2);
+              const inner2 = document.createElement("div");
+              inner2.className = "muted";
+              inner2.textContent = "Loading…";
+              d2.appendChild(inner2);
+              d2.addEventListener("toggle", async ()=>{
+                if (!d2.open) return;
+                inner2.textContent = "Loading…";
+                const r3 = await fetch(`/admin/drive/children?parentId=${encodeURIComponent(sf.id)}`);
+                const j3 = await r3.json();
+                if (!r3.ok) { inner2.textContent = j3.error || "Error"; return; }
+                const l3 = document.createElement("ul");
+                (j3.files || []).forEach(file=>{
+                  const liF = document.createElement("li");
+                  liF.textContent = file.name;
+                  l3.appendChild(liF);
+                });
+                inner2.innerHTML = "";
+                if (l3.children.length) inner2.appendChild(l3); else inner2.textContent = "No files.";
+              });
+              list.appendChild(d2);
+            });
+            // Files in this folder
+            (jj.files || []).forEach(file=>{
+              const liF = document.createElement("li");
+              liF.textContent = file.name;
+              list.appendChild(liF);
+            });
+            inner.innerHTML = "";
+            if (list.children.length) inner.appendChild(list); else inner.textContent = "Empty.";
+          });
+          const liF = document.createElement("li");
+          liF.appendChild(d);
+          ul.appendChild(liF);
+        });
+        // Files directly under library root
+        (j.files || []).forEach(file=>{
+          const liF = document.createElement("li");
+          liF.textContent = file.name;
+          ul.appendChild(liF);
+        });
+
+        container.innerHTML = "";
+        if (ul.children.length) container.appendChild(ul); else container.textContent = "Empty.";
+      }catch(e){
+        container.textContent = "Failed to load.";
+      }
+    });
+
+    li.appendChild(details);
+    libsTree.appendChild(li);
+  });
+
+})();
 </script>
 </body>
 </html>
