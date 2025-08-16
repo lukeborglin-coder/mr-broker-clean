@@ -602,7 +602,7 @@ function latestDateFrom(text, fallbackISO) {
     if (mn) candidates.push({ y: yr, m: mn });
   }
 
-  const m2 = s.matchAll(/\b(0?[1-9]|1[0-2])[\/\-_\.](\d{4})\b/g);
+  const m2 = s.matchAll(/\b(0?[1-9]|1[0-2])[\/\-_\.]\(\d{4}\)\b/g);
   for (const m of m2) {
     const mn = parseInt(m[1], 10);
     const yr = parseInt(m[2], 10);
@@ -645,8 +645,8 @@ function inferReportTag(name, text) {
     ["demand", /\bdemand\b/i],
     ["concept test", /(concept\s*test|concept\s*study)/i],
     ["qualitative", /\bqual(itative)?\b|focus\s*group|idi\b/i],
-    ["quantitative", /\bquant(itative)?\b|\\bsurvey\\b/i],
-    ["PMR", /\\bpmr\\b|primary\\s*market\\s*research/i],
+    ["quantitative", /\bquant(itative)?\b|\bsurvey\b/i],
+    ["PMR", /\bpmr\b|primary\s*market\s*research/i],
   ];
   for (const [label, rx] of rules) if (rx.test(s)) return label;
   return "report";
@@ -914,7 +914,8 @@ async function ingestClientLibrary(clientId) {
       status = String(e?.message || e);
     }
 
-    const tags = latestDateFrom(`${f.name}\n${text || ""}`, f.modifiedTime);
+    const tags = latestDateFrom(`${f.name}
+${text || ""}`, f.modifiedTime);
     const report = inferReportTag(f.name, text);
     const monthTag = tags.month || "";
     const yearTag = tags.year || "";
@@ -1033,9 +1034,7 @@ async function ingestClientLibrary(clientId) {
 
 // -------------------- Data Files → cache for charts --------------------
 // ---- Crosstab-aware Final Frequencies parsers ----
-// Single, **correct** definition of rowsToVariables to avoid duplicate identifier errors.
 function rowsToVariables(rows) {
-  // (unchanged behavior) fallback helper for CSV-like “one row per record”
   const get = (obj, keys) => {
     for (const k of keys) {
       if (obj[k] != null && String(obj[k]).trim() !== "") return obj[k];
@@ -1082,129 +1081,25 @@ function rowsToVariables(rows) {
   return { variables };
 }
 
-// NEW: robust crosstab parser for Excel “pretty tables”
 async function parseFinalFrequenciesFromXlsxBuffer(buf){
-  const cfgPath = path.join(CONFIG_DIR, "data-parser.json");
-  let cfg = { sheetHints: ["Tables","Tab","Summary"], stopAtText: ["Comparison Groups:", "Independent T-Test"], waveRegex: "^W\\d+$" };
-  try { cfg = { ...cfg, ...(readJSON(cfgPath, {}) || {}) }; } catch {}
-
   const wb = XLSX.read(buf, { type: "buffer" });
-  // Pick a sheet: prefer hints if present
-  const pick = () => {
-    const names = wb.SheetNames || [];
-    for (const hint of (cfg.sheetHints || [])) {
-      const hit = names.find(n => n.toLowerCase().includes(String(hint).toLowerCase()));
-      if (hit) return hit;
-    }
-    return names[0];
-  };
-  const sheetName = pick();
+  const sheetName = wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
   if (!ws) throw new Error("No worksheet found");
-
-  const mat = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" }); // 2D array
-  if (!Array.isArray(mat) || !mat.length) throw new Error("Empty sheet");
-
-  const waveRx = new RegExp(cfg.waveRegex || "^W\\d+$", "i");
-  const stopTexts = (cfg.stopAtText || []).map(s => String(s).toLowerCase());
-
-  // 1) find header row that contains ≥2 wave labels
-  let headerRow = -1, waveCols = [];
-  for (let r = 0; r < mat.length; r++) {
-    const row = mat[r].map(c => String(c).trim());
-    const cols = [];
-    row.forEach((v, cIdx) => { if (waveRx.test(v)) cols.push(cIdx); });
-    if (cols.length >= 2) { headerRow = r; waveCols = cols; break; }
-  }
-  if (headerRow === -1) throw new Error("No wave header row found");
-
-  // 2) find stub (row label) column: left-most non-empty cells under header
-  const firstWaveCol = Math.min(...waveCols);
-  let stubCol = 0;
-  for (let c = 0; c < firstWaveCol; c++) {
-    // choose the column that has the most non-empty labels below the header
-    let nonEmpty = 0;
-    for (let r = headerRow + 1; r < Math.min(headerRow + 20, mat.length); r++) {
-      const v = String(mat[r][c] || "").trim();
-      if (v && !waveRx.test(v)) nonEmpty++;
-    }
-    if (nonEmpty > 0) { stubCol = c; break; }
-  }
-
-  const waves = waveCols.map(c => String(mat[headerRow][c]).trim());
-  // latest wave = numerically largest
-  const latestWave = waves
-    .map(w => ({ w, n: Number((w.match(/\d+/)||[])[0] || 0) }))
-    .sort((a,b)=>b.n-a.n)[0]?.w || waves[waves.length-1];
-
-  // 3) walk rows until footer text appears
-  const variables = {};
-  let baseNGuess = 0;
-
-  for (let r = headerRow + 1; r < mat.length; r++) {
-    const rowArr = mat[r];
-    const rowText = rowArr.map(v=>String(v||"").toLowerCase()).join(" ");
-    if (stopTexts.some(t => rowText.includes(t))) break;
-
-    const label = String(rowArr[stubCol] || "").trim();
-    if (!label) continue;
-
-    // Skip “Base: …” style rows; record N if present
-    if (/^base[:\s]/i.test(label)) {
-      // try to grab a numeric N from the latest wave column
-      const nRaw = String(rowArr[ waveCols[waves.indexOf(latestWave)] ] || "");
-      const nVal = Number(nRaw.replace(/[^0-9.\-]/g,""));
-      if (isFinite(nVal) && nVal > 0) baseNGuess = nVal;
-      continue;
-    }
-
-    // parse values for each wave
-    const perWave = {};
-    waves.forEach((w, i) => {
-      const c = waveCols[i];
-      const raw = String(rowArr[c] ?? "").trim();
-      // strip %, sig letters, etc.
-      const num = Number(raw.replace(/[^0-9.\-]/g,""));
-      if (isFinite(num)) perWave[w] = num;
-    });
-    if (!Object.keys(perWave).length) continue;
-
-    const latestVal = perWave[latestWave];
-    // Build variable entry; use row label as the metric name
-    const varId = toMetricId(label);
-    variables[varId] = {
-      label,
-      type: "single",
-      unit: "pct",
-      base: { description: "All qualified", n: baseNGuess || 0 },
-      // we treat latest wave as the “index” for charting across projects
-      stats: { index: latestVal },
-      extras: { perWave }
-    };
-  }
-
-  // Ensure we parsed something; if not, fall back to row-style reader
-  if (Object.keys(variables).length === 0) {
-    // Fallback: use a flat JSON conversion (best-effort)
-    const sheet = XLSX.utils.sheet_to_json(ws, { defval: "" });
-    return rowsToVariables(sheet);
-  }
-  return { variables };
+  const sheet = XLSX.utils.sheet_to_json(ws, { defval: "" });
+  return rowsToVariables(sheet);
 }
 
 function parseFinalFrequenciesFromCsvText(text){
-  // CSV fallback stays the same as before – supports the row-style export
   const rows = csvParse(text, { columns: true, skip_empty_lines: true });
   return rowsToVariables(rows);
 }
 
-// Identify if file is a Final Frequencies data file (in path .../Data Files/Final Frequencies)
 async function isFinalFreqFile(file, clientId) {
   const pathNames = await getPathNamesToClient(file.parents || [], clientId);
   return pathIncludesSequence(pathNames, [DATA_FILES_FOLDER, DATA_FINAL_FREQ_SUBFOLDER]);
 }
 
-// Resolve a projectId from path; try folder before "Data Files"
 async function inferProjectMeta(file, clientId) {
   const pathNames = await getPathNamesToClient(file.parents || [], clientId);
   let projectName = titleFromName(file.name);
@@ -1229,7 +1124,6 @@ async function writeProjectCache({ clientId, projectId, title, fieldStart, field
   const projectsDir = path.join(baseDir, "projects");
   await ensureDir(projectsDir);
 
-  // write per-project
   const projectPath = path.join(projectsDir, `${projectId}.json`);
   await fsp.writeFile(
     projectPath,
@@ -1240,7 +1134,6 @@ async function writeProjectCache({ clientId, projectId, title, fieldStart, field
     "utf8"
   );
 
-  // update index.json
   const indexPath = path.join(baseDir, "index.json");
   let index = { clientId, lastRebuild: new Date().toISOString(), projects: [], metrics: [] };
   try { index = JSON.parse(await fsp.readFile(indexPath, "utf8")); } catch {}
@@ -1262,7 +1155,6 @@ async function writeProjectCache({ clientId, projectId, title, fieldStart, field
   await ensureDir(baseDir);
   await fsp.writeFile(indexPath, JSON.stringify(index, null, 2), "utf8");
 
-  // update per-metric series
   const seriesDir = path.join(baseDir, "series");
   await ensureDir(seriesDir);
   for (const [varId, v] of Object.entries(variables)) {
@@ -1270,7 +1162,6 @@ async function writeProjectCache({ clientId, projectId, title, fieldStart, field
     let series = { metricId: varId, label: v.label, unit: v.unit || "pct", series: [] };
     try { series = JSON.parse(await fsp.readFile(sPath, "utf8")); } catch {}
 
-    // Choose a primary value: Top2Box if present; else first code pct; else index/mean if present.
     let value = undefined;
     let baseN = v.base?.n || 0;
     if (v.stats?.Top2Box?.pct != null) value = v.stats.Top2Box.pct;
@@ -1295,7 +1186,6 @@ async function ingestClientData(clientId) {
   const drive = getDrive();
   const all = await listAllFilesUnder(clientId);
 
-  // Candidate mime types for final frequencies
   const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const XLS_MIME = "application/vnd.ms-excel";
   const CSV_MIME = "text/csv";
@@ -1303,7 +1193,6 @@ async function ingestClientData(clientId) {
 
   const finalFreqFiles = [];
   for (const f of all) {
-    // quick type check to avoid extra API calls
     if (![XLSX_MIME, XLS_MIME, CSV_MIME, SHEET_MIME].includes(f.mimeType)) continue;
     if (await isFinalFreqFile(f, clientId)) finalFreqFiles.push(f);
   }
@@ -1318,7 +1207,6 @@ async function ingestClientData(clientId) {
     let variables = {};
     try {
       if (file.mimeType === SHEET_MIME) {
-        // Export first sheet as CSV for simple parsing
         const r = await drive.files.export(
           { fileId: file.id, mimeType: "text/csv" },
           { responseType: "arraybuffer" }
@@ -1364,7 +1252,6 @@ async function ingestClientData(clientId) {
   return { ok: true, parsedCount, projects: parsedProjects };
 }
 
-// Rebuild series on-demand if file missing
 async function rebuildSeriesForMetric(clientId, metricId){
   const baseDir = path.join(DATA_CACHE_DIR, clientId);
   const projectsDir = path.join(baseDir, "projects");
@@ -1421,7 +1308,6 @@ app.get(
         (f) => f.mimeType !== "application/vnd.google-apps.folder"
       ).length;
 
-      // Data counts (Final Frequencies & Raw Data)
       let dataFilesCount = 0;
       let rawDataCount = 0;
       for (const f of all) {
@@ -1537,14 +1423,12 @@ app.post("/admin/drive-watch/stop", async (req, res) => {
 });
 
 // -------------------- Webhook receiver --------------------
-// Google will POST here on every Drive change event for the channel we created.
-// We verify a shared token on the query string, ACK immediately, and process async.
 app.post("/webhooks/drive", express.text({ type: "*/*" }), async (req, res) => {
   try {
     if (!DRIVE_WEBHOOK_VERIFY_TOKEN || req.query.token !== DRIVE_WEBHOOK_VERIFY_TOKEN) {
       return res.status(401).end("unauthorized");
     }
-    res.status(200).end(); // Ack fast
+    res.status(200).end();
     processDrivePing({
       resourceState: req.get("x-goog-resource-state"),
       resourceId: req.get("x-goog-resource-id"),
@@ -1575,10 +1459,11 @@ async function fetchSecondaryInfo(query, max = 5) {
     const html = await res.text();
 
     const items = [];
+    // FIX: proper JS regex escapes (use \ only where needed inside string literals; here we use regex literals).
     const linkRe =
-      /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/gi;
+      /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const snipRe =
-      /<a[^>]*class="[^"]*result__snippet"[^>]*>([\\s\\S]*?)<\\/a>|<a[^>]*>[\\s\\S]*?<\\/a>\\s*-\\s*<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\\s\\S]*?)<\\/span>/gi;
+      /<a[^>]*class="[^"]*result__snippet"[^>]*>([\s\S]*?)<\/a>|<a[^>]*>[\s\S]*?<\/a>\s*-\s*<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
 
     let m;
     const links = [];
@@ -1593,7 +1478,7 @@ async function fetchSecondaryInfo(query, max = 5) {
     while ((s = snipRe.exec(html)) && snippets.length < links.length) {
       const snippet = (s[1] || s[2] || "")
         .replace(/<[^>]+>/g, "")
-        .replace(/\\s+/g, " ")
+        .replace(/\s+/g, " ")
         .trim();
       if (snippet) snippets.push(snippet);
     }
@@ -1620,12 +1505,12 @@ function buildReferenceBundle(refs) {
       const tag = `${r.monthTag || ""} ${r.yearTag || ""}`.trim();
       return `[${i + 1}] ${r.study || r.fileName}${tag ? " – " + tag : ""}${r.reportTag ? " • " + r.reportTag : ""}`;
     })
-    .join("\\n");
+    .join("\n");
 }
 function extractCitedNumbers(text) {
   const out = new Set();
   if (!text) return [];
-  const rx = /\\[(\\d+)\\]/g;
+  const rx = /\[(\d+)\]/g;
   let m;
   while ((m = rx.exec(text))) {
     const n = parseInt(m[1], 10);
@@ -1637,7 +1522,7 @@ async function generateSupportBullets({ question, refs, answer }) {
   const refBundle = buildReferenceBundle(refs);
   const system =
     "You write 3–6 concise, well-structured support bullets that directly back up the answer, using only the provided references. Each bullet must be a complete sentence and include bracketed numeric citations like [1] that map to the numbered references list. Prefer newer references. Avoid repeating the exact same phrasing as the answer.";
-  const prompt = `Question:\\n${question}\\n\\nAnswer draft:\\n${answer}\\n\\nReferences (numbered):\\n${refBundle}\\n\\nInstructions:\\n- Write 3–6 bullets.\\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\\n- Prioritize the most recent evidence.\\n- Do not invent sources.\\n- Keep each bullet to 1 sentence.\\n\\nBullets:`;
+  const prompt = `Question:\n${question}\n\nAnswer draft:\n${answer}\n\nReferences (numbered):\n${refBundle}\n\nInstructions:\n- Write 3–6 bullets.\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\n- Prioritize the most recent evidence.\n- Do not invent sources.\n- Keep each bullet to 1 sentence.\n\nBullets:`;
 
   const chat = await openai.chat.completions.create({
     model: ANSWER_MODEL,
@@ -1647,8 +1532,8 @@ async function generateSupportBullets({ question, refs, answer }) {
   const raw = chat.choices?.[0]?.message?.content?.trim() || "";
 
   const lines = raw
-    .split(/\\r?\\n/)
-    .map((s) => s.replace(/^[\\-\\u2022\\*\\d\\.\\s]+/, "").trim())
+    .split(/\r?\n/)
+    .map((s) => s.replace(/^[\-\u2022\*\d\.\s]+/, "").trim())
     .filter(Boolean);
 
   return lines.slice(0, 8).map((line) => {
@@ -1660,7 +1545,7 @@ async function generateSupportBullets({ question, refs, answer }) {
       })
       .filter((e) => e > 0);
     const recencyEpoch = epochs.length ? Math.max(...epochs) : 0;
-    const text = /\\.\\s*$/.test(line) ? line : `${line}.`;
+    const text = /\.\s*$/.test(line) ? line : `${line}.`;
     return { text, refs: refsCited, recencyEpoch };
   });
 }
@@ -1729,10 +1614,10 @@ app.post("/search", requireSession, async (req, res) => {
         (r, i) =>
           `[${i + 1}] (${r.study || r.fileName} – ${r.monthTag} ${r.yearTag} • ${r.reportTag}) ${r.textSnippet}`
       )
-      .join("\\n\\n");
+      .join("\n\n");
     const system =
       "Answer strictly from the context. Include bracketed citations like [1], [2] that correspond to the references order. Prefer more recent tagged reports.";
-    const prompt = `Question: ${q}\\n\\nContext:\\n${ctx}\\n\\nWrite a concise answer (4–7 sentences) with [#] citations. If info is insufficient, say so.`;
+    const prompt = `Question: ${q}\n\nContext:\n${ctx}\n\nWrite a concise answer (4–7 sentences) with [#] citations. If info is insufficient, say so.`;
 
     const chat = await openai.chat.completions.create({
       model: ANSWER_MODEL,
@@ -1765,205 +1650,7 @@ app.post("/search", requireSession, async (req, res) => {
   }
 });
 
-// -------------------- Chart Query (reads data-cache) --------------------
-app.get("/api/chart-query", requireSession, async (req, res) => {
-  try {
-    // Admins can target any client; client users use their session's active client
-    let clientId = String(req.query.clientId || "").trim();
-    const metricId = String(req.query.metricId || "").trim();
-    if (!metricId) return res.status(400).json({ error: "metricId required" });
-
-    // If not provided or user isn't admin, fall back to session client
-    const isAdmin = req.session?.user?.role === "internal";
-    if (!clientId || !isAdmin) {
-      clientId = req.session?.activeClientId || null;
-    }
-    if (!clientId) return res.status(400).json({ error: "clientId required" });
-
-    // Paths
-    const baseDir   = path.join(DATA_CACHE_DIR, clientId);
-    const indexPath = path.join(baseDir, "index.json");
-    const seriesDir = path.join(baseDir, "series");
-    const sPath     = path.join(seriesDir, `${metricId}.json`);
-
-    // Make sure cache exists
-    try { await fsp.mkdir(seriesDir, { recursive: true }); } catch {}
-
-    // Load (or rebuild) series
-    let series;
-    try {
-      const raw = await fsp.readFile(sPath, "utf8");
-      series = JSON.parse(raw);
-    } catch {
-      series = await rebuildSeriesForMetric(clientId, metricId);
-    }
-
-    if (!series || !Array.isArray(series.series) || !series.series.length) {
-      return res.status(404).json({ error: "No data for metric" });
-    }
-
-    // Sort by time, then by label (stable)
-    const pts = series.series.slice().sort(
-      (a,b) => (a.ts||0)-(b.ts||0) || String(a.xLabel).localeCompare(String(b.xLabel), undefined, { numeric: true })
-    );
-
-    // Build a default trend (single line). If later you want multiple series per metric (e.g., by segment),
-    // you can expand this to group on a field in each point.
-    const labels = pts.map(p => p.xLabel || p.projectId);
-    const values = pts.map(p => (typeof p.value === "number" ? p.value : null));
-
-    // If we only have <=2 projects, a bar often reads better; otherwise line.
-    const chartType = pts.length <= 2 ? "bar" : "line";
-
-    // Table rows
-    const table = pts.map(p => ({
-      Project: p.xLabel || p.projectId,
-      Value: typeof p.value === "number" ? p.value : null,
-      "Base N": p.baseN || null
-    }));
-
-    // Footnote
-    const unit = (series.unit || "pct").toLowerCase();
-    const footnote = `Trend for ${series.label} across ${pts.length} project${pts.length===1?"":"s"}. Values shown in ${unit === "pct" ? "percent (%)" : unit}.`;
-
-    return res.json({
-      chart: {
-        type: chartType,
-        labels,
-        datasets: [{
-          label: series.label || metricId,
-          data: values
-        }]
-      },
-      table,
-      footnote,
-      meta: {
-        clientId,
-        metricId,
-        unit: unit === "pct" ? "pct" : unit
-      }
-    });
-  } catch (e) {
-    console.error("[/api/chart-query] error:", e);
-    res.status(500).json({ error: "Chart query failed" });
-  }
-});
-
-// --- Drive children listing for admin tree ----
-app.get(
-  "/admin/drive/children",
-  requireSession,
-  requireInternal,
-  async (req, res) => {
-    try {
-      const parentId = String(req.query.parentId || "").trim();
-      if (!parentId) return res.status(400).json({ error: "parentId required" });
-
-      const drive = getDrive();
-      const fr = await drive.files.list({
-        q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        fields: "files(id,name)",
-        pageSize: 1000,
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        orderBy: "name_natural",
-      });
-      const r = await drive.files.list({
-        q: `'${parentId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
-        fields: "files(id,name,mimeType)",
-        pageSize: 1000,
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        orderBy: "name_natural",
-      });
-
-      res.json({
-        folders: (fr.data.files || []).map((f) => ({ id: f.id, name: f.name })),
-        files: (r.data.files || []).map((f) => ({ id: f.id, name: f.name })),
-      });
-    } catch (e) {
-      res.status(500).json({ error: "Failed to list children" });
-    }
-  }
-);
-
-// -------------------- Charts API (reads data-cache) --------------------
-app.get("/api/chart-query", requireSession, async (req, res) => {
-  try {
-    const sessionClient = req.session?.activeClientId || null;
-    const clientId = String(req.query.clientId || sessionClient || "").trim();
-    const metricId = String(req.query.metricId || "").trim();
-    const segment = String(req.query.segment || "").trim(); // reserved for future segmented series
-
-    if (!clientId) return res.status(400).json({ error: "clientId required" });
-    if (!metricId) return res.status(400).json({ error: "metricId required" });
-    if (!(await driveFolderExists(clientId)))
-      return res.status(400).json({ error: "Unknown clientId" });
-
-    const baseDir = path.join(DATA_CACHE_DIR, clientId);
-    const sPath = segment
-      ? path.join(baseDir, "segments", segment, "series", `${metricId}.json`)
-      : path.join(baseDir, "series", `${metricId}.json`);
-
-    let seriesJson = null;
-    try {
-      seriesJson = JSON.parse(await fsp.readFile(sPath, "utf8"));
-    } catch {
-      // Try to rebuild from projects if missing (only for unsegmented)
-      if (!segment) {
-        seriesJson = await rebuildSeriesForMetric(clientId, metricId);
-      }
-    }
-
-    if (!seriesJson || !Array.isArray(seriesJson.series) || !seriesJson.series.length) {
-      return res.status(404).json({ error: "No data for metricId", metricId });
-    }
-
-    // Build chart + table payload
-    const labels = seriesJson.series.map((p) => p.xLabel || p.projectId);
-    const data = seriesJson.series.map((p) => p.value);
-    const baseNs = seriesJson.series.map((p) => p.baseN || 0);
-
-    const chart = {
-      type: "line",
-      labels,
-      datasets: [
-        {
-          label:
-            seriesJson.unit && /pct|percent/i.test(seriesJson.unit)
-              ? `${seriesJson.label} (%)`
-              : seriesJson.label,
-          data,
-        },
-      ],
-    };
-
-    const table = seriesJson.series.map((p, i) => ({
-      Project: p.xLabel || p.projectId,
-      Value: data[i],
-      "Base (n)": baseNs[i],
-    }));
-
-    res.json({
-      chart,
-      table,
-      footnote: "Base: All qualified respondents per project",
-      meta: {
-        clientId,
-        metricId: seriesJson.metricId || metricId,
-        label: seriesJson.label || metricId,
-        unit: seriesJson.unit || "pct",
-        points: seriesJson.series.length,
-        segment: segment || null,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ error: "Chart query failed", detail: String(e?.message || e) });
-  }
-});
-
 // -------------------- Secure PDF proxy (for slide images) --------------------
-// Works for PDFs AND Google Slides/Docs in Shared Drives by exporting to PDF when needed.
 app.get("/api/drive-pdf", requireSession, async (req, res) => {
   try {
     const fileId = String(req.query.fileId || "").trim();
@@ -1971,7 +1658,6 @@ app.get("/api/drive-pdf", requireSession, async (req, res) => {
 
     const drive = getDrive();
 
-    // Get mimeType to decide whether to stream or export
     let meta;
     try {
       meta = await drive.files.get({
@@ -2001,7 +1687,6 @@ app.get("/api/drive-pdf", requireSession, async (req, res) => {
     }
 
     if (mt.startsWith("application/vnd.google-apps.")) {
-      // Export native Google files to PDF (Slides, Docs, Sheets)
       const r = await drive.files.export(
         { fileId, mimeType: "application/pdf" },
         { responseType: "stream" }
@@ -2013,7 +1698,6 @@ app.get("/api/drive-pdf", requireSession, async (req, res) => {
       return void r.data.pipe(res);
     }
 
-    // For unsupported non-Google, non-PDF types (e.g., PPTX), we currently don't convert server-side.
     return res
       .status(415)
       .json({ error: `Unsupported mimeType for direct PDF rendering: ${mt}` });
@@ -2035,4 +1719,193 @@ app.listen(PORT, () => {
   if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
+});
+
+- Avoid copying text verbatim.";
+  const user = prompt;
+
+  try {
+    const resp = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    const text = resp.choices?.[0]?.message?.content?.trim() || "";
+    const cited = extractCitedNumbers(text);
+    const used = cited.map((n) => refs[n - 1]).filter(Boolean);
+    const newest = Math.max(0, ...used.map((r) => r.recencyEpoch || 0));
+    return { text, recencyEpoch: newest, refs: used };
+  } catch (e) {
+    console.warn("[support-bullets] failed", e?.message || e);
+    return { text: "", recencyEpoch: 0, refs: [] };
+  }
+}
+
+// -------------------- Drive PDF proxy --------------------
+app.get("/api/drive-pdf", requireSession, async (req, res) => {
+  try {
+    const { fileId, exportType = "pdf" } = req.query || {};
+    if (!fileId) return res.status(400).json({ error: "fileId required" });
+
+    const drive = getDrive();
+    let stream;
+    try {
+      // Try export (supports Slides/Docs/Sheets)
+      const mime =
+        exportType === "png"
+          ? "image/png"
+          : exportType === "jpg"
+          ? "image/jpeg"
+          : "application/pdf";
+      const r = await drive.files.export(
+        { fileId, mimeType: mime },
+        { responseType: "stream" }
+      );
+      res.setHeader("Cache-Control", "no-store");
+      r.data.pipe(res);
+      return;
+    } catch {
+      // Fallback to direct media
+      const r = await drive.files.get(
+        { fileId, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
+        { responseType: "stream" }
+      );
+      res.setHeader("Cache-Control", "no-store");
+      r.data.pipe(res);
+      return;
+    }
+  } catch (e) {
+    res.status(500).json({ error: "proxy failed", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Search --------------------
+app.post("/search", requireSession, async (req, res) => {
+  try {
+    const { q, topK = DEFAULT_TOPK, generateSupport = false } = req.body || {};
+    const clientId =
+      req.session.activeClientId || req.body?.clientId || null;
+    if (!clientId) return res.status(400).json({ error: "Choose a client first" });
+    if (!q || !String(q).trim()) return res.status(400).json({ error: "q required" });
+
+    const [emb] = await embedTexts([q]);
+    const results = await pineconeQuery(emb, clientId, Number(topK) || DEFAULT_TOPK);
+    const matches = (results.matches || []).map((m) => ({
+      id: m.id,
+      score: m.score,
+      ...m.metadata,
+    }));
+
+    const refs = matches.map((m) => ({
+      study: m.study,
+      fileName: m.fileName,
+      monthTag: m.monthTag,
+      yearTag: m.yearTag,
+      reportTag: m.reportTag,
+      recencyEpoch: Number(m.recencyEpoch || 0)
+    }));
+
+    // Secondary info (web)
+    let secondary = [];
+    try {
+      secondary = await fetchSecondaryInfo(q, 5);
+    } catch {}
+
+    // Optional: generate supporting bullets referencing RAG refs
+    let supportingBullets = [];
+    if (generateSupport) {
+      const draft = "Answer will be provided separately; write evidence bullets only.";
+      const b = await generateSupportBullets({ question: q, refs, answer: draft });
+      if (b.text) supportingBullets.push(b);
+      supportingBullets.sort((a,b)=> (b.recencyEpoch||0) - (a.recencyEpoch||0));
+    }
+
+    res.json({ q, clientId, matches, secondary, supportingBullets });
+  } catch (e) {
+    res.status(500).json({ error: "search failed", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Admin: create user --------------------
+app.post("/admin/users/create", requireSession, requireInternal, async (req, res) => {
+  try {
+    const { username, password, role = "user", allowedClients } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: "username and password required" });
+    const usersDoc = readJSON(USERS_PATH, { users: [] });
+    if (usersDoc.users.find((u) => u.username === username)) {
+      return res.status(400).json({ error: "username exists" });
+    }
+    const passwordHash = bcrypt.hashSync(String(password), 10);
+    const allowed =
+      role === "internal"
+        ? "*"
+        : Array.isArray(allowedClients) && allowedClients.length
+        ? allowedClients
+        : [];
+    usersDoc.users.push({ username, passwordHash, role, allowedClients: allowed });
+    writeJSON(USERS_PATH, usersDoc);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "failed to create user", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Charts API (cached data files) --------------------
+app.get("/api/chart-index", requireSession, async (req, res) => {
+  try {
+    const clientId =
+      req.session.activeClientId || req.query.clientId || null;
+    if (!clientId) return res.status(400).json({ error: "Choose a client first" });
+    const indexPath = path.join(DATA_CACHE_DIR, clientId, "index.json");
+    const payload = readJSON(indexPath, { clientId, projects: [], metrics: [] });
+    res.json(payload);
+  } catch (e) {
+    res.status(500).json({ error: "index failed", detail: String(e?.message || e) });
+  }
+});
+
+app.get("/api/chart-series", requireSession, async (req, res) => {
+  try {
+    const clientId =
+      req.session.activeClientId || req.query.clientId || null;
+    const metricId = String(req.query.metricId || "").trim();
+    if (!clientId || !metricId) return res.status(400).json({ error: "clientId and metricId required" });
+    const sPath = path.join(DATA_CACHE_DIR, clientId, "series", `${metricId}.json`);
+    let payload = readJSON(sPath, null);
+    if (!payload) payload = await rebuildSeriesForMetric(clientId, metricId);
+    res.json(payload);
+  } catch (e) {
+    res.status(500).json({ error: "series failed", detail: String(e?.message || e) });
+  }
+});
+
+app.post("/api/chart-query", requireSession, async (req, res) => {
+  try {
+    const clientId =
+      req.session.activeClientId || req.body?.clientId || null;
+    const metricIds = Array.isArray(req.body?.metricIds) ? req.body.metricIds : [];
+    if (!clientId || !metricIds.length) return res.status(400).json({ error: "clientId and metricIds required" });
+
+    const out = {};
+    for (const id of metricIds) {
+      const sPath = path.join(DATA_CACHE_DIR, clientId, "series", `${id}.json`);
+      let series = readJSON(sPath, null);
+      if (!series) series = await rebuildSeriesForMetric(clientId, id);
+      out[id] = series;
+    }
+    res.json({ ok: true, series: out });
+  } catch (e) {
+    res.status(500).json({ error: "chart-query failed", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Health --------------------
+app.get("/healthz", (_req, res) => res.json({ ok: true }));
+
+// -------------------- Start --------------------
+app.listen(PORT, () => {
+  console.log(`server listening on :${PORT}`);
 });
