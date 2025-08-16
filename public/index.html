@@ -47,6 +47,15 @@
     .chart-card{border:1px solid var(--line);border-radius:12px;padding:10px}
     .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
     .msg.info{display:block;background:#fafbfd;color:#2b2f36}
+
+    /* NEW: Charts & Data panel styling */
+    #chartsCard .canvas-wrap{border:1px solid var(--line);border-radius:12px;padding:10px}
+    #chartCanvas{width:100%;height:320px;display:block}
+    #chartTable{margin-top:12px;overflow:auto}
+    #chartTable table{width:100%;border-collapse:collapse}
+    #chartTable th,#chartTable td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:.95rem}
+    #chartTable td.num{text-align:right}
+    #chartFootnote{margin-top:10px;border:1px solid var(--soft-border);background:var(--soft);border-radius:10px;padding:10px 12px;font-size:.9rem;color:#5a4638;display:none}
   </style>
 </head>
 <body>
@@ -107,6 +116,16 @@
         <div id="dataGrid"></div>
       </div>
 
+      <!-- NEW: Charts & Data -->
+      <div id="chartsCard" class="panel" style="display:none;">
+        <h3>Charts &amp; Data</h3>
+        <div class="canvas-wrap">
+          <canvas id="chartCanvas" aria-label="Metric chart"></canvas>
+        </div>
+        <div id="chartTable" class="table-wrap" style="margin-top:12px;"></div>
+        <div id="chartFootnote"></div>
+      </div>
+
       <details id="refsDetails" class="panel" style="display:none;">
         <summary>
           <h3 style="display:inline;">References</h3>
@@ -137,6 +156,9 @@
       pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
+
+  <!-- NEW: Chart.js for /api/chart-query rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
 let ME = null;
@@ -348,6 +370,97 @@ async function renderPdfPageToDataUrl(fileId, pageNum, scale=1.6){
   return canvas.toDataURL("image/png");
 }
 
+// --- NEW: Chart helpers bound to window.app ---
+let _chartInstance = null;
+
+function renderChartPayload(payload){
+  const panel = document.getElementById("chartsCard");
+  const canvas = document.getElementById("chartCanvas");
+  const tableWrap = document.getElementById("chartTable");
+  const foot = document.getElementById("chartFootnote");
+  if (!panel || !canvas || !tableWrap || !payload) return;
+
+  // Show the panel
+  panel.style.display = "block";
+
+  // Chart.js render
+  const ctx = canvas.getContext("2d");
+  if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
+  const cfg = {
+    type: (payload.chart?.type === "bar" ? "bar" : "line"),
+    data: {
+      labels: payload.chart?.labels || [],
+      datasets: (payload.chart?.datasets || []).map(ds => ({
+        label: ds.label || "Series",
+        data: ds.data || [],
+        tension: 0.25,
+        borderWidth: 2,
+        pointRadius: 3,
+        fill: false
+      }))
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { ticks: { callback: (v)=> v + (payload.meta?.unit === "pct" ? "%" : "") } }
+      },
+      plugins: { legend: { display: true } }
+    }
+  };
+  _chartInstance = new Chart(ctx, cfg);
+
+  // Table
+  const rows = Array.isArray(payload.table) ? payload.table : [];
+  let html = '<table class="data-table"><thead><tr>';
+  if (rows.length){
+    const cols = Object.keys(rows[0]);
+    cols.forEach(c => html += `<th>${c}</th>`);
+    html += '</tr></thead><tbody>';
+    rows.forEach(r=>{
+      html += '<tr>';
+      cols.forEach(c=>{
+        const v = r[c];
+        const num = typeof v === "number";
+        html += `<td class="${num?'num':''}">${num ? Math.round(v*100)/100 : String(v)}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+  } else {
+    html = '<div class="muted">No table data.</div>';
+  }
+  tableWrap.innerHTML = html;
+
+  // Footnote
+  const note = payload.footnote || "";
+  if (note) { foot.textContent = note; foot.style.display = "block"; }
+  else { foot.textContent = ""; foot.style.display = "none"; }
+}
+
+async function fetchChartForMetric(metricId){
+  // Determine client for admins
+  const isAdmin = ((ME?.user?.role === "admin") || (ME && (ME.user?.role === "internal")));
+  const clientId = isAdmin ? (document.getElementById("clientTop")?.value || "") : "";
+  const qs = new URLSearchParams();
+  if (clientId) qs.set("clientId", clientId);
+  qs.set("metricId", metricId);
+
+  const r = await fetch(`/api/chart-query?${qs.toString()}`, { credentials:"same-origin" });
+  if (!r.ok){
+    showMsg("No chart data found for that metric.");
+    return;
+  }
+  const payload = await r.json();
+  renderChartPayload(payload);
+}
+
+// expose to app.js or console
+window.app = Object.assign(window.app || {}, {
+  showChart: renderChartPayload,
+  fetchChart: fetchChartForMetric
+});
+
 async function doAsk(){
   clearMsg();
   const qEl = document.getElementById("q");
@@ -440,7 +553,7 @@ async function doAsk(){
     });
     if (quotesCard) quotesCard.style.display = quotes.length ? "block" : "none";
 
-    // Supporting Data
+    // Supporting Data (existing SVG minis)
     const series = Array.isArray(data?.supportingData) ? data.supportingData : [];
     const dataCard = document.getElementById("dataCard");
     if (dataCard) dataCard.style.display = series.length ? "block" : "none";
@@ -463,6 +576,12 @@ async function doAsk(){
       tbody?.appendChild(tr);
     });
     if (refsDetails) refsDetails.style.display = ctxChunks.length ? "block" : "none";
+
+    // (Optional) naive auto-trigger: if the user typed "trend" try fetching SATISFACTION (you can delete this)
+    if (/\btrend/i.test(question)) {
+      // This is just a placeholder; replace "SATISFACTION" with your real metricId or wire from app.js
+      try { await fetchChartForMetric("SATISFACTION"); } catch {}
+    }
 
   }catch(e){
     showMsg("Search failed. Please try again.");
