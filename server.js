@@ -1721,7 +1721,6 @@ app.listen(PORT, () => {
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
 
-- Avoid copying text verbatim.";
   const user = prompt;
 
   try {
@@ -1909,3 +1908,4 @@ app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.listen(PORT, () => {
   console.log(`server listening on :${PORT}`);
 });
+
