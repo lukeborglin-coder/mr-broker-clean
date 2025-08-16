@@ -1082,14 +1082,167 @@ function rowsToVariables(rows) {
   return { variables };
 }
 
-async function parseFinalFrequenciesFromXlsxBuffer(buf){
-  const wb = XLSX.read(buf, { type: "buffer" });
-  const sheetName =
-    wb.SheetNames.find((s) => /freq|table|summary/i.test(s)) || wb.SheetNames[0];
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
-  return rowsToVariables(rows);
+// ---- Crosstab-aware Final Frequencies parsers ----
+function rowsToVariables(rows) {
+  // (unchanged behavior) fallback helper for CSV-like “one row per record”
+  const get = (obj, keys) => {
+    for (const k of keys) {
+      if (obj[k] != null && String(obj[k]).trim() !== "") return obj[k];
+      const found = Object.keys(obj).find(
+        (kk) => kk.toLowerCase() === String(k).toLowerCase()
+      );
+      if (found && String(obj[found]).trim() !== "") return obj[found];
+    }
+    return undefined;
+  };
+
+  const byQ = new Map();
+  for (const r of rows) {
+    const q = String(get(r, ["Question","Variable","Var","Metric","Name"]) || "").trim();
+    const code = String(get(r, ["Code","Value","Category","Option","Choice","Key"]) || "").trim();
+    const label = String(get(r, ["Label","Text","Option Label","Answer"]) || code).trim();
+    let pctRaw = get(r, ["Pct","Percent","%","Pct.","Percent%","Percentage"]);
+    let nRaw   = get(r, ["N","Count","Base","n","Total N"]);
+    const table = get(r, ["Table","Source","Q","Sheet"]) || "";
+
+    if (!q || !code) continue;
+    const pct = Number(String(pctRaw || "").toString().replace(/[^0-9.\-]/g,""));
+    const n   = Number(String(nRaw   || "").toString().replace(/[^0-9.\-]/g,""));
+
+    if (!byQ.has(q)) byQ.set(q, { q, baseN: 0, rows: [], table });
+    const bucket = byQ.get(q);
+    bucket.rows.push({ value: code, label, pct: isFinite(pct) ? pct : 0, n: isFinite(n) ? n : 0 });
+    if (!bucket.baseN && isFinite(n) && n > 0) bucket.baseN = n;
+  }
+
+  const variables = {};
+  for (const { q, baseN, rows, table } of byQ.values()) {
+    const varId = toMetricId(q);
+    variables[varId] = {
+      label: q,
+      type: "single",
+      unit: "pct",
+      base: { description: "All qualified", n: baseN || 0 },
+      codes: rows.map((r) => ({ value: r.value, label: r.label })),
+      stats: Object.fromEntries(rows.map((r) => [r.value, { pct: r.pct, n: r.n }])),
+      provenance: { table }
+    };
+  }
+  return { variables };
 }
+
+// NEW: robust crosstab parser for Excel “pretty tables”
+async function parseFinalFrequenciesFromXlsxBuffer(buf){
+  const cfgPath = path.join(CONFIG_DIR, "data-parser.json");
+  let cfg = { sheetHints: ["Tables","Tab","Summary"], stopAtText: ["Comparison Groups:", "Independent T-Test"], waveRegex: "^W\\d+$" };
+  try { cfg = { ...cfg, ...(readJSON(cfgPath, {}) || {}) }; } catch {}
+
+  const wb = XLSX.read(buf, { type: "buffer" });
+  // Pick a sheet: prefer hints if present
+  const pick = () => {
+    const names = wb.SheetNames || [];
+    for (const hint of (cfg.sheetHints || [])) {
+      const hit = names.find(n => n.toLowerCase().includes(String(hint).toLowerCase()));
+      if (hit) return hit;
+    }
+    return names[0];
+  };
+  const sheetName = pick();
+  const ws = wb.Sheets[sheetName];
+  if (!ws) throw new Error("No worksheet found");
+
+  const mat = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" }); // 2D array
+  if (!Array.isArray(mat) || !mat.length) throw new Error("Empty sheet");
+
+  const waveRx = new RegExp(cfg.waveRegex || "^W\\d+$", "i");
+  const stopTexts = (cfg.stopAtText || []).map(s => String(s).toLowerCase());
+
+  // 1) find header row that contains ≥2 wave labels
+  let headerRow = -1, waveCols = [];
+  for (let r = 0; r < mat.length; r++) {
+    const row = mat[r].map(c => String(c).trim());
+    const cols = [];
+    row.forEach((v, cIdx) => { if (waveRx.test(v)) cols.push(cIdx); });
+    if (cols.length >= 2) { headerRow = r; waveCols = cols; break; }
+  }
+  if (headerRow === -1) throw new Error("No wave header row found");
+
+  // 2) find stub (row label) column: left-most non-empty cells under header
+  const firstWaveCol = Math.min(...waveCols);
+  let stubCol = 0;
+  for (let c = 0; c < firstWaveCol; c++) {
+    // choose the column that has the most non-empty labels below the header
+    let nonEmpty = 0;
+    for (let r = headerRow + 1; r < Math.min(headerRow + 20, mat.length); r++) {
+      const v = String(mat[r][c] || "").trim();
+      if (v && !waveRx.test(v)) nonEmpty++;
+    }
+    if (nonEmpty > 0) { stubCol = c; break; }
+  }
+
+  const waves = waveCols.map(c => String(mat[headerRow][c]).trim());
+  // latest wave = numerically largest
+  const latestWave = waves
+    .map(w => ({ w, n: Number((w.match(/\d+/)||[])[0] || 0) }))
+    .sort((a,b)=>b.n-a.n)[0]?.w || waves[waves.length-1];
+
+  // 3) walk rows until footer text appears
+  const variables = {};
+  let baseNGuess = 0;
+
+  for (let r = headerRow + 1; r < mat.length; r++) {
+    const rowArr = mat[r];
+    const rowText = rowArr.map(v=>String(v||"").toLowerCase()).join(" ");
+    if (stopTexts.some(t => rowText.includes(t))) break;
+
+    const label = String(rowArr[stubCol] || "").trim();
+    if (!label) continue;
+
+    // Skip “Base: …” style rows; record N if present
+    if (/^base[:\s]/i.test(label)) {
+      // try to grab a numeric N from the latest wave column
+      const nRaw = String(rowArr[ waveCols[waves.indexOf(latestWave)] ] || "");
+      const nVal = Number(nRaw.replace(/[^0-9.\-]/g,""));
+      if (isFinite(nVal) && nVal > 0) baseNGuess = nVal;
+      continue;
+    }
+
+    // parse values for each wave
+    const perWave = {};
+    waves.forEach((w, i) => {
+      const c = waveCols[i];
+      const raw = String(rowArr[c] ?? "").trim();
+      // strip %, sig letters, etc.
+      const num = Number(raw.replace(/[^0-9.\-]/g,""));
+      if (isFinite(num)) perWave[w] = num;
+    });
+    if (!Object.keys(perWave).length) continue;
+
+    const latestVal = perWave[latestWave];
+    // Build variable entry; use row label as the metric name
+    const varId = toMetricId(label);
+    variables[varId] = {
+      label,
+      type: "single",
+      unit: "pct",
+      base: { description: "All qualified", n: baseNGuess || 0 },
+      // we treat latest wave as the “index” for charting across projects
+      stats: { index: latestVal },
+      extras: { perWave }
+    };
+  }
+
+  // Ensure we parsed something; if not, fall back to row-style reader
+  if (Object.keys(variables).length === 0) {
+    // Fallback: use a flat JSON conversion (best-effort)
+    const sheet = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    return rowsToVariables(sheet);
+  }
+  return { variables };
+}
+
 function parseFinalFrequenciesFromCsvText(text){
+  // CSV fallback stays the same as before – supports the row-style export
   const rows = csvParse(text, { columns: true, skip_empty_lines: true });
   return rowsToVariables(rows);
 }
@@ -1932,5 +2085,6 @@ app.listen(PORT, () => {
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
+
 
 
