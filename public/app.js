@@ -2,6 +2,7 @@
    - KEEP: fetch helpers (jget/jpost)
    - ADD: inline message + thinking + refs helpers
    - UPDATE: formatRefsToSup merges adjacent [n][m] → <sup>n;m</sup>
+   - NEW: toMetricId (client-side), guessMetricIdFromQuestion, and safe passthroughs to window.app.fetchChart / window.app.showChart
 */
 
 const API_BASE = (window.CONFIG || {}).API_BASE || "";
@@ -105,6 +106,67 @@ function deriveSupportBullets(snippets, { maxCount = 10, maxLen = 200 } = {}) {
   return out;
 }
 
+/* =========================
+   NEW: chart helpers/glue
+   ========================= */
+
+/** Mirror of server toMetricId. */
+function toMetricId(label) {
+  return String(label || "")
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+}
+
+/**
+ * Guess a metricId from a natural-language question.
+ * You can extend `SYNONYMS` as you add more metrics.
+ */
+function guessMetricIdFromQuestion(q) {
+  const text = String(q || "").toLowerCase();
+
+  // Common research metrics & synonyms
+  const SYNONYMS = [
+    { id: "SATISFACTION", rx: /\b(cs(at)?|sat(isfaction)?|overall\s+sat)\b/ },
+    { id: "NPS",          rx: /\b(nps|net\s+promoter)\b/ },
+    { id: "AWARENESS",    rx: /\b(aided|unaided|total)\s+awareness|\bawareness\b/ },
+    { id: "CONSIDERATION",rx: /\bconsideration\b/ },
+    { id: "PURCHASE_INTENT", rx: /\b(pi|purchase\s+intent|likelihood\s+to\s+buy|ltb)\b/ },
+    { id: "USAGE",        rx: /\busage\b/ },
+    { id: "PREFERENCE",   rx: /\bpreference\b/ },
+    { id: "TRUST",        rx: /\btrust\b/ },
+    { id: "RECOMMEND",    rx: /\brecommend(ation)?\b/ },
+  ];
+
+  for (const { id, rx } of SYNONYMS) {
+    if (rx.test(text)) return id;
+  }
+
+  // Fallback: capture quoted metric names or last proper noun-ish phrase
+  const quoted = text.match(/["“”'‘’]([^"“”'‘’]+)["“”'‘’]/);
+  if (quoted && quoted[1]) return toMetricId(quoted[1]);
+
+  // Another fallback: look for phrases like "trend of <metric>"
+  const m = text.match(/\btrend(?:ing)?\s+(?:of\s+)?([a-zA-Z0-9 _-]{3,})/);
+  if (m && m[1]) return toMetricId(m[1]);
+
+  return null;
+}
+
+/**
+ * Safe passthroughs to the page-level chart API (exposed by index.html).
+ * These NO-OP if the page hasn't defined window.app.
+ */
+async function fetchChart(metricId) {
+  if (!(window.app && typeof window.app.fetchChart === "function")) return;
+  return window.app.fetchChart(metricId);
+}
+function showChart(payload) {
+  if (!(window.app && typeof window.app.showChart === "function")) return;
+  return window.app.showChart(payload);
+}
+
 // Expose a small API for pages (optional)
 window.App = Object.freeze({
   jget,
@@ -117,6 +179,12 @@ window.App = Object.freeze({
   formatRefsToSup,
   setHTMLWithRefs,
   deriveSupportBullets,
+
+  // NEW exports
+  toMetricId,
+  guessMetricIdFromQuestion,
+  fetchChart,      // pass-through to window.app.fetchChart if present
+  showChart,       // pass-through to window.app.showChart if present
 });
 
 // IMPORTANT:
