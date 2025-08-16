@@ -1,3 +1,4 @@
+
 // server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
 // Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
@@ -454,11 +455,9 @@ async function getPathNamesToClient(fileParents, clientRootId) {
       if (!visited.has(p)) stack.push(p);
     });
   }
-  // Reverse so it becomes [<closest to client root> ... <parent of file>]
   return out.reverse();
 }
 function pathIncludesSequence(pathNames, seq) {
-  // case-insensitive subsequence check
   const a = pathNames.map((s) => String(s).toLowerCase());
   const b = seq.map((s) => String(s).toLowerCase());
   let j = 0;
@@ -526,14 +525,12 @@ async function extractTextFromFile(file) {
 // Extract PDF text with per-page boundaries
 async function extractPdfWithPages(file) {
   const drive = getDrive();
-  // Download bytes
   const r = await drive.files.get(
     { fileId: file.id, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
     { responseType: "arraybuffer" }
   );
   const buf = Buffer.from(r.data);
 
-  // Prefer pdfjs-dist for page-level text
   try {
     let pdfjs;
     try {
@@ -556,7 +553,6 @@ async function extractPdfWithPages(file) {
     }
     return { text: pages.map((p) => p.text).join("\n\n"), pages };
   } catch (e) {
-    // Fallback to pdf-parse (no page granularity)
     try {
       const mod = await import("pdf-parse");
       const pdfParse = (mod && (mod.default || mod)) || mod;
@@ -602,7 +598,7 @@ function latestDateFrom(text, fallbackISO) {
     if (mn) candidates.push({ y: yr, m: mn });
   }
 
-  const m2 = s.matchAll(/\b(0?[1-9]|1[0-2])[\/\-_\.]\(\d{4}\)\b/g);
+  const m2 = s.matchAll(/\b(0?[1-9]|1[0-2])[\/\-_.](\d{4})\b/g);
   for (const m of m2) {
     const mn = parseInt(m[1], 10);
     const yr = parseInt(m[2], 10);
@@ -850,7 +846,6 @@ app.post(
 const MANIFEST_DIR = path.join(CONFIG_DIR, "manifests");
 if (!fs.existsSync(MANIFEST_DIR)) fs.mkdirSync(MANIFEST_DIR, { recursive: true });
 
-// ---- Drive change signature helpers ----
 function calcSignatureFromFiles(files) {
   const basis = (files || [])
     .filter((f) => f && f.id && f.modifiedTime)
@@ -894,7 +889,7 @@ async function ingestClientLibrary(clientId) {
     if (!supported.has(f.mimeType)) continue;
 
     let text = "";
-    let pages = null; // [{page,text}] for PDFs
+    let pages = null;
     let status = "complete";
     try {
       if (f.mimeType === "application/pdf") {
@@ -914,8 +909,7 @@ async function ingestClientLibrary(clientId) {
       status = String(e?.message || e);
     }
 
-    const tags = latestDateFrom(`${f.name}
-${text || ""}`, f.modifiedTime);
+    const tags = latestDateFrom(`${f.name}\n${text || ""}`, f.modifiedTime);
     const report = inferReportTag(f.name, text);
     const monthTag = tags.month || "";
     const yearTag = tags.year || "";
@@ -1003,7 +997,6 @@ ${text || ""}`, f.modifiedTime);
     namespaceVectorCount = stats.namespaces?.[clientId]?.vectorCount;
   } catch {}
 
-  // Manifest write (NOW includes driveSignature + driveCount)
   const distinct = Array.from(
     new Set(ingested.filter((x) => x.status === "complete").map((x) => x.name))
   );
@@ -1033,7 +1026,6 @@ ${text || ""}`, f.modifiedTime);
 }
 
 // -------------------- Data Files → cache for charts --------------------
-// ---- Crosstab-aware Final Frequencies parsers ----
 function rowsToVariables(rows) {
   const get = (obj, keys) => {
     for (const k of keys) {
@@ -1459,7 +1451,7 @@ async function fetchSecondaryInfo(query, max = 5) {
     const html = await res.text();
 
     const items = [];
-    // FIX: proper JS regex escapes (use \ only where needed inside string literals; here we use regex literals).
+    // Regex literals with proper escapes:
     const linkRe =
       /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const snipRe =
@@ -1522,7 +1514,7 @@ async function generateSupportBullets({ question, refs, answer }) {
   const refBundle = buildReferenceBundle(refs);
   const system =
     "You write 3–6 concise, well-structured support bullets that directly back up the answer, using only the provided references. Each bullet must be a complete sentence and include bracketed numeric citations like [1] that map to the numbered references list. Prefer newer references. Avoid repeating the exact same phrasing as the answer.";
-  const prompt = `Question:\n${question}\n\nAnswer draft:\n${answer}\n\nReferences (numbered):\n${refBundle}\n\nInstructions:\n- Write 3–6 bullets.\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\n- Prioritize the most recent evidence.\n- Do not invent sources.\n- Keep each bullet to 1 sentence.\n\nBullets:`;
+  const prompt = `Question:\n${question}\n\nAnswer draft:\n${answer}\n\nReferences (numbered):\n${refBundle}\n\nInstructions:\n- Write 3–6 bullets.\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\n- Prioritize the most recent evidence.\n- Do not invent sources.\n\nBullets:`;
 
   const chat = await openai.chat.completions.create({
     model: ANSWER_MODEL,
@@ -1643,21 +1635,93 @@ app.post("/search", requireSession, async (req, res) => {
       answer,
       references: { chunks: refs },
       visuals: [],
-      secondary,      supportingBullets,
+      secondary,
+      supportingBullets,
     });
   } catch (e) {
     res.status(500).json({ error: "Search failed", detail: String(e?.message || e) });
   }
 });
 
-// -------------------- Secure PDF proxy (for slide images) --------------------
+// -------------------- Chart Query (reads data-cache) --------------------
+app.get("/api/chart-query", requireSession, async (req, res) => {
+  try {
+    let clientId = String(req.query.clientId || "").trim();
+    const metricId = String(req.query.metricId || "").trim();
+    if (!metricId) return res.status(400).json({ error: "metricId required" });
+
+    const isAdmin = req.session?.user?.role === "internal";
+    if (!clientId || !isAdmin) {
+      clientId = req.session?.activeClientId || null;
+    }
+    if (!clientId) return res.status(400).json({ error: "clientId required" });
+
+    const baseDir   = path.join(DATA_CACHE_DIR, clientId);
+    const indexPath = path.join(baseDir, "index.json");
+    const seriesDir = path.join(baseDir, "series");
+    const sPath     = path.join(seriesDir, `${metricId}.json`);
+
+    try { await fsp.mkdir(seriesDir, { recursive: true }); } catch {}
+
+    let series;
+    try {
+      const raw = await fsp.readFile(sPath, "utf8");
+      series = JSON.parse(raw);
+    } catch {
+      series = await rebuildSeriesForMetric(clientId, metricId);
+    }
+
+    if (!series || !Array.isArray(series.series) || !series.series.length) {
+      return res.status(404).json({ error: "No data for metric" });
+    }
+
+    const pts = series.series.slice().sort(
+      (a,b) => (a.ts||0)-(b.ts||0) || String(a.xLabel).localeCompare(String(b.xLabel), undefined, { numeric: true })
+    );
+
+    const labels = pts.map(p => p.xLabel || p.projectId);
+    const values = pts.map(p => (typeof p.value === "number" ? p.value : null));
+    const chartType = pts.length <= 2 ? "bar" : "line";
+
+    const table = pts.map(p => ({
+      Project: p.xLabel || p.projectId,
+      Value: typeof p.value === "number" ? p.value : null,
+      "Base N": p.baseN || null
+    }));
+
+    const unit = (series.unit || "pct").toLowerCase();
+    const footnote = `Trend for ${series.label} across ${pts.length} project${pts.length===1?"":"s"}. Values shown in ${unit === "pct" ? "percent (%)" : unit}.`;
+
+    return res.json({
+      chart: {
+        type: chartType,
+        labels,
+        datasets: [{
+          label: series.label || metricId,
+          data: values
+        }]
+      },
+      table,
+      footnote,
+      meta: {
+        clientId,
+        metricId,
+        unit: unit === "pct" ? "pct" : unit
+      }
+    });
+  } catch (e) {
+    console.error("[/api/chart-query] error:", e);
+    res.status(500).json({ error: "Chart query failed" });
+  }
+});
+
+// -------------------- Secure PDF proxy --------------------
 app.get("/api/drive-pdf", requireSession, async (req, res) => {
   try {
     const fileId = String(req.query.fileId || "").trim();
     if (!fileId) return res.status(400).json({ error: "fileId required" });
 
     const drive = getDrive();
-
     let meta;
     try {
       meta = await drive.files.get({
@@ -1720,192 +1784,3 @@ app.listen(PORT, () => {
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
-
-  const user = prompt;
-
-  try {
-    const resp = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    });
-    const text = resp.choices?.[0]?.message?.content?.trim() || "";
-    const cited = extractCitedNumbers(text);
-    const used = cited.map((n) => refs[n - 1]).filter(Boolean);
-    const newest = Math.max(0, ...used.map((r) => r.recencyEpoch || 0));
-    return { text, recencyEpoch: newest, refs: used };
-  } catch (e) {
-    console.warn("[support-bullets] failed", e?.message || e);
-    return { text: "", recencyEpoch: 0, refs: [] };
-  }
-}
-
-// -------------------- Drive PDF proxy --------------------
-app.get("/api/drive-pdf", requireSession, async (req, res) => {
-  try {
-    const { fileId, exportType = "pdf" } = req.query || {};
-    if (!fileId) return res.status(400).json({ error: "fileId required" });
-
-    const drive = getDrive();
-    let stream;
-    try {
-      // Try export (supports Slides/Docs/Sheets)
-      const mime =
-        exportType === "png"
-          ? "image/png"
-          : exportType === "jpg"
-          ? "image/jpeg"
-          : "application/pdf";
-      const r = await drive.files.export(
-        { fileId, mimeType: mime },
-        { responseType: "stream" }
-      );
-      res.setHeader("Cache-Control", "no-store");
-      r.data.pipe(res);
-      return;
-    } catch {
-      // Fallback to direct media
-      const r = await drive.files.get(
-        { fileId, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
-        { responseType: "stream" }
-      );
-      res.setHeader("Cache-Control", "no-store");
-      r.data.pipe(res);
-      return;
-    }
-  } catch (e) {
-    res.status(500).json({ error: "proxy failed", detail: String(e?.message || e) });
-  }
-});
-
-// -------------------- Search --------------------
-app.post("/search", requireSession, async (req, res) => {
-  try {
-    const { q, topK = DEFAULT_TOPK, generateSupport = false } = req.body || {};
-    const clientId =
-      req.session.activeClientId || req.body?.clientId || null;
-    if (!clientId) return res.status(400).json({ error: "Choose a client first" });
-    if (!q || !String(q).trim()) return res.status(400).json({ error: "q required" });
-
-    const [emb] = await embedTexts([q]);
-    const results = await pineconeQuery(emb, clientId, Number(topK) || DEFAULT_TOPK);
-    const matches = (results.matches || []).map((m) => ({
-      id: m.id,
-      score: m.score,
-      ...m.metadata,
-    }));
-
-    const refs = matches.map((m) => ({
-      study: m.study,
-      fileName: m.fileName,
-      monthTag: m.monthTag,
-      yearTag: m.yearTag,
-      reportTag: m.reportTag,
-      recencyEpoch: Number(m.recencyEpoch || 0)
-    }));
-
-    // Secondary info (web)
-    let secondary = [];
-    try {
-      secondary = await fetchSecondaryInfo(q, 5);
-    } catch {}
-
-    // Optional: generate supporting bullets referencing RAG refs
-    let supportingBullets = [];
-    if (generateSupport) {
-      const draft = "Answer will be provided separately; write evidence bullets only.";
-      const b = await generateSupportBullets({ question: q, refs, answer: draft });
-      if (b.text) supportingBullets.push(b);
-      supportingBullets.sort((a,b)=> (b.recencyEpoch||0) - (a.recencyEpoch||0));
-    }
-
-    res.json({ q, clientId, matches, secondary, supportingBullets });
-  } catch (e) {
-    res.status(500).json({ error: "search failed", detail: String(e?.message || e) });
-  }
-});
-
-// -------------------- Admin: create user --------------------
-app.post("/admin/users/create", requireSession, requireInternal, async (req, res) => {
-  try {
-    const { username, password, role = "user", allowedClients } = req.body || {};
-    if (!username || !password) return res.status(400).json({ error: "username and password required" });
-    const usersDoc = readJSON(USERS_PATH, { users: [] });
-    if (usersDoc.users.find((u) => u.username === username)) {
-      return res.status(400).json({ error: "username exists" });
-    }
-    const passwordHash = bcrypt.hashSync(String(password), 10);
-    const allowed =
-      role === "internal"
-        ? "*"
-        : Array.isArray(allowedClients) && allowedClients.length
-        ? allowedClients
-        : [];
-    usersDoc.users.push({ username, passwordHash, role, allowedClients: allowed });
-    writeJSON(USERS_PATH, usersDoc);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: "failed to create user", detail: String(e?.message || e) });
-  }
-});
-
-// -------------------- Charts API (cached data files) --------------------
-app.get("/api/chart-index", requireSession, async (req, res) => {
-  try {
-    const clientId =
-      req.session.activeClientId || req.query.clientId || null;
-    if (!clientId) return res.status(400).json({ error: "Choose a client first" });
-    const indexPath = path.join(DATA_CACHE_DIR, clientId, "index.json");
-    const payload = readJSON(indexPath, { clientId, projects: [], metrics: [] });
-    res.json(payload);
-  } catch (e) {
-    res.status(500).json({ error: "index failed", detail: String(e?.message || e) });
-  }
-});
-
-app.get("/api/chart-series", requireSession, async (req, res) => {
-  try {
-    const clientId =
-      req.session.activeClientId || req.query.clientId || null;
-    const metricId = String(req.query.metricId || "").trim();
-    if (!clientId || !metricId) return res.status(400).json({ error: "clientId and metricId required" });
-    const sPath = path.join(DATA_CACHE_DIR, clientId, "series", `${metricId}.json`);
-    let payload = readJSON(sPath, null);
-    if (!payload) payload = await rebuildSeriesForMetric(clientId, metricId);
-    res.json(payload);
-  } catch (e) {
-    res.status(500).json({ error: "series failed", detail: String(e?.message || e) });
-  }
-});
-
-app.post("/api/chart-query", requireSession, async (req, res) => {
-  try {
-    const clientId =
-      req.session.activeClientId || req.body?.clientId || null;
-    const metricIds = Array.isArray(req.body?.metricIds) ? req.body.metricIds : [];
-    if (!clientId || !metricIds.length) return res.status(400).json({ error: "clientId and metricIds required" });
-
-    const out = {};
-    for (const id of metricIds) {
-      const sPath = path.join(DATA_CACHE_DIR, clientId, "series", `${id}.json`);
-      let series = readJSON(sPath, null);
-      if (!series) series = await rebuildSeriesForMetric(clientId, id);
-      out[id] = series;
-    }
-    res.json({ ok: true, series: out });
-  } catch (e) {
-    res.status(500).json({ error: "chart-query failed", detail: String(e?.message || e) });
-  }
-});
-
-// -------------------- Health --------------------
-app.get("/healthz", (_req, res) => res.json({ ok: true }));
-
-// -------------------- Start --------------------
-app.listen(PORT, () => {
-  console.log(`server listening on :${PORT}`);
-});
-
