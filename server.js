@@ -645,8 +645,8 @@ function inferReportTag(name, text) {
     ["demand", /\bdemand\b/i],
     ["concept test", /(concept\s*test|concept\s*study)/i],
     ["qualitative", /\bqual(itative)?\b|focus\s*group|idi\b/i],
-    ["quantitative", /\bquant(itative)?\b|\bsurvey\b/i],
-    ["PMR", /\bpmr\b|primary\s*market\s*research/i],
+    ["quantitative", /\bquant(itative)?\b|\\bsurvey\\b/i],
+    ["PMR", /\\bpmr\\b|primary\\s*market\\s*research/i],
   ];
   for (const [label, rx] of rules) if (rx.test(s)) return label;
   return "report";
@@ -1032,57 +1032,8 @@ async function ingestClientLibrary(clientId) {
 }
 
 // -------------------- Data Files → cache for charts --------------------
-// Heuristic column mapper for final frequencies rows
-function rowsToVariables(rows) {
-  const get = (obj, keys) => {
-    for (const k of keys) {
-      if (obj[k] != null && String(obj[k]).trim() !== "") return obj[k];
-      // try case-insensitive
-      const found = Object.keys(obj).find(
-        (kk) => kk.toLowerCase() === String(k).toLowerCase()
-      );
-      if (found && String(obj[found]).trim() !== "") return obj[found];
-    }
-    return undefined;
-  };
-
-  const byQ = new Map();
-  for (const r of rows) {
-    const q = String(get(r, ["Question","Variable","Var","Metric","Name"]) || "").trim();
-    const code = String(get(r, ["Code","Value","Category","Option","Choice","Key"]) || "").trim();
-    const label = String(get(r, ["Label","Text","Option Label","Answer"]) || code).trim();
-    let pctRaw = get(r, ["Pct","Percent","%","Pct.","Percent%","Percentage"]);
-    let nRaw = get(r, ["N","Count","Base","n","Total N"]);
-    const table = get(r, ["Table","Source","Q","Sheet"]) || "";
-
-    if (!q || !code) continue;
-
-    const pct = Number(String(pctRaw || "").toString().replace(/[^0-9.\-]/g,""));
-    const n = Number(String(nRaw || "").toString().replace(/[^0-9.\-]/g,""));
-
-    if (!byQ.has(q)) byQ.set(q, { q, baseN: 0, rows: [], table });
-    const bucket = byQ.get(q);
-    bucket.rows.push({ value: code, label, pct: isFinite(pct) ? pct : 0, n: isFinite(n) ? n : 0 });
-    if (!bucket.baseN && isFinite(n) && n > 0) bucket.baseN = n;
-  }
-
-  const variables = {};
-  for (const { q, baseN, rows, table } of byQ.values()) {
-    const varId = toMetricId(q);
-    variables[varId] = {
-      label: q,
-      type: "single",
-      unit: "pct",
-      base: { description: "All qualified", n: baseN || 0 },
-      codes: rows.map((r) => ({ value: r.value, label: r.label })),
-      stats: Object.fromEntries(rows.map((r) => [r.value, { pct: r.pct, n: r.n }])),
-      provenance: { table }
-    };
-  }
-  return { variables };
-}
-
 // ---- Crosstab-aware Final Frequencies parsers ----
+// Single, **correct** definition of rowsToVariables to avoid duplicate identifier errors.
 function rowsToVariables(rows) {
   // (unchanged behavior) fallback helper for CSV-like “one row per record”
   const get = (obj, keys) => {
@@ -1625,9 +1576,9 @@ async function fetchSecondaryInfo(query, max = 5) {
 
     const items = [];
     const linkRe =
-      /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/gi;
     const snipRe =
-      /<a[^>]*class="[^"]*result__snippet"[^>]*>([\s\S]*?)<\/a>|<a[^>]*>[\s\S]*?<\/a>\s*-\s*<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
+      /<a[^>]*class="[^"]*result__snippet"[^>]*>([\\s\\S]*?)<\\/a>|<a[^>]*>[\\s\\S]*?<\\/a>\\s*-\\s*<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\\s\\S]*?)<\\/span>/gi;
 
     let m;
     const links = [];
@@ -1642,7 +1593,7 @@ async function fetchSecondaryInfo(query, max = 5) {
     while ((s = snipRe.exec(html)) && snippets.length < links.length) {
       const snippet = (s[1] || s[2] || "")
         .replace(/<[^>]+>/g, "")
-        .replace(/\s+/g, " ")
+        .replace(/\\s+/g, " ")
         .trim();
       if (snippet) snippets.push(snippet);
     }
@@ -1669,12 +1620,12 @@ function buildReferenceBundle(refs) {
       const tag = `${r.monthTag || ""} ${r.yearTag || ""}`.trim();
       return `[${i + 1}] ${r.study || r.fileName}${tag ? " – " + tag : ""}${r.reportTag ? " • " + r.reportTag : ""}`;
     })
-    .join("\n");
+    .join("\\n");
 }
 function extractCitedNumbers(text) {
   const out = new Set();
   if (!text) return [];
-  const rx = /\[(\d+)\]/g;
+  const rx = /\\[(\\d+)\\]/g;
   let m;
   while ((m = rx.exec(text))) {
     const n = parseInt(m[1], 10);
@@ -1686,7 +1637,7 @@ async function generateSupportBullets({ question, refs, answer }) {
   const refBundle = buildReferenceBundle(refs);
   const system =
     "You write 3–6 concise, well-structured support bullets that directly back up the answer, using only the provided references. Each bullet must be a complete sentence and include bracketed numeric citations like [1] that map to the numbered references list. Prefer newer references. Avoid repeating the exact same phrasing as the answer.";
-  const prompt = `Question:\n${question}\n\nAnswer draft:\n${answer}\n\nReferences (numbered):\n${refBundle}\n\nInstructions:\n- Write 3–6 bullets.\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\n- Prioritize the most recent evidence.\n- Do not invent sources.\n- Keep each bullet to 1 sentence.\n\nBullets:`;
+  const prompt = `Question:\\n${question}\\n\\nAnswer draft:\\n${answer}\\n\\nReferences (numbered):\\n${refBundle}\\n\\nInstructions:\\n- Write 3–6 bullets.\\n- Each bullet must end with appropriate bracketed citations like [2] or [2][5].\\n- Prioritize the most recent evidence.\\n- Do not invent sources.\\n- Keep each bullet to 1 sentence.\\n\\nBullets:`;
 
   const chat = await openai.chat.completions.create({
     model: ANSWER_MODEL,
@@ -1696,8 +1647,8 @@ async function generateSupportBullets({ question, refs, answer }) {
   const raw = chat.choices?.[0]?.message?.content?.trim() || "";
 
   const lines = raw
-    .split(/\r?\n/)
-    .map((s) => s.replace(/^[\-\u2022\*\d\.\s]+/, "").trim())
+    .split(/\\r?\\n/)
+    .map((s) => s.replace(/^[\\-\\u2022\\*\\d\\.\\s]+/, "").trim())
     .filter(Boolean);
 
   return lines.slice(0, 8).map((line) => {
@@ -1709,7 +1660,7 @@ async function generateSupportBullets({ question, refs, answer }) {
       })
       .filter((e) => e > 0);
     const recencyEpoch = epochs.length ? Math.max(...epochs) : 0;
-    const text = /\.\s*$/.test(line) ? line : `${line}.`;
+    const text = /\\.\\s*$/.test(line) ? line : `${line}.`;
     return { text, refs: refsCited, recencyEpoch };
   });
 }
@@ -1778,10 +1729,10 @@ app.post("/search", requireSession, async (req, res) => {
         (r, i) =>
           `[${i + 1}] (${r.study || r.fileName} – ${r.monthTag} ${r.yearTag} • ${r.reportTag}) ${r.textSnippet}`
       )
-      .join("\n\n");
+      .join("\\n\\n");
     const system =
       "Answer strictly from the context. Include bracketed citations like [1], [2] that correspond to the references order. Prefer more recent tagged reports.";
-    const prompt = `Question: ${q}\n\nContext:\n${ctx}\n\nWrite a concise answer (4–7 sentences) with [#] citations. If info is insufficient, say so.`;
+    const prompt = `Question: ${q}\\n\\nContext:\\n${ctx}\\n\\nWrite a concise answer (4–7 sentences) with [#] citations. If info is insufficient, say so.`;
 
     const chat = await openai.chat.completions.create({
       model: ANSWER_MODEL,
@@ -2085,6 +2036,3 @@ app.listen(PORT, () => {
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
-
-
-
