@@ -1661,6 +1661,90 @@ app.post("/search", requireSession, async (req, res) => {
   }
 });
 
+// -------------------- Chart Query (reads data-cache) --------------------
+app.get("/api/chart-query", requireSession, async (req, res) => {
+  try {
+    // Admins can target any client; client users use their session's active client
+    let clientId = String(req.query.clientId || "").trim();
+    const metricId = String(req.query.metricId || "").trim();
+    if (!metricId) return res.status(400).json({ error: "metricId required" });
+
+    // If not provided or user isn't admin, fall back to session client
+    const isAdmin = req.session?.user?.role === "internal";
+    if (!clientId || !isAdmin) {
+      clientId = req.session?.activeClientId || null;
+    }
+    if (!clientId) return res.status(400).json({ error: "clientId required" });
+
+    // Paths
+    const baseDir   = path.join(DATA_CACHE_DIR, clientId);
+    const indexPath = path.join(baseDir, "index.json");
+    const seriesDir = path.join(baseDir, "series");
+    const sPath     = path.join(seriesDir, `${metricId}.json`);
+
+    // Make sure cache exists
+    try { await fsp.mkdir(seriesDir, { recursive: true }); } catch {}
+
+    // Load (or rebuild) series
+    let series;
+    try {
+      const raw = await fsp.readFile(sPath, "utf8");
+      series = JSON.parse(raw);
+    } catch {
+      series = await rebuildSeriesForMetric(clientId, metricId);
+    }
+
+    if (!series || !Array.isArray(series.series) || !series.series.length) {
+      return res.status(404).json({ error: "No data for metric" });
+    }
+
+    // Sort by time, then by label (stable)
+    const pts = series.series.slice().sort(
+      (a,b) => (a.ts||0)-(b.ts||0) || String(a.xLabel).localeCompare(String(b.xLabel), undefined, { numeric: true })
+    );
+
+    // Build a default trend (single line). If later you want multiple series per metric (e.g., by segment),
+    // you can expand this to group on a field in each point.
+    const labels = pts.map(p => p.xLabel || p.projectId);
+    const values = pts.map(p => (typeof p.value === "number" ? p.value : null));
+
+    // If we only have <=2 projects, a bar often reads better; otherwise line.
+    const chartType = pts.length <= 2 ? "bar" : "line";
+
+    // Table rows
+    const table = pts.map(p => ({
+      Project: p.xLabel || p.projectId,
+      Value: typeof p.value === "number" ? p.value : null,
+      "Base N": p.baseN || null
+    }));
+
+    // Footnote
+    const unit = (series.unit || "pct").toLowerCase();
+    const footnote = `Trend for ${series.label} across ${pts.length} project${pts.length===1?"":"s"}. Values shown in ${unit === "pct" ? "percent (%)" : unit}.`;
+
+    return res.json({
+      chart: {
+        type: chartType,
+        labels,
+        datasets: [{
+          label: series.label || metricId,
+          data: values
+        }]
+      },
+      table,
+      footnote,
+      meta: {
+        clientId,
+        metricId,
+        unit: unit === "pct" ? "pct" : unit
+      }
+    });
+  } catch (e) {
+    console.error("[/api/chart-query] error:", e);
+    res.status(500).json({ error: "Chart query failed" });
+  }
+});
+
 // --- Drive children listing for admin tree ----
 app.get(
   "/admin/drive/children",
@@ -1848,4 +1932,5 @@ app.listen(PORT, () => {
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
+
 
