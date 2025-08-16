@@ -13,8 +13,7 @@
 // - Auto-ingest support:
 //    (a) /admin/ingest/sync (token-protected; for cron)
 //    (b) Drive push notifications (changes.watch) → /webhooks/drive triggers ingest automatically.
-// - NEW (Aug 15): Data ingestion from Drive "Data Files/Final Frequencies" (xlsx/csv/Sheets) → chart-ready cache
-//                  under ./data-cache/{clientId} and API GET /api/chart-query for frontend charts.
+// - NEW (Aug 15): Data files pipeline (Final Frequencies & Raw Data) → cache to /data-cache and serve charts via /api/chart-query.
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -28,7 +27,7 @@ import OpenAI from "openai";
 import { google } from "googleapis";
 import crypto from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
-import XLSX from "xlsx";
+import * as XLSX from "xlsx";
 import { parse as csvParse } from "csv-parse/sync";
 
 // -------------------- Environment --------------------
@@ -54,13 +53,6 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "";
 const DRIVE_WEBHOOK_VERIFY_TOKEN =
   process.env.DRIVE_WEBHOOK_VERIFY_TOKEN || "";
 
-// Data cache / folders (NEW)
-const DATA_CACHE_DIR = process.env.DATA_CACHE_DIR || "./data-cache";
-const DATA_FILES_FOLDER = process.env.DATA_FILES_FOLDER || "Data Files";
-const DATA_FINAL_FREQ_SUBFOLDER =
-  process.env.DATA_FINAL_FREQ_SUBFOLDER || "Final Frequencies";
-const DATA_RAW_SUBFOLDER = process.env.DATA_RAW_SUBFOLDER || "Raw Data";
-
 // Cache for client libraries (so UI always loads from Drive, no redeploys)
 const CLIENT_LIB_TTL_MS = Number(process.env.CLIENT_LIB_TTL_MS || 60_000);
 
@@ -79,6 +71,15 @@ const SECURE_COOKIES =
   )
     .toLowerCase()
     .trim() === "true";
+
+// -------------------- Data pipeline envs --------------------
+const DATA_CACHE_DIR =
+  process.env.DATA_CACHE_DIR || path.resolve(process.cwd(), "data-cache");
+const DATA_FILES_FOLDER = process.env.DATA_FILES_FOLDER || "Data Files";
+const DATA_FINAL_FREQ_SUBFOLDER =
+  process.env.DATA_FINAL_FREQ_SUBFOLDER || "Final Frequencies";
+const DATA_RAW_SUBFOLDER =
+  process.env.DATA_RAW_SUBFOLDER || "Raw Data";
 
 // -------------------- App --------------------
 const app = express();
@@ -119,8 +120,8 @@ app.use(
   })
 );
 
-// Ensure cache root exists
-await fsp.mkdir(DATA_CACHE_DIR, { recursive: true }).catch(() => {});
+// Ensure data cache root exists
+try { await fsp.mkdir(DATA_CACHE_DIR, { recursive: true }); } catch {}
 
 // -------------------- Tiny JSON store --------------------
 const CONFIG_DIR = path.resolve(process.cwd(), "config");
@@ -275,8 +276,7 @@ async function scheduleIngest(clientId, minMs = 120000) {
   _ingestCooldown.set(clientId, now);
   try {
     console.log(`[drive-watch] ingest ${clientId}`);
-    await ingestClientLibrary(clientId);
-    await ingestClientDataFrequencies(clientId); // NEW: data cache refresh on webhook
+    await ingestAllForClient(clientId); // includes library + data files
   } catch (e) {
     console.warn("[drive-watch] ingest failed", clientId, e);
   }
@@ -354,7 +354,7 @@ async function processDrivePing(_headers) {
       const clientId = await findOwningClientId(fid);
       if (clientId && !touched.has(clientId)) {
         touched.add(clientId);
-        scheduleIngest(clientId); // debounced (also refreshes data cache)
+        scheduleIngest(clientId); // debounced
       }
     }
 
@@ -371,14 +371,12 @@ async function processDrivePing(_headers) {
 }
 
 // -------------------- Drive helpers --------------------
-function drive() { return getDrive(); }
-
 async function listClientFolders() {
   if (!DRIVE_ROOT_FOLDER_ID) return [];
   try {
-    const d = drive();
+    const drive = getDrive();
     const q = `'${DRIVE_ROOT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-    const r = await d.files.list({
+    const r = await drive.files.list({
       q,
       fields: "files(id,name)",
       pageSize: 200,
@@ -397,20 +395,21 @@ async function driveFolderExists(id) {
   return all.some((x) => x.id === id);
 }
 
+// NOTE: include parents so we can reconstruct paths for Data Files recognition.
 async function listAllFilesUnder(folderId) {
-  const d = drive();
+  const drive = getDrive();
   const stack = [folderId];
   const out = [];
   while (stack.length) {
     const cur = stack.pop();
-    const r = await d.files.list({
+    const r = await drive.files.list({
       q: `'${cur}' in parents and trashed=false`,
       fields: "files(id,name,mimeType,webViewLink,modifiedTime,parents)",
       pageSize: 1000,
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
     });
-    for (const f of r.data.files || []) {
+    for (const f of (r.data.files || [])) {
       if (f.mimeType === "application/vnd.google-apps.folder") stack.push(f.id);
       else out.push(f);
     }
@@ -418,54 +417,55 @@ async function listAllFilesUnder(folderId) {
   return out;
 }
 
-async function getFileParentsChain(fileId) {
-  const d = drive();
-  const chain = [];
-  let cur = fileId;
-  for (let i = 0; i < 20 && cur; i++) {
-    const r = await d.files.get({
-      fileId: cur,
+// Folder meta cache to avoid repeated gets
+const _folderMeta = new Map();
+async function getFolderMetaCached(folderId) {
+  if (!folderId) return null;
+  if (_folderMeta.has(folderId)) return _folderMeta.get(folderId);
+  try {
+    const drive = getDrive();
+    const r = await drive.files.get({
+      fileId: folderId,
       fields: "id,name,parents,mimeType",
       supportsAllDrives: true,
     });
-    const meta = r.data;
-    chain.push({ id: meta.id, name: meta.name, mimeType: meta.mimeType || "" });
-    cur = (meta.parents && meta.parents[0]) || null;
+    _folderMeta.set(folderId, r.data || null);
+    return r.data || null;
+  } catch {
+    _folderMeta.set(folderId, null);
+    return null;
   }
-  return chain; // starts at file, then its parent, etc.
 }
 
-function chainHasPath(chain, segments) {
-  // Check if chain contains .../<Project>/<Data Files>/<Final Frequencies>/<file>
-  // We scan consecutive names from the chain reversed (root->file) against segments
-  const names = chain.map(c => c.name).reverse(); // root..file
-  const segs = segments.map(s => String(s).toLowerCase());
-  for (let i = 0; i <= names.length - segs.length; i++) {
-    let ok = true;
-    for (let j = 0; j < segs.length; j++) {
-      if (String(names[i + j] || "").toLowerCase() !== segs[j]) { ok = false; break; }
-    }
-    if (ok) return true;
+// Build path names from file parents up to the client root id. Returns array of folder names (closest first).
+async function getPathNamesToClient(fileParents, clientRootId) {
+  const out = [];
+  const visited = new Set();
+  const stack = [...(fileParents || [])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (!id || visited.has(id)) continue;
+    visited.add(id);
+    if (id === clientRootId) break;
+    const meta = await getFolderMetaCached(id);
+    if (!meta) continue;
+    if (meta.name) out.push(meta.name);
+    (meta.parents || []).forEach((p) => {
+      if (!visited.has(p)) stack.push(p);
+    });
   }
-  return false;
+  // Reverse so it becomes [<closest to client root> ... <parent of file>]
+  return out.reverse();
 }
-
-function findProjectFolderNameFromChain(chain) {
-  // Expect pattern: <ClientRoot>/<Project>/<Data Files>/<Final Frequencies>/<file>
-  // We'll return the folder right above "Data Files" if present; else the closest named folder above file that isn't the special subfolders
-  const names = chain.map(c => ({ id: c.id, name: c.name, mt: c.mimeType })).reverse();
-  const dfIdx = names.findIndex(n => n.name?.toLowerCase() === DATA_FILES_FOLDER.toLowerCase());
-  if (dfIdx > 0) return names[dfIdx - 1].name || "Project";
-  // fallback: first folder above file (skip special subfolders)
-  for (let i = names.length - 2; i >= 0; i--) {
-    if (names[i].mt === "application/vnd.google-apps.folder") {
-      const nm = (names[i].name || "").toLowerCase();
-      if (nm !== DATA_FILES_FOLDER.toLowerCase() && nm !== DATA_FINAL_FREQ_SUBFOLDER.toLowerCase()) {
-        return names[i].name || "Project";
-      }
-    }
+function pathIncludesSequence(pathNames, seq) {
+  // case-insensitive subsequence check
+  const a = pathNames.map((s) => String(s).toLowerCase());
+  const b = seq.map((s) => String(s).toLowerCase());
+  let j = 0;
+  for (let i = 0; i < a.length && j < b.length; i++) {
+    if (a[i] === b[j]) j++;
   }
-  return "Project";
+  return j === b.length;
 }
 
 // -------------------- Client library cache --------------------
@@ -480,12 +480,12 @@ async function getClientLibrariesCached(force = false) {
 
 // -------------------- Text extractors --------------------
 async function extractTextFromFile(file) {
-  const d = drive();
+  const drive = getDrive();
   const slides = getSlides();
   const sheets = getSheets();
 
   if (file.mimeType === "application/vnd.google-apps.document") {
-    const r = await d.files.export(
+    const r = await drive.files.export(
       { fileId: file.id, mimeType: "text/plain" },
       { responseType: "arraybuffer" }
     );
@@ -525,9 +525,9 @@ async function extractTextFromFile(file) {
 
 // Extract PDF text with per-page boundaries
 async function extractPdfWithPages(file) {
-  const d = drive();
+  const drive = getDrive();
   // Download bytes
-  const r = await d.files.get(
+  const r = await drive.files.get(
     { fileId: file.id, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
     { responseType: "arraybuffer" }
   );
@@ -564,7 +564,7 @@ async function extractPdfWithPages(file) {
       const t = parsed?.text?.trim() || "";
       return { text: t, pages: [{ page: 1, text: t }] };
     } catch (e2) {
-      throw new Error(`PDF text extraction failed: ${String(e2?.message || e)}`);
+      throw new Error(`PDF text extraction failed: ${String(e2?.message || e2)}`);
     }
   }
 }
@@ -652,6 +652,17 @@ function inferReportTag(name, text) {
   return "report";
 }
 const sanitize = (s) => String(s || "").replace(/[^\w\-:.]/g, "_").slice(0, 128);
+function titleFromName(name) {
+  return String(name || "").replace(/\.[^.]+$/, "");
+}
+function toMetricId(label){
+  return String(label || '')
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g,'_')
+    .replace(/^_+|_+$/g,'')
+    .toUpperCase();
+}
+async function ensureDir(dir){ try { await fsp.mkdir(dir, { recursive: true }); } catch {} }
 
 // -------------------- Embeddings + Pinecone --------------------
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -865,7 +876,7 @@ async function isLibraryStale(clientId) {
   return { stale, liveSig, liveCount, files };
 }
 
-// -------------------- Ingest (text → vectors) --------------------
+// -------------------- Ingest (RAG docs) --------------------
 async function ingestClientLibrary(clientId) {
   const files = await listAllFilesUnder(clientId);
   const supported = new Set([
@@ -995,23 +1006,22 @@ async function ingestClientLibrary(clientId) {
   const distinct = Array.from(
     new Set(ingested.filter((x) => x.status === "complete").map((x) => x.name))
   );
-  const allFiles = await listAllFilesUnder(clientId);
-  const signature = calcSignatureFromFiles(allFiles);
+  const signature = calcSignatureFromFiles(files);
   const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
   writeJSON(manifestPath, {
     clientId,
     updatedAt: new Date().toISOString(),
     driveSignature: signature,
-    driveCount: allFiles.length,
+    driveCount: files.length,
     files: distinct,
   });
 
   return {
     ok: true,
     summary: {
-      filesSeen: allFiles.length,
+      filesSeen: files.length,
       ingestedCount: ingested.filter((x) => x.status === "complete").length,
-      skippedCount: allFiles.filter((f) => !supported.has(f.mimeType)).length,
+      skippedCount: files.filter((f) => !supported.has(f.mimeType)).length,
       errorsCount: errors.length,
       upserted,
       namespaceVectorCount,
@@ -1021,241 +1031,273 @@ async function ingestClientLibrary(clientId) {
   };
 }
 
-// -------------------- Data cache (Final Frequencies → chart JSON) [NEW] --------------------
-function toMetricId(label){
-  return String(label || '')
-    .trim()
-    .replace(/[^A-Za-z0-9]+/g,'_')
-    .replace(/^_+|_+$/g,'')
-    .toUpperCase();
-}
-function safePath(...segs){ return path.join(...segs); }
-async function ensureDir(dir){ await fsp.mkdir(dir, { recursive: true }); }
-
-function buildVariableJson({ label, baseN, rows, type='single', unit='pct', provenance={} }){
-  const stats = {};
-  const codes = [];
-  for(const r of rows){               // rows: [{value,label,pct,n}]
-    codes.push({ value: r.value, label: r.label });
-    stats[r.value] = { pct: r.pct, n: r.n };
-  }
-  return {
-    label, type, unit,
-    base: { description: 'All qualified', n: baseN || 0 },
-    codes, stats, provenance
+// -------------------- Data Files → cache for charts --------------------
+// Heuristic column mapper for final frequencies rows
+function rowsToVariables(rows) {
+  const get = (obj, keys) => {
+    for (const k of keys) {
+      if (obj[k] != null && String(obj[k]).trim() !== "") return obj[k];
+      // try case-insensitive
+      const found = Object.keys(obj).find(
+        (kk) => kk.toLowerCase() === String(k).toLowerCase()
+      );
+      if (found && String(obj[found]).trim() !== "") return obj[found];
+    }
+    return undefined;
   };
-}
 
-function parseFinalFrequenciesFromXlsxBuffer(buf){
-  const wb = XLSX.read(buf, { type: 'buffer' });
-  const sheetName = wb.SheetNames.find(s => /freq/i.test(s)) || wb.SheetNames[0];
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
+  const byQ = new Map();
+  for (const r of rows) {
+    const q = String(get(r, ["Question","Variable","Var","Metric","Name"]) || "").trim();
+    const code = String(get(r, ["Code","Value","Category","Option","Choice","Key"]) || "").trim();
+    const label = String(get(r, ["Label","Text","Option Label","Answer"]) || code).trim();
+    let pctRaw = get(r, ["Pct","Percent","%","Pct.","Percent%","Percentage"]);
+    let nRaw = get(r, ["N","Count","Base","n","Total N"]);
+    const table = get(r, ["Table","Source","Q","Sheet"]) || "";
 
-  const byQuestion = new Map();
-  for(const r of rows){
-    const q = String(r.Question || r.Variable || r.Var || '').trim();
-    const code = String(r.Code || r.Value || r.Category || '').trim();
-    const label = String(r.Label || r.Option || code || '').trim();
-    const pct = Number(r.Pct || r.Percent || r['%'] || 0);
-    const n   = Number(r.N || r.Count || r.Base || 0);
-    const table = r.Table || r.Source || '';
+    if (!q || !code) continue;
 
-    if(!q || !code) continue;
-    if(!byQuestion.has(q)) byQuestion.set(q, { label: q, baseN: n || 0, rows: [], table });
-    const bucket = byQuestion.get(q);
-    bucket.rows.push({ value: code, label, pct, n });
-    if(!bucket.baseN && n) bucket.baseN = n;
+    const pct = Number(String(pctRaw || "").toString().replace(/[^0-9.\-]/g,""));
+    const n = Number(String(nRaw || "").toString().replace(/[^0-9.\-]/g,""));
+
+    if (!byQ.has(q)) byQ.set(q, { q, baseN: 0, rows: [], table });
+    const bucket = byQ.get(q);
+    bucket.rows.push({ value: code, label, pct: isFinite(pct) ? pct : 0, n: isFinite(n) ? n : 0 });
+    if (!bucket.baseN && isFinite(n) && n > 0) bucket.baseN = n;
   }
 
   const variables = {};
-  for(const [q, obj] of byQuestion){
+  for (const { q, baseN, rows, table } of byQ.values()) {
     const varId = toMetricId(q);
-    variables[varId] = buildVariableJson({
-      label: obj.label,
-      baseN: obj.baseN || 0,
-      rows: obj.rows,
-      provenance: { table: obj.table }
-    });
+    variables[varId] = {
+      label: q,
+      type: "single",
+      unit: "pct",
+      base: { description: "All qualified", n: baseN || 0 },
+      codes: rows.map((r) => ({ value: r.value, label: r.label })),
+      stats: Object.fromEntries(rows.map((r) => [r.value, { pct: r.pct, n: r.n }])),
+      provenance: { table }
+    };
   }
   return { variables };
 }
 
+async function parseFinalFrequenciesFromXlsxBuffer(buf){
+  const wb = XLSX.read(buf, { type: "buffer" });
+  const sheetName =
+    wb.SheetNames.find((s) => /freq|table|summary/i.test(s)) || wb.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+  return rowsToVariables(rows);
+}
 function parseFinalFrequenciesFromCsvText(text){
   const rows = csvParse(text, { columns: true, skip_empty_lines: true });
-  const byQuestion = new Map();
-  for(const r of rows){
-    const q = String(r.Question || r.Variable || r.Var || '').trim();
-    const code = String(r.Code || r.Value || r.Category || '').trim();
-    const label = String(r.Label || r.Option || code || '').trim();
-    const pct = Number(r.Pct || r.Percent || r['%'] || 0);
-    const n   = Number(r.N || r.Count || r.Base || 0);
-    const table = r.Table || r.Source || '';
-    if(!q || !code) continue;
-    if(!byQuestion.has(q)) byQuestion.set(q, { label: q, baseN: n || 0, rows: [], table });
-    const bucket = byQuestion.get(q);
-    bucket.rows.push({ value: code, label, pct, n });
-    if(!bucket.baseN && n) bucket.baseN = n;
+  return rowsToVariables(rows);
+}
+
+// Identify if file is a Final Frequencies data file (in path .../Data Files/Final Frequencies)
+async function isFinalFreqFile(file, clientId) {
+  const pathNames = await getPathNamesToClient(file.parents || [], clientId);
+  return pathIncludesSequence(pathNames, [DATA_FILES_FOLDER, DATA_FINAL_FREQ_SUBFOLDER]);
+}
+
+// Resolve a projectId from path; try folder before "Data Files"
+async function inferProjectMeta(file, clientId) {
+  const pathNames = await getPathNamesToClient(file.parents || [], clientId);
+  let projectName = titleFromName(file.name);
+  const dataIdx = pathNames.findIndex(
+    (n) => String(n).toLowerCase() === DATA_FILES_FOLDER.toLowerCase()
+  );
+  if (dataIdx > 0) {
+    projectName = pathNames[dataIdx - 1] || projectName;
   }
-  const variables = {};
-  for(const [q, obj] of byQuestion){
-    const varId = toMetricId(q);
-    variables[varId] = buildVariableJson({
-      label: obj.label,
-      baseN: obj.baseN || 0,
-      rows: obj.rows,
-      provenance: { table: obj.table }
-    });
-  }
-  return { variables };
+  const projectId = toMetricId(projectName);
+  const title = projectName;
+  const rec = latestDateFrom(file.name, file.modifiedTime);
+  return {
+    projectId, title,
+    fieldStart: "", fieldEnd: "",
+    recencyEpoch: rec.epoch || Date.parse(file.modifiedTime || "") || 0
+  };
 }
 
 async function writeProjectCache({ clientId, projectId, title, fieldStart, fieldEnd, recencyEpoch, sourceFiles, variables }){
-  const baseDir = safePath(DATA_CACHE_DIR, clientId);
-  const projectsDir = safePath(baseDir, 'projects');
+  const baseDir = path.join(DATA_CACHE_DIR, clientId);
+  const projectsDir = path.join(baseDir, "projects");
   await ensureDir(projectsDir);
 
-  const projectPath = safePath(projectsDir, `${projectId}.json`);
-  await fsp.writeFile(projectPath, JSON.stringify({
-    project: { projectId, title, fieldStart, fieldEnd, recencyEpoch, sourceFiles },
-    variables
-  }, null, 2), 'utf8');
+  // write per-project
+  const projectPath = path.join(projectsDir, `${projectId}.json`);
+  await fsp.writeFile(
+    projectPath,
+    JSON.stringify({
+      project: { projectId, title, fieldStart, fieldEnd, recencyEpoch, sourceFiles },
+      variables
+    }, null, 2),
+    "utf8"
+  );
 
-  // Update index.json
-  const indexPath = safePath(baseDir, 'index.json');
+  // update index.json
+  const indexPath = path.join(baseDir, "index.json");
   let index = { clientId, lastRebuild: new Date().toISOString(), projects: [], metrics: [] };
-  try { index = JSON.parse(await fsp.readFile(indexPath, 'utf8')); } catch {}
-
-  const existingIdx = index.projects.findIndex(p => p.projectId === projectId);
+  try { index = JSON.parse(await fsp.readFile(indexPath, "utf8")); } catch {}
+  const pIdx = index.projects.findIndex((p) => p.projectId === projectId);
   const projectMeta = {
     projectId, title, fieldStart, fieldEnd, recencyEpoch, sourceFiles,
-    variables: Object.keys(variables).map(varId => ({
-      varId, label: variables[varId].label, type: variables[varId].type || 'single', category: 'Uncategorized'
+    variables: Object.keys(variables).map((varId) => ({
+      varId, label: variables[varId].label, type: variables[varId].type || "single", category: "Uncategorized"
     }))
   };
-  if(existingIdx >= 0) index.projects[existingIdx] = projectMeta;
-  else index.projects.push(projectMeta);
+  if (pIdx >= 0) index.projects[pIdx] = projectMeta; else index.projects.push(projectMeta);
 
-  // Rebuild metrics list
-  const metricSet = new Map(index.metrics.map(m => [m.metricId, m]));
-  for(const varId of Object.keys(variables)){
-    const label = variables[varId].label;
-    if(!metricSet.has(varId)) metricSet.set(varId, { metricId: varId, label, unit: variables[varId].unit || 'pct' });
+  const metricMap = new Map(index.metrics.map((m) => [m.metricId, m]));
+  for (const [varId, v] of Object.entries(variables)) {
+    if (!metricMap.has(varId)) metricMap.set(varId, { metricId: varId, label: v.label, unit: v.unit || "pct" });
   }
-  index.metrics = Array.from(metricSet.values());
+  index.metrics = Array.from(metricMap.values());
   index.lastRebuild = new Date().toISOString();
   await ensureDir(baseDir);
-  await fsp.writeFile(indexPath, JSON.stringify(index, null, 2), 'utf8');
+  await fsp.writeFile(indexPath, JSON.stringify(index, null, 2), "utf8");
 
-  // Update series/{metric}.json for quick trends
-  const seriesDir = safePath(baseDir, 'series');
+  // update per-metric series
+  const seriesDir = path.join(baseDir, "series");
   await ensureDir(seriesDir);
-  for(const [varId, v] of Object.entries(variables)){
-    const seriesPath = safePath(seriesDir, `${varId}.json`);
-    let series = { metricId: varId, label: v.label, unit: v.unit || 'pct', series: [] };
-    try { series = JSON.parse(await fsp.readFile(seriesPath, 'utf8')); } catch {}
+  for (const [varId, v] of Object.entries(variables)) {
+    const sPath = path.join(seriesDir, `${varId}.json`);
+    let series = { metricId: varId, label: v.label, unit: v.unit || "pct", series: [] };
+    try { series = JSON.parse(await fsp.readFile(sPath, "utf8")); } catch {}
 
-    // Pick a primary value: Top2Box > mean/index > first code pct
-    let value = undefined, baseN = v.base?.n || 0, xLabel = title;
-    if(v.stats?.Top2Box?.pct != null) value = v.stats.Top2Box.pct;
-    else if(v.extras?.mean != null) value = v.extras.mean;
-    else if(v.stats?.index != null) value = v.stats.index;
+    // Choose a primary value: Top2Box if present; else first code pct; else index/mean if present.
+    let value = undefined;
+    let baseN = v.base?.n || 0;
+    if (v.stats?.Top2Box?.pct != null) value = v.stats.Top2Box.pct;
+    else if (v.stats?.index != null) value = v.stats.index;
+    else if (v.extras?.mean != null) value = v.extras.mean;
     else {
       const firstKey = v.codes?.[0]?.value;
-      if(firstKey && v.stats?.[firstKey]?.pct != null) value = v.stats[firstKey].pct;
+      if (firstKey && v.stats?.[firstKey]?.pct != null) value = v.stats[firstKey].pct;
     }
-    if(value != null){
-      const idx = series.series.findIndex(s => s.projectId === projectId);
-      const point = { projectId, xLabel, value, baseN };
-      if(idx >= 0) series.series[idx] = point; else series.series.push(point);
-      // keep series sorted by label (natural-ish)
-      series.series.sort((a,b)=> a.xLabel.localeCompare(b.xLabel, undefined, { numeric:true }));
-      await fsp.writeFile(seriesPath, JSON.stringify(series, null, 2), 'utf8');
+
+    if (value != null) {
+      const point = { projectId, xLabel: title, value, baseN, ts: recencyEpoch || 0 };
+      const idx = series.series.findIndex((p) => p.projectId === projectId);
+      if (idx >= 0) series.series[idx] = point; else series.series.push(point);
+      series.series.sort((a,b)=> (a.ts||0)-(b.ts||0) || a.xLabel.localeCompare(b.xLabel, undefined, { numeric:true }));
+      await fsp.writeFile(sPath, JSON.stringify(series, null, 2), "utf8");
     }
   }
 }
 
-// Detect whether a file lives under ".../<Project>/<Data Files>/<Final Frequencies>/"
-async function isFinalFreqFileForClient(fileId){
-  const chain = await getFileParentsChain(fileId); // file -> parent -> ...
-  return chainHasPath(chain, [DATA_FILES_FOLDER, DATA_FINAL_FREQ_SUBFOLDER]);
-}
-async function deriveProjectNameForFile(fileId){
-  const chain = await getFileParentsChain(fileId);
-  return findProjectFolderNameFromChain(chain);
-}
-
-async function downloadFileBuffer(fileId){
-  const d = drive();
-  const r = await d.files.get(
-    { fileId, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
-    { responseType: "arraybuffer" }
-  );
-  return Buffer.from(r.data);
-}
-
-async function exportGoogleSheetToCsvText(fileId){
-  // Export first sheet to CSV
-  const d = drive();
-  const r = await d.files.export(
-    { fileId, mimeType: "text/csv" },
-    { responseType: "arraybuffer" }
-  );
-  return Buffer.from(r.data).toString("utf8");
-}
-
-// Main data ingest for Final Frequencies
-async function ingestClientDataFrequencies(clientId){
+async function ingestClientData(clientId) {
+  const drive = getDrive();
   const all = await listAllFilesUnder(clientId);
-  const candidate = [];
-  for(const f of all){
-    const mt = f.mimeType || "";
-    const isXlsx = mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    const isCsv  = mt === "text/csv";
-    const isGSheet = mt === "application/vnd.google-apps.spreadsheet";
-    if(!(isXlsx || isCsv || isGSheet)) continue;
-    if(!(await isFinalFreqFileForClient(f.id))) continue;
-    candidate.push(f);
-  }
-  if(!candidate.length) return { ok: true, updated: 0 };
 
-  let updated = 0;
-  for(const f of candidate){
-    try{
-      let variables = {};
-      if (f.mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"){
-        const buf = await downloadFileBuffer(f.id);
-        variables = parseFinalFrequenciesFromXlsxBuffer(buf).variables;
-      } else if (f.mimeType === "text/csv"){
-        const buf = await downloadFileBuffer(f.id);
-        variables = parseFinalFrequenciesFromCsvText(buf.toString("utf8")).variables;
-      } else if (f.mimeType === "application/vnd.google-apps.spreadsheet"){
-        const csvText = await exportGoogleSheetToCsvText(f.id);
+  // Candidate mime types for final frequencies
+  const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const XLS_MIME = "application/vnd.ms-excel";
+  const CSV_MIME = "text/csv";
+  const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
+
+  const finalFreqFiles = [];
+  for (const f of all) {
+    // quick type check to avoid extra API calls
+    if (![XLSX_MIME, XLS_MIME, CSV_MIME, SHEET_MIME].includes(f.mimeType)) continue;
+    if (await isFinalFreqFile(f, clientId)) finalFreqFiles.push(f);
+  }
+
+  let parsedCount = 0;
+  const parsedProjects = [];
+
+  for (const file of finalFreqFiles) {
+    const meta = await inferProjectMeta(file, clientId);
+    const sourceFiles = [{ driveId: file.id, name: file.name, lastModified: file.modifiedTime || "" }];
+
+    let variables = {};
+    try {
+      if (file.mimeType === SHEET_MIME) {
+        // Export first sheet as CSV for simple parsing
+        const r = await drive.files.export(
+          { fileId: file.id, mimeType: "text/csv" },
+          { responseType: "arraybuffer" }
+        );
+        const csvText = Buffer.from(r.data).toString("utf8");
         variables = parseFinalFrequenciesFromCsvText(csvText).variables;
+      } else if (file.mimeType === CSV_MIME) {
+        const r = await drive.files.get(
+          { fileId: file.id, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
+          { responseType: "arraybuffer" }
+        );
+        const csvText = Buffer.from(r.data).toString("utf8");
+        variables = parseFinalFrequenciesFromCsvText(csvText).variables;
+      } else if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME) {
+        const r = await drive.files.get(
+          { fileId: file.id, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
+          { responseType: "arraybuffer" }
+        );
+        const buf = Buffer.from(r.data);
+        variables = (await parseFinalFrequenciesFromXlsxBuffer(buf)).variables;
       } else {
         continue;
       }
 
-      const title = await deriveProjectNameForFile(f.id);
-      const projectId = toMetricId(title);
-      const when = f.modifiedTime || new Date().toISOString();
-      const rec = latestDateFrom(`${f.name}`, when);
-      const meta = {
+      await writeProjectCache({
         clientId,
-        projectId,
-        title,
-        fieldStart: null,
-        fieldEnd: null,
-        recencyEpoch: rec.epoch || Date.parse(when),
-        sourceFiles: [{ driveId: f.id, name: f.name, bytes: null, lastModified: when }],
+        projectId: meta.projectId,
+        title: meta.title,
+        fieldStart: meta.fieldStart,
+        fieldEnd: meta.fieldEnd,
+        recencyEpoch: meta.recencyEpoch,
+        sourceFiles,
         variables
-      };
-      await writeProjectCache(meta);
-      updated++;
-    } catch(e){
-      console.warn("[data-ingest] failed", f.name, e?.message || e);
+      });
+
+      parsedCount++;
+      parsedProjects.push(meta.projectId);
+    } catch (e) {
+      console.warn("[data-ingest] parse failed:", file.name, e?.message || e);
     }
   }
-  return { ok: true, updated };
+
+  return { ok: true, parsedCount, projects: parsedProjects };
+}
+
+// Rebuild series on-demand if file missing
+async function rebuildSeriesForMetric(clientId, metricId){
+  const baseDir = path.join(DATA_CACHE_DIR, clientId);
+  const projectsDir = path.join(baseDir, "projects");
+  const sPath = path.join(baseDir, "series", `${metricId}.json`);
+  await ensureDir(path.join(baseDir, "series"));
+
+  let series = { metricId, label: metricId, unit: "pct", series: [] };
+  try {
+    const files = await fsp.readdir(projectsDir);
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      const pj = JSON.parse(await fsp.readFile(path.join(projectsDir, f), "utf8"));
+      const v = pj.variables?.[metricId];
+      if (!v) continue;
+      let value = undefined;
+      let baseN = v.base?.n || 0;
+      if (v.stats?.Top2Box?.pct != null) value = v.stats.Top2Box.pct;
+      else if (v.stats?.index != null) value = v.stats.index;
+      else if (v.extras?.mean != null) value = v.extras.mean;
+      else {
+        const firstKey = v.codes?.[0]?.value;
+        if (firstKey && v.stats?.[firstKey]?.pct != null) value = v.stats[firstKey].pct;
+      }
+      if (value != null) {
+        series.label = v.label || series.label;
+        series.unit = v.unit || series.unit;
+        series.series.push({
+          projectId: pj.project?.projectId || f.replace(/\.json$/,""),
+          xLabel: pj.project?.title || f.replace(/\.json$/,""),
+          value, baseN, ts: pj.project?.recencyEpoch || 0
+        });
+      }
+    }
+    series.series.sort((a,b)=> (a.ts||0)-(b.ts||0) || a.xLabel.localeCompare(b.xLabel, undefined, { numeric:true }));
+  } catch {}
+  await fsp.writeFile(sPath, JSON.stringify(series, null, 2), "utf8");
+  return series;
 }
 
 // -------------------- Stats (simple counts) --------------------
@@ -1275,22 +1317,20 @@ app.get(
         (f) => f.mimeType !== "application/vnd.google-apps.folder"
       ).length;
 
-      // Data file counts (Final Frequencies)
-      let dataFiles = 0;
-      for(const f of all){
-        const mt = f.mimeType || "";
-        if (mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-            mt === "text/csv" ||
-            mt === "application/vnd.google-apps.spreadsheet") {
-          if (await isFinalFreqFileForClient(f.id)) dataFiles++;
-        }
+      // Data counts (Final Frequencies & Raw Data)
+      let dataFilesCount = 0;
+      let rawDataCount = 0;
+      for (const f of all) {
+        const pathNames = await getPathNamesToClient(f.parents || [], clientId);
+        if (pathIncludesSequence(pathNames, [DATA_FILES_FOLDER, DATA_FINAL_FREQ_SUBFOLDER])) dataFilesCount++;
+        if (pathIncludesSequence(pathNames, [DATA_FILES_FOLDER, DATA_RAW_SUBFOLDER])) rawDataCount++;
       }
 
       const manifestPath = path.join(MANIFEST_DIR, `${clientId}.json`);
       const manifest = readJSON(manifestPath, { files: [] });
       const libraryCount = Array.isArray(manifest.files) ? manifest.files.length : 0;
 
-      res.json({ clientId, driveCount, libraryCount, dataFiles });
+      res.json({ clientId, driveCount, libraryCount, dataFilesCount, rawDataCount });
     } catch (e) {
       res
         .status(500)
@@ -1300,6 +1340,12 @@ app.get(
 );
 
 // -------------------- Ingest routes --------------------
+async function ingestAllForClient(clientId){
+  const lib = await ingestClientLibrary(clientId);
+  const data = await ingestClientData(clientId);
+  return { lib, data };
+}
+
 app.post(
   "/admin/ingest-client",
   requireSession,
@@ -1311,9 +1357,8 @@ app.post(
       if (!(await driveFolderExists(clientId)))
         return res.status(400).json({ error: "Unknown clientId" });
 
-      const resultText = await ingestClientLibrary(clientId);
-      const resultData = await ingestClientDataFrequencies(clientId); // NEW
-      res.json({ ...resultText, data: resultData });
+      const result = await ingestAllForClient(clientId);
+      res.json({ ok: true, ...result });
     } catch (e) {
       res
         .status(500)
@@ -1349,14 +1394,11 @@ app.post("/admin/ingest/sync", async (req, res) => {
       try {
         const check = await isLibraryStale(id);
         if (staleOnly && !check.stale) {
-          // Still refresh data cache even if library is up to date
-          await ingestClientDataFrequencies(id);
           results.push({ clientId: id, status: "skipped", reason: "up-to-date" });
           continue;
         }
-        const r = await ingestClientLibrary(id);
-        const d = await ingestClientDataFrequencies(id);
-        results.push({ clientId: id, status: "ingested", summary: r.summary, data: d });
+        const r = await ingestAllForClient(id);
+        results.push({ clientId: id, status: "ingested", summary: r.lib?.summary, dataParsed: r.data?.parsedCount });
       } catch (e) {
         results.push({ clientId: id, status: "error", error: String(e?.message || e) });
       }
@@ -1368,142 +1410,45 @@ app.post("/admin/ingest/sync", async (req, res) => {
   }
 });
 
-// -------------------- Chart query API (chart-ready) [NEW] --------------------
-app.get("/api/chart-query", requireSession, async (req, res) => {
+// -------------------- Drive-watch admin controls --------------------
+app.post("/admin/drive-watch/start", async (req, res) => {
+  const token = req.get("x-auth-token");
+  if (!token || token !== AUTH_TOKEN) return res.status(401).json({ error: "Unauthorized" });
   try {
-    const clientId = String(req.query.clientId || req.session.activeClientId || "").trim();
-    const metricId = String(req.query.metricId || "").trim(); // e.g., SAT_OVERALL or AWARE_BRAND__Evrysdi
-    if (!clientId) return res.status(400).json({ error: "clientId required" });
-    if (!metricId) return res.status(400).json({ error: "metricId required" });
-
-    const baseDir = path.join(DATA_CACHE_DIR, clientId);
-    const seriesPath = path.join(baseDir, "series", `${metricId}.json`);
-    if (!fs.existsSync(seriesPath)) {
-      return res.status(404).json({ error: "metric not found in cache" });
-    }
-    const series = readJSON(seriesPath, null);
-    if (!series || !Array.isArray(series.series) || !series.series.length) {
-      return res.status(404).json({ error: "no data points for metric" });
-    }
-    const labels = series.series.map(p => p.xLabel);
-    const data = series.series.map(p => p.value);
-    const baseNs = series.series.map(p => p.baseN || null);
-
-    const chart = {
-      type: "line",
-      labels,
-      datasets: [{ label: `${series.label} (${series.unit || "pct"})`, data }]
-    };
-    const table = labels.map((lbl, i) => ({
-      Project: lbl,
-      Value: data[i],
-      "Base (n)": baseNs[i]
-    }));
-    const footnote = "Base: All qualified respondents per project";
-
-    res.json({ chart, table, footnote });
+    const ch = await startChangesWatch();
+    res.json({ ok: true, channel: ch, startPageToken: readWatchState().startPageToken });
   } catch (e) {
-    res.status(500).json({ error: "chart query failed", detail: String(e?.message || e) });
+    res.status(500).json({ error: "failed to start watch", detail: String(e?.message || e) });
+  }
+});
+app.post("/admin/drive-watch/stop", async (req, res) => {
+  const token = req.get("x-auth-token");
+  if (!token || token !== AUTH_TOKEN) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const ok = await stopChangesWatch();
+    res.json({ ok });
+  } catch (e) {
+    res.status(500).json({ error: "failed to stop watch", detail: String(e?.message || e) });
   }
 });
 
-// --- Drive children listing for admin tree ----
-app.get(
-  "/admin/drive/children",
-  requireSession,
-  requireInternal,
-  async (req, res) => {
-    try {
-      const parentId = String(req.query.parentId || "").trim();
-      if (!parentId) return res.status(400).json({ error: "parentId required" });
-
-      const d = drive();
-      const fr = await d.files.list({
-        q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        fields: "files(id,name)",
-        pageSize: 1000,
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        orderBy: "name_natural",
-      });
-      const r = await d.files.list({
-        q: `'${parentId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
-        fields: "files(id,name,mimeType)",
-        pageSize: 1000,
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        orderBy: "name_natural",
-      });
-
-      res.json({
-        folders: (fr.data.files || []).map((f) => ({ id: f.id, name: f.name })),
-        files: (r.data.files || []).map((f) => ({ id: f.id, name: f.name })),
-      });
-    } catch (e) {
-      res.status(500).json({ error: "Failed to list children" });
-    }
-  }
-);
-
-// -------------------- Secure PDF proxy (for slide images) --------------------
-// FIX (2025-08-15): Works for PDFs AND Google Slides/Docs in Shared Drives by exporting to PDF when needed.
-app.get("/api/drive-pdf", requireSession, async (req, res) => {
+// -------------------- Webhook receiver --------------------
+// Google will POST here on every Drive change event for the channel we created.
+// We verify a shared token on the query string, ACK immediately, and process async.
+app.post("/webhooks/drive", express.text({ type: "*/*" }), async (req, res) => {
   try {
-    const fileId = String(req.query.fileId || "").trim();
-    if (!fileId) return res.status(400).json({ error: "fileId required" });
-
-    const d = drive();
-
-    // Get mimeType to decide whether to stream or export
-    let meta;
-    try {
-      meta = await d.files.get({
-        fileId,
-        fields: "id,name,mimeType",
-        supportsAllDrives: true,
-      });
-    } catch (e) {
-      console.error("[drive-pdf] meta error:", e?.message || e);
-      return res.status(404).json({ error: "File not found or inaccessible" });
+    if (!DRIVE_WEBHOOK_VERIFY_TOKEN || req.query.token !== DRIVE_WEBHOOK_VERIFY_TOKEN) {
+      return res.status(401).end("unauthorized");
     }
-
-    const mt = String(meta?.data?.mimeType || "");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Type", "application/pdf");
-
-    if (mt === "application/pdf") {
-      const r = await d.files.get(
-        { fileId, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
-        { responseType: "stream" }
-      );
-      r.data.on("error", (err) => {
-        console.error("[drive-pdf] stream error:", err);
-        if (!res.headersSent) res.status(500).end("stream error");
-      });
-      return void r.data.pipe(res);
-    }
-
-    if (mt.startsWith("application/vnd.google-apps.")) {
-      // Export native Google files to PDF (Slides, Docs, Sheets)
-      const r = await d.files.export(
-        { fileId, mimeType: "application/pdf" },
-        { responseType: "stream" }
-      );
-      r.data.on("error", (err) => {
-        console.error("[drive-pdf] export stream error:", err);
-        if (!res.headersSent) res.status(500).end("stream error");
-      });
-      return void r.data.pipe(res);
-    }
-
-    // For non-Google, non-PDF types (e.g., PPTX), we currently don't convert server-side.
-    // Returning 415 tells the client to skip rendering this file.
-    return res
-      .status(415)
-      .json({ error: `Unsupported mimeType for direct PDF rendering: ${mt}` });
-  } catch (e) {
-    console.error("[drive-pdf] failed:", e);
-    res.status(500).json({ error: "Failed to fetch PDF" });
+    res.status(200).end(); // Ack fast
+    processDrivePing({
+      resourceState: req.get("x-goog-resource-state"),
+      resourceId: req.get("x-goog-resource-id"),
+      channelId: req.get("x-goog-channel-id"),
+      messageNumber: req.get("x-goog-message-number"),
+    }).catch((e) => console.warn("[drive-webhook] process error", e));
+  } catch {
+    try { res.status(200).end(); } catch {}
   }
 });
 
@@ -1569,8 +1514,7 @@ function buildReferenceBundle(refs) {
   return refs
     .map((r, i) => {
       const tag = `${r.monthTag || ""} ${r.yearTag || ""}`.trim();
-      const rep = r.reportTag ? ` • ${r.reportTag}` : "";
-      return `[${i + 1}] ${r.study || r.fileName}${tag ? " – " + tag : ""}${rep}`;
+      return `[${i + 1}] ${r.study || r.fileName}${tag ? " – " + tag : ""}${r.reportTag ? " • " + r.reportTag : ""}`;
     })
     .join("\n");
 }
@@ -1710,23 +1654,198 @@ app.post("/search", requireSession, async (req, res) => {
       answer,
       references: { chunks: refs },
       visuals: [],
-      secondary,
-      supportingBullets,
+      secondary,      supportingBullets,
     });
   } catch (e) {
     res.status(500).json({ error: "Search failed", detail: String(e?.message || e) });
   }
 });
 
+// --- Drive children listing for admin tree ----
+app.get(
+  "/admin/drive/children",
+  requireSession,
+  requireInternal,
+  async (req, res) => {
+    try {
+      const parentId = String(req.query.parentId || "").trim();
+      if (!parentId) return res.status(400).json({ error: "parentId required" });
+
+      const drive = getDrive();
+      const fr = await drive.files.list({
+        q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: "files(id,name)",
+        pageSize: 1000,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        orderBy: "name_natural",
+      });
+      const r = await drive.files.list({
+        q: `'${parentId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
+        fields: "files(id,name,mimeType)",
+        pageSize: 1000,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        orderBy: "name_natural",
+      });
+
+      res.json({
+        folders: (fr.data.files || []).map((f) => ({ id: f.id, name: f.name })),
+        files: (r.data.files || []).map((f) => ({ id: f.id, name: f.name })),
+      });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to list children" });
+    }
+  }
+);
+
+// -------------------- Charts API (reads data-cache) --------------------
+app.get("/api/chart-query", requireSession, async (req, res) => {
+  try {
+    const sessionClient = req.session?.activeClientId || null;
+    const clientId = String(req.query.clientId || sessionClient || "").trim();
+    const metricId = String(req.query.metricId || "").trim();
+    const segment = String(req.query.segment || "").trim(); // reserved for future segmented series
+
+    if (!clientId) return res.status(400).json({ error: "clientId required" });
+    if (!metricId) return res.status(400).json({ error: "metricId required" });
+    if (!(await driveFolderExists(clientId)))
+      return res.status(400).json({ error: "Unknown clientId" });
+
+    const baseDir = path.join(DATA_CACHE_DIR, clientId);
+    const sPath = segment
+      ? path.join(baseDir, "segments", segment, "series", `${metricId}.json`)
+      : path.join(baseDir, "series", `${metricId}.json`);
+
+    let seriesJson = null;
+    try {
+      seriesJson = JSON.parse(await fsp.readFile(sPath, "utf8"));
+    } catch {
+      // Try to rebuild from projects if missing (only for unsegmented)
+      if (!segment) {
+        seriesJson = await rebuildSeriesForMetric(clientId, metricId);
+      }
+    }
+
+    if (!seriesJson || !Array.isArray(seriesJson.series) || !seriesJson.series.length) {
+      return res.status(404).json({ error: "No data for metricId", metricId });
+    }
+
+    // Build chart + table payload
+    const labels = seriesJson.series.map((p) => p.xLabel || p.projectId);
+    const data = seriesJson.series.map((p) => p.value);
+    const baseNs = seriesJson.series.map((p) => p.baseN || 0);
+
+    const chart = {
+      type: "line",
+      labels,
+      datasets: [
+        {
+          label:
+            seriesJson.unit && /pct|percent/i.test(seriesJson.unit)
+              ? `${seriesJson.label} (%)`
+              : seriesJson.label,
+          data,
+        },
+      ],
+    };
+
+    const table = seriesJson.series.map((p, i) => ({
+      Project: p.xLabel || p.projectId,
+      Value: data[i],
+      "Base (n)": baseNs[i],
+    }));
+
+    res.json({
+      chart,
+      table,
+      footnote: "Base: All qualified respondents per project",
+      meta: {
+        clientId,
+        metricId: seriesJson.metricId || metricId,
+        label: seriesJson.label || metricId,
+        unit: seriesJson.unit || "pct",
+        points: seriesJson.series.length,
+        segment: segment || null,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Chart query failed", detail: String(e?.message || e) });
+  }
+});
+
+// -------------------- Secure PDF proxy (for slide images) --------------------
+// Works for PDFs AND Google Slides/Docs in Shared Drives by exporting to PDF when needed.
+app.get("/api/drive-pdf", requireSession, async (req, res) => {
+  try {
+    const fileId = String(req.query.fileId || "").trim();
+    if (!fileId) return res.status(400).json({ error: "fileId required" });
+
+    const drive = getDrive();
+
+    // Get mimeType to decide whether to stream or export
+    let meta;
+    try {
+      meta = await drive.files.get({
+        fileId,
+        fields: "id,name,mimeType",
+        supportsAllDrives: true,
+      });
+    } catch (e) {
+      console.error("[drive-pdf] meta error:", e?.message || e);
+      return res.status(404).json({ error: "File not found or inaccessible" });
+    }
+
+    const mt = String(meta?.data?.mimeType || "");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", "application/pdf");
+
+    if (mt === "application/pdf") {
+      const r = await drive.files.get(
+        { fileId, alt: "media", supportsAllDrives: true, acknowledgeAbuse: true },
+        { responseType: "stream" }
+      );
+      r.data.on("error", (err) => {
+        console.error("[drive-pdf] stream error:", err);
+        if (!res.headersSent) res.status(500).end("stream error");
+      });
+      return void r.data.pipe(res);
+    }
+
+    if (mt.startsWith("application/vnd.google-apps.")) {
+      // Export native Google files to PDF (Slides, Docs, Sheets)
+      const r = await drive.files.export(
+        { fileId, mimeType: "application/pdf" },
+        { responseType: "stream" }
+      );
+      r.data.on("error", (err) => {
+        console.error("[drive-pdf] export stream error:", err);
+        if (!res.headersSent) res.status(500).end("stream error");
+      });
+      return void r.data.pipe(res);
+    }
+
+    // For unsupported non-Google, non-PDF types (e.g., PPTX), we currently don't convert server-side.
+    return res
+      .status(415)
+      .json({ error: `Unsupported mimeType for direct PDF rendering: ${mt}` });
+  } catch (e) {
+    console.error("[drive-pdf] failed:", e);
+    res.status(500).json({ error: "Failed to fetch PDF" });
+  }
+});
+
 // -------------------- Health --------------------
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// --- Drive children (kept) & PDF proxy kept above ---
+// -------------------- Boot --------------------
+app.listen(PORT, () => {
+  console.log(`mr-broker running on :${PORT}`);
+  if (!OPENAI_API_KEY) console.warn("[boot] OPENAI_API_KEY missing");
+  if (!PINECONE_API_KEY || !PINECONE_INDEX_HOST)
+    console.warn("[boot] Pinecone config missing");
+  if (!DRIVE_ROOT_FOLDER_ID) console.warn("[boot] DRIVE_ROOT_FOLDER_ID missing");
+  if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
+  console.log(`[cookies] secure=${SECURE_COOKIES}`);
+});
 
-// -------------------- Webhook receiver --------------------
-app.post("/webhooks/drive", express.text({ type: "*/*" }), async (req, res) => {
-  try {
-    if (!DRIVE_WEBHOOK_VERIFY_TOKEN || req.query.token !== DRIVE_WEBHOOK_VERIFY_TOKEN) {
-      return res.status(401).end("unauthorized");
-    }
-    res.status(200).end(); // Ack fast
