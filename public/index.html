@@ -578,10 +578,13 @@ async function doAsk(){
     if (refsDetails) refsDetails.style.display = ctxChunks.length ? "block" : "none";
 
     // (Optional) naive auto-trigger: if the user typed "trend" try fetching SATISFACTION (you can delete this)
-    if (/\btrend/i.test(question)) {
-      // This is just a placeholder; replace "SATISFACTION" with your real metricId or wire from app.js
-      try { await fetchChartForMetric("SATISFACTION"); } catch {}
-    }
+   // Auto chart fetch if metric can be guessed
+const metricGuess = (window.App && App.guessMetricIdFromQuestion)
+  ? App.guessMetricIdFromQuestion(question)
+  : null;
+if (metricGuess) {
+  try { await App.fetchChart(metricGuess); } catch {}
+}
 
   }catch(e){
     showMsg("Search failed. Please try again.");
