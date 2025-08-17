@@ -714,17 +714,50 @@ function requireInternal(req, res, next) {
   return res.status(403).json({ error: "Forbidden" });
 }
 
+// Helper: serve HTML file with UI injection (user menu + dropdown)
+async function serveHtmlWithUi(res, filePath) {
+  try {
+    const fs = await import("node:fs/promises");
+    let html = await fs.readFile(filePath, "utf8");
+
+    if (!/\/ui\/user-menu\.js/.test(html)) {
+      const tag = '\n  <script src="/ui/user-menu.js" defer></script>\n';
+      if (/<\/body>/i.test(html)) {
+        html = html.replace(/<\/body>/i, tag + "</body>");
+      } else {
+        html += tag;
+      }
+    }
+
+    res.set("Cache-Control", "no-store");
+    res.type("html").send(html);
+  } catch {
+    res.set("Cache-Control", "no-store");
+    res.sendFile(filePath);
+  }
+}
+
 // -------------------- Pages --------------------
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   if (!req.session?.user) return res.redirect("/login.html");
-  res.set("Cache-Control", "no-store");
-  res.sendFile(path.resolve("public/index.html"));
+  await serveHtmlWithUi(res, path.resolve("public/index.html"));
 });
-app.get("/admin", (req, res) => {
+
+app.get("/admin", async (req, res) => {
   if (!req.session?.user) return res.redirect("/login.html");
   if (req.session.user.role !== "internal") return res.redirect("/");
-  res.set("Cache-Control", "no-store");
-  res.sendFile(path.resolve("public/admin.html"));
+  await serveHtmlWithUi(res, path.resolve("public/admin.html"));
+});
+
+// New pages: Profile & Settings
+app.get("/profile", async (req, res) => {
+  if (!req.session?.user) return res.redirect("/login.html");
+  await serveHtmlWithUi(res, path.resolve("public/profile.html"));
+});
+
+app.get("/settings", async (req, res) => {
+  if (!req.session?.user) return res.redirect("/login.html");
+  await serveHtmlWithUi(res, path.resolve("public/settings.html"));
 });
 
 // -------------------- Auth APIs --------------------
@@ -768,7 +801,7 @@ app.get("/me", async (req, res) => {
   const me = req.session.user;
   const roleLabel = me.role === "internal" ? "admin" : me.role;
   res.json({
-    user: { username: me.username, role: roleLabel },
+    user: { username: me.username, role: roleLabel, allowedClients: me.allowedClients ?? null },
     activeClientId: req.session.activeClientId || null,
     clients,
   });
@@ -1782,3 +1815,4 @@ app.listen(PORT, () => {
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
+
