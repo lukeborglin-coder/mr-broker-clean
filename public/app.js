@@ -123,17 +123,13 @@ function guessMetricIdFromQuestion(q) {
   if (m && m[1]) return toMetricId(m[1]);
   return null;
 }
-async function fetchChart(metricId, opts = {}) {
-  // Prefer page's app implementation; otherwise fetch directly
-  if (window.app && typeof window.app.fetchChart === "function") return window.app.fetchChart(metricId, opts);
-  const params = new URLSearchParams({ metricId });
-  if (opts && opts.segment) params.set("segment", opts.segment);
-  return await jget(`/api/chart-query?${params.toString()}`);
+async function fetchChart(metricId) {
+  if (!(window.app && typeof window.app.fetchChart === "function")) return;
+  return window.app.fetchChart(metricId);
 }
 function showChart(payload) {
-  if (window.app && typeof window.app.showChart === "function") return window.app.showChart(payload);
-  // no-op fallback: return payload so callers can inspect
-  return payload;
+  if (!(window.app && typeof window.app.showChart === "function")) return;
+  return window.app.showChart(payload);
 }
 
 // Expose helpers
