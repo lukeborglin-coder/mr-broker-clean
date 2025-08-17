@@ -1,3 +1,4 @@
+
 // server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
 // Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
@@ -29,8 +30,6 @@ import crypto from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import * as XLSX from "xlsx";
 import { parse as csvParse } from "csv-parse/sync";
-import expressSession from 'express-session';
-dotenv.config();
 
 // -------------------- Environment --------------------
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
@@ -84,17 +83,7 @@ const DATA_RAW_SUBFOLDER =
   process.env.DATA_RAW_SUBFOLDER || "Raw Data";
 
 // -------------------- App --------------------
-const app = express()
-
-// Session (fixed cookie settings)
-app.use(expressSession({
-  secret: process.env.SESSION_SECRET || 'change-me',
-  resave: false,
-  saveUninitialized: false,
-  proxy: true,
-  cookie: { httpOnly: true, secure: SECURE_COOKIES, sameSite: (SECURE_COOKIES?'none':'lax'), maxAge: 1000*60*60*24*7 }
-}));
-;
+const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
@@ -1845,5 +1834,4 @@ app.listen(PORT, () => {
   if (!PUBLIC_BASE_URL) console.warn("[boot] PUBLIC_BASE_URL missing (Drive webhooks disabled)");
   console.log(`[cookies] secure=${SECURE_COOKIES}`);
 });
-
 
