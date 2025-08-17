@@ -1242,19 +1242,13 @@ async function ingestClientData(clientId) {
   return { ok: true, parsedCount, projects: parsedProjects };
 }
 
-
-async function rebuildSeriesForMetric(clientId, metricId, segmentId){
+async function rebuildSeriesForMetric(clientId, metricId){
   const baseDir = path.join(DATA_CACHE_DIR, clientId);
   const projectsDir = path.join(baseDir, "projects");
-  const seriesDir = path.join(baseDir, "series");
-  await ensureDir(seriesDir);
-
-  const segSuffix = segmentId ? `__SEG__${segmentId}` : "";
-  const sPath = path.join(seriesDir, `${metricId}${segSuffix}.json`);
+  const sPath = path.join(baseDir, "series", `${metricId}.json`);
+  await ensureDir(path.join(baseDir, "series"));
 
   let series = { metricId, label: metricId, unit: "pct", series: [] };
-  if (segmentId) series.segmentId = segmentId;
-
   try {
     const files = await fsp.readdir(projectsDir);
     for (const f of files) {
@@ -1262,53 +1256,15 @@ async function rebuildSeriesForMetric(clientId, metricId, segmentId){
       const pj = JSON.parse(await fsp.readFile(path.join(projectsDir, f), "utf8"));
       const v = pj.variables?.[metricId];
       if (!v) continue;
-
-      let stats = v.stats;
-      let baseN = v.base?.n || 0;
-      if (segmentId) {
-        const findCutKey = (cuts, segId) => {
-          if (!cuts) return null;
-          const keys = Object.keys(cuts);
-          return keys.find(k => toMetricId(k) === segId || String(k).toLowerCase() === String(segId).toLowerCase()) || null;
-        };
-        const key = findCutKey(v.cuts, segmentId);
-        if (key && v.cuts[key]) {
-          stats = v.cuts[key].stats || stats;
-          baseN = v.cuts[key].base?.n || baseN;
-          series.label = `${v.label} — ${key}`;
-          series.segmentName = key;
-        } else {
-          series.segmentName = segmentId;
-          series.label = `${v.label} — ${segmentId}`;
-        }
-      } else {
-        series.label = v.label || series.label;
-      }
-
       let value = undefined;
-      if (stats?.Top2Box?.pct != null) value = stats.Top2Box.pct;
-      else if (stats?.index != null) value = stats.index;
+      let baseN = v.base?.n || 0;
+      if (v.stats?.Top2Box?.pct != null) value = v.stats.Top2Box.pct;
+      else if (v.stats?.index != null) value = v.stats.index;
       else if (v.extras?.mean != null) value = v.extras.mean;
       else {
         const firstKey = v.codes?.[0]?.value;
-        if (firstKey && stats?.[firstKey]?.pct != null) value = stats[firstKey].pct;
+        if (firstKey && v.stats?.[firstKey]?.pct != null) value = v.stats[firstKey].pct;
       }
-
-      if (value != null) {
-        series.unit = v.unit || series.unit;
-        series.series.push({
-          projectId: pj.project?.projectId || f.replace(/\.json$/,""),
-          xLabel: pj.project?.title || f.replace(/\.json$/,""),
-          value, baseN, ts: pj.project?.recencyEpoch || 0
-        });
-      }
-    }
-    series.series.sort((a,b)=> (a.ts||0)-(b.ts||0) || String(a.xLabel).localeCompare(String(b.xLabel), undefined, { numeric: true }));
-  } catch {}
-  await fsp.writeFile(sPath, JSON.stringify(series, null, 2), "utf8");
-  return series;
-}
-
       if (value != null) {
         series.label = v.label || series.label;
         series.unit = v.unit || series.unit;
@@ -1690,6 +1646,7 @@ app.get("/api/chart-query", requireSession, async (req, res) => {
   try {
     let clientId = String(req.query.clientId || "").trim();
     const metricId = String(req.query.metricId || "").trim();
+    const segment = String(req.query.segment || "").trim();
     if (!metricId) return res.status(400).json({ error: "metricId required" });
 
     const isAdmin = req.session?.user?.role === "internal";
@@ -1750,6 +1707,7 @@ app.get("/api/chart-query", requireSession, async (req, res) => {
         metricId,
         unit: unit === "pct" ? "pct" : unit
       }
+        segment: segment || null,
     });
   } catch (e) {
     console.error("[/api/chart-query] error:", e);
