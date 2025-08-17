@@ -38,12 +38,18 @@ jobs:
         with:
           ref: ${{ steps.base.outputs.val }}
 
-           - name: Write patch to file
-        run: |
-          # Preserve the input exactly, even if it wraps in the UI
-          cat > patch.b64 <<'B64'
-          ${{ github.event.inputs.patch_b64 }}
-          B64
+              - name: Write patch to file
+     run: |
+       # Preserve the input exactly, even if it wraps in the UI
+       cat > patch.b64 <<'B64'
+       ${{ github.event.inputs.patch_b64 }}
+       B64
+
+       # Decode into a unified diff
+       base64 --decode patch.b64 > patch.diff
+
+       echo "Previewing first lines of decoded patch:"
+       head -n 40 patch.diff || true
 
           # Decode into a unified diff
           base64 --decode patch.b64 > patch.diff
