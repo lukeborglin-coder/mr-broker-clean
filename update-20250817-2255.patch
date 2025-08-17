@@ -1,0 +1,156 @@
+--- a/public/index.html
++++ b/public/index.html
+@@ -34,7 +34,7 @@
+     .hero p{margin:0;color:var(--muted)}
+     .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
+     .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
+-    .inline-thinking{display:none;align-items:center;gap:8px;color:#9aa2ad;font-size:.9rem;margin-top:6px}
++    
+     .linklike{background:none;border:0;color:#2563eb;text-decoration:underline;cursor:pointer;font-size:.9rem;padding:0}
+     .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
+     .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
+@@ -109,10 +109,13 @@
+       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
+       <button id="ask" class="btn primary" disabled>Ask</button>
+     </div>
+-    <div id="inlineStatus" class="inline-thinking"><span class="spinner sm"></span><span>Thinking…</span></div>
+-    <div id="msg" class="msg"></div>
++        <div id="msg" class="msg"></div>
+ 
+     <div id="out" style="display:none;">
++      <div id="dashboard" class="panel" style="display:none;">
++        <h3>Insights Dashboard</h3>
++        <div id="dashGrid" class="dash-grid"></div>
++      </div>
+       <div id="answerPanel" class="panel answer-panel" style="display:none;">
+         <div id="answer" class="answer-body"></div>
+       </div>
+--- a/public/styles.css
++++ b/public/styles.css
+@@ -321,3 +321,20 @@
+ /* Hero typography */
+ .hero h1{ text-transform:uppercase; color:#5f6570; letter-spacing:.04em; font-weight:800; }
+ .hero h1 .dot{ color: var(--orange); }
++
++
++/* Dashboard grid and boxes */
++.dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
++.dash-box{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff}
++.dash-box h4{margin:0 0 8px 0;font-size:1.05rem}
++.dash-box .summary{font-weight:600;margin-bottom:8px;color:var(--ink)}
++.dash-box ul{margin:6px 0 0 18px;padding:0}
++.dash-box li{margin:4px 0}
++
++/* Carousel */
++.carousel{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:10px}
++.carousel-track{display:flex;transition:transform .5s ease;will-change:transform}
++.carousel img{width:100%;flex:0 0 100%;aspect-ratio:16/9;object-fit:cover;background:#f8fafc}
++.carousel .nav{position:absolute;top:50%;transform:translateY(-50%);display:flex;justify-content:space-between;width:100%;pointer-events:none}
++.carousel button{pointer-events:auto;border:none;background:rgba(255,255,255,.9);padding:6px 10px;border-radius:999px;cursor:pointer}
++.carousel button:disabled{opacity:.5;cursor:default}
+--- a/public/app.js
++++ b/public/app.js
+@@ -44,12 +44,10 @@
+   box.style.display = "none";
+ }
+ 
+-// Thinking overlay + inline status
++// Thinking overlay only (remove inline duplicate)
+ function setThinking(on) {
+   const overlay = $("#overlay");
+-  const inline = $("#inlineStatus");
+   if (overlay) overlay.classList.toggle("hidden", !on);
+-  if (inline) inline.style.display = on ? "flex" : "none";
+   const ask = $("#ask");
+   if (ask) ask.disabled = !!on;
+ }
+@@ -147,5 +145,89 @@
+   toMetricId,
+   guessMetricIdFromQuestion,
+   fetchChart,
++
++// === Theme grouping + Dashboard rendering ===
++function groupBulletsIntoThemes(bullets=[], question=""){
++  const text = (question||"").toLowerCase();
++  const defs = [
++    {key:"satisfaction",  title:"Satisfaction Drivers",    kws:["satisfaction","drivers","importance","usage drivers","key drivers"]},
++    {key:"convenience",   title:"Adherence & Convenience", kws:["adherence","convenience","administration","easy","recommendation","hcp"]},
++    {key:"safety",        title:"Safety & Tolerability",   kws:["safety","tolerability","side effect","long-term","tolerable"]},
++    {key:"awareness",     title:"Awareness & Education",   kws:["aware","informed","knowledge","education"]},
++    {key:"access",        title:"Access & Coverage",       kws:["access","coverage","cost","insurance"]},
++  ];
++  const buckets = {};
++  for (const d of defs) buckets[d.key] = {title:d.title, bullets:[]};
++  function pickBucket(t){
++    const s = t.toLowerCase();
++    for (const d of defs){ if (d.kws.some(k => s.includes(k) || text.includes(k))) return d.key; }
++    return "satisfaction";
++  }
++  for (const b of bullets){ buckets[pickBucket(b)].bullets.push(b); }
++  // Remove empties
++  for (const k of Object.keys(buckets)){ if (!buckets[k].bullets.length) delete buckets[k]; }
++  return buckets;
++}
++
++function renderDashboard({question, bullets, slides=[]}){
++  const dash = $("#dashGrid"); const wrap = $("#dashboard");
++  if (!dash || !wrap) return;
++  dash.innerHTML = "";
++  const buckets = groupBulletsIntoThemes(bullets, question);
++  const keys = Object.keys(buckets);
++  if (!keys.length && !slides.length){ wrap.style.display="none"; return; }
++  wrap.style.display = "";
++  // Build boxes
++  let carouselAssigned = false;
++  keys.forEach((k, idx) => {
++    const box = document.createElement("div"); box.className="dash-box";
++    const h = document.createElement("h4"); h.textContent = buckets[k].title; box.appendChild(h);
++    // Summary = first bullet, rest as list
++    if (buckets[k].bullets.length){
++      const summary = document.createElement("div"); summary.className="summary"; summary.textContent = buckets[k].bullets[0]; box.appendChild(summary);
++      if (buckets[k].bullets.length>1){
++        const ul = document.createElement("ul");
++        buckets[k].bullets.slice(1).forEach(t => { const li=document.createElement("li"); li.textContent=t; ul.appendChild(li); });
++        box.appendChild(ul);
++      }
++    }
++    // Attach a carousel to the first relevant theme (satisfaction), fallback to first box
++    const shouldAttach = (!carouselAssigned && (k==="satisfaction" || idx===0)) && slides.length;
++    if (shouldAttach){
++      box.appendChild(buildCarousel(slides.slice(0,5), idx));
++      carouselAssigned = true;
++    }
++    dash.appendChild(box);
++  });
++  // If no buckets but slides exist, show a slides-only box
++  if (!keys.length && slides.length){
++    const box = document.createElement("div"); box.className="dash-box";
++    const h = document.createElement("h4"); h.textContent = "Report Slides"; box.appendChild(h);
++    box.appendChild(buildCarousel(slides.slice(0,5), 0));
++    dash.appendChild(box);
++  }
++}
++
++function buildCarousel(urls=[], index=0){
++  const root = document.createElement("div"); root.className="carousel"; root.setAttribute("data-auto","1");
++  const track = document.createElement("div"); track.className="carousel-track";
++  urls.forEach(u => { const img=document.createElement("img"); img.src=u; track.appendChild(img); });
++  root.appendChild(track);
++  const nav = document.createElement("div"); nav.className="nav";
++  const left = document.createElement("button"); left.innerHTML="&#9664;";
++  const right = document.createElement("button"); right.innerHTML="&#9654;";
++  nav.appendChild(left); nav.appendChild(right); root.appendChild(nav);
++  let i = 0, n = urls.length;
++  function go(delta){
++    if (!n) return;
++    i = (i + delta + n) % n;
++    track.style.transform = `translateX(${-i*100}%)`;
++  }
++  let timer = setInterval(() => go(+1), 5000 + (index%5)*1000); // stagger by index
++  function stop(){ if (timer){ clearInterval(timer); timer = null; root.dataset.auto="0"; } }
++  left.addEventListener("click", () => { stop(); go(-1); });
++  right.addEventListener("click", () => { stop(); go(+1); });
++  return root;
++}
+   showChart,
+ });
