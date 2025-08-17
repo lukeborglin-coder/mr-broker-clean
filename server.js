@@ -1880,65 +1880,6 @@ app.get("/api/chart-query", requireSession, async (req, res) => {
 });
 
 
-    const isAdmin = req.session?.user?.role === "internal";
-    if (!clientId || !isAdmin) {
-      clientId = req.session?.activeClientId || null;
-    }
-    if (!clientId) return res.status(400).json({ error: "clientId required" });
-
-    const baseDir   = path.join(DATA_CACHE_DIR, clientId);
-    const indexPath = path.join(baseDir, "index.json");
-    const seriesDir = path.join(baseDir, "series");
-    const sPath     = path.join(seriesDir, `${metricId}.json`);
-
-    try { await fsp.mkdir(seriesDir, { recursive: true }); } catch {}
-
-    let series;
-    try {
-      const raw = await fsp.readFile(sPath, "utf8");
-      series = JSON.parse(raw);
-    } catch {
-      series = await rebuildSeriesForMetric(clientId, metricId);
-    }
-
-    if (!series || !Array.isArray(series.series) || !series.series.length) {
-      return res.status(404).json({ error: "No data for metric" });
-    }
-
-    const pts = series.series.slice().sort(
-      (a,b) => (a.ts||0)-(b.ts||0) || String(a.xLabel).localeCompare(String(b.xLabel), undefined, { numeric: true })
-    );
-
-    const labels = pts.map(p => p.xLabel || p.projectId);
-    const values = pts.map(p => (typeof p.value === "number" ? p.value : null));
-    const chartType = pts.length <= 2 ? "bar" : "line";
-
-    const table = pts.map(p => ({
-      Project: p.xLabel || p.projectId,
-      Value: typeof p.value === "number" ? p.value : null,
-      "Base N": p.baseN || null
-    }));
-
-    const unit = (series.unit || "pct").toLowerCase();
-    const footnote = `Trend for ${series.label} across ${pts.length} project${pts.length===1?"":"s"}. Values shown in ${unit === "pct" ? "percent (%)" : unit}.`;
-
-    return res.json({
-      chart: {
-        type: chartType,
-        labels,
-        datasets: [{
-          label: series.label || metricId,
-          data: values
-        }]
-      },
-      table,
-      footnote,
-      meta: {
-        clientId,
-        metricId,
-        unit: unit === "pct" ? "pct" : unit
-      }
-    });
   } catch (e) {
     console.error("[/api/chart-query] error:", e);
     res.status(500).json({ error: "Chart query failed" });
