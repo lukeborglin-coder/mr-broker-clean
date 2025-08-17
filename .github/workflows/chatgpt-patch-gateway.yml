@@ -1,0 +1,82 @@
+name: ChatGPT Patch Gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_b64:
+        description: Base64-encoded unified diff patch (I’ll provide this)
+        required: true
+      pr_title:
+        description: Title for the pull request
+        required: true
+      pr_body:
+        description: Optional notes for the pull request body
+        required: false
+      base_branch:
+        description: Base branch to apply against (leave blank to use repo default)
+        required: false
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Determine base branch
+        id: base
+        run: |
+          if [ -z "${{ github.event.inputs.base_branch }}" ]; then
+            echo "val=${{ github.event.repository.default_branch }}" >> $GITHUB_OUTPUT
+          else
+            echo "val=${{ github.event.inputs.base_branch }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.base.outputs.val }}
+
+      - name: Write patch to file
+        run: |
+          echo "${{ github.event.inputs.patch_b64 }}" | base64 -d > patch.diff
+          echo "Previewing first lines of patch:"
+          head -n 40 patch.diff || true
+
+      - name: Validate changed paths (safety guard)
+        run: |
+          ALLOWED_REGEX='^(server\.js|public/|config/|scripts/|package\.json|package-lock\.json|\.env\.sample|README\.md|\.github/workflows/)'
+          files=$(grep -E '^\+\+\+ b/|^--- a/' patch.diff | sed -E 's/^[+-]{3} [ab]\///' | awk '{print $1}' | sort -u)
+          echo "Files in patch:"; echo "$files"
+          bad=$(echo "$files" | grep -Ev "$ALLOWED_REGEX" || true)
+          if [ -n "$bad" ]; then
+            echo "❌ Disallowed paths detected:"; echo "$bad"
+            echo "If you intentionally want those paths changed, update ALLOWED_REGEX in this workflow."
+            exit 1
+          fi
+
+      - name: Apply patch
+        run: |
+          git config user.name "JaiceBot"
+          git config user.email "bot@users.noreply.github.com"
+          git apply --index --reject --whitespace=fix patch.diff || true
+          if git ls-files --other --exclude-standard | grep '\.rej$' >/dev/null 2>&1; then
+            echo "❌ Patch produced rejects:"
+            git ls-files --other --exclude-standard | grep '\.rej$' || true
+            exit 1
+          fi
+          if git diff --cached --quiet; then
+            echo "No staged changes found. Nothing to commit."
+            exit 1
+          fi
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: ${{ github.event.inputs.pr_title }}
+          body: ${{ github.event.inputs.pr_body }}
+          commit-message: ${{ github.event.inputs.pr_title }}
+          branch: chatgpt/update-${{ github.run_id }}
+          base: ${{ steps.base.outputs.val }}
+          delete-branch: true
