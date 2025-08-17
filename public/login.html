@@ -3,68 +3,53 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Sign in — Jaice</title>
+  <title>Sign in</title>
   <link rel="stylesheet" href="/styles.css"/>
   <style>
-:root{ --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; }
-*{box-sizing:border-box}
-body{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:#fff; color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
-.card{ width:min(420px,96vw); border:1px solid var(--line); border-radius:16px; padding:24px; background:#fff; box-shadow:0 4px 16px rgba(0,0,0,.06); }
-.logo{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
-.logo img{ height:28px; }
-.title{ margin:0 0 4px 0; font-size:1.25rem; font-weight:700; letter-spacing:.3px; }
-.sub{ margin:0 0 18px 0; color:var(--muted); font-size:.95rem; }
-.row{ display:flex; gap:10px; margin:10px 0; }
-input{ width:100%; padding:12px 12px; border-radius:12px; border:1px solid var(--line); background:#fff; color:#111; outline:none; }
-button{ width:100%; padding:12px 14px; border-radius:14px; border:none; background:var(--brand); color:#fff; font-weight:600; cursor:pointer; }
-button:hover{ filter:brightness(.95); }
-#error{ color:#b91c1c; font-size:.9rem; min-height:18px; }
-.small{ font-size:.9rem; color:#6b7280; }
-</style>
+    :root{ --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2; }
+    body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+    .login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+    .card{width:100%;max-width:420px;border:1px solid var(--line);border-radius:16px;padding:24px 22px;box-shadow:0 4px 12px rgba(0,0,0,.04)}
+    .logo{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+    .logo img{height:28px}
+    .muted{color:var(--muted)}
+    h1{margin:6px 0 16px;font-size:1.35rem;font-weight:800;letter-spacing:.2px;color:var(--muted)}
+    label{display:block;font-size:.9rem;color:var(--muted);margin:10px 0 6px}
+    input{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:12px;font-size:1rem}
+    .btn{width:100%;margin-top:16px;background:var(--brand);color:#fff;border:0;border-radius:12px;padding:12px 16px;font-weight:800;cursor:pointer}
+    .btn:hover{filter:brightness(.96)}
+  </style>
 </head>
 <body>
-  <div class="card">
-    <div class="logo">
-      <img src="/assets/Slide1.JPG" alt="Jaice logo"/>
+  <div class="login-wrap">
+    <div class="card">
+      <div class="logo">
+        <img src="/assets/jaice-wordmark.svg" alt="JAICE" onerror="this.style.display='none'"/>
+      </div>
+      <h1>Sign in</h1>
+      <form id="loginForm">
+        <label>Username</label>
+        <input id="username" autocomplete="username" required placeholder="username"/>
+        <label>Password</label>
+        <input id="password" type="password" autocomplete="current-password" required placeholder="password"/>
+        <button class="btn" type="submit">Sign in</button>
+        <div id="msg" class="muted" style="margin-top:10px;"></div>
+      </form>
     </div>
-    <h1 class="title">Sign in to Jaice</h1>
-    <p class="sub">Research Q&A for your team</p>
-
-    <div id="error"></div>
-
-    <label class="small" for="username">Username</label>
-    <div class="row"><input id="username" type="text" placeholder="username" autocomplete="username"/></div>
-
-    <label class="small" for="password">Password</label>
-    <div class="row"><input id="password" type="password" placeholder="••••••••" autocomplete="current-password"/></div>
-
-    <div class="row"><button id="loginBtn">Sign in</button></div>
   </div>
-
 <script>
-async function login() {
-  const body = {
-    username: document.getElementById('username').value.trim(),
-    password: document.getElementById('password').value
-  };
+async function jpost(u,b){ const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+document.getElementById('loginForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const msg = document.getElementById('msg'); msg.textContent = 'Signing in…';
   try{
-    const r = await fetch('/auth/login', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(body)
-    });
-    if (r.ok) location.href = '/';
-    else {
-      const j = await r.json().catch(()=>({}));
-      document.getElementById('error').textContent = j.error || 'Login failed';
-    }
-  }catch(e){
-    document.getElementById('error').textContent = 'Login failed';
+    await jpost('/auth/login',{ username, password });
+    location.href = '/';
+  }catch(err){
+    msg.textContent = 'Invalid username or password.';
   }
-}
-document.getElementById('loginBtn').onclick = login;
-document.getElementById('password').addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') login();
 });
 </script>
 </body>
