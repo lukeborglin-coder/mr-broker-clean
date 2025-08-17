@@ -29,7 +29,7 @@
     .client-top-below select{height:40px;border-radius:10px;border:1px solid(var(--line));background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:260px;}
     main{max-width:none;width:100%;margin:24px 0 32px;padding:0 24px}
     .hero{text-align:center;margin:0 0 8px}
-    .hero h1{font-size:34px;margin:0 0 6px}
+    .hero h1{font-size:34px;margin:0 0 6px color:var(--muted); text-transform:uppercase; letter-spacing:.04em; font-weight:800;}
     .hero h1 .dot{color:var(--brand)}
     .hero p{margin:0;color:var(--muted)}
     .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
@@ -101,7 +101,7 @@
 
   <main>
     <div class="hero">
-      <h1>Ask about your research<span class="dot">.</span></h1>
+      <h1>ASK ABOUT YOUR RESEARCH<span class="dot">.</span></h1>
       <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
     </div>
 
@@ -200,8 +200,9 @@
       const roleLabel = (ME?.user?.role === "internal") ? "admin" : (ME?.user?.role || "");
       const whoMenu = document.getElementById("whoMenu");
       if (whoMenu) whoMenu.textContent = `${ME?.user?.username || ""} · ${roleLabel}`;
+      const who = document.getElementById("who"); if (who){ who.textContent = `${ME?.user?.username || ""} · ${roleLabel}`; who.classList.remove("hidden"); }
       // Show Admin pill for admins
-      const isAdmin = (ME?.user?.role === "internal") || (ME?.user?.allowedClients === "*");
+      const isAdmin = (ME?.user?.role === "admin" || ME?.user?.role === "internal") || (ME?.user?.allowedClients === "*");
       const adminLink = document.getElementById("adminLink");
       if (isAdmin && adminLink) adminLink.classList.remove("hidden");
     }catch{}
