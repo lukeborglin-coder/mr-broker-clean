@@ -1,0 +1,30 @@
+name: Snapshot server.js
+on:
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Prepare snapshot
+        run: |
+          mkdir -p diagnostics
+          cp server.js diagnostics/server.snapshot.txt
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: "Snapshot: server.js"
+          body: "Adds diagnostics/server.snapshot.txt from current base."
+          commit-message: "chore: snapshot server.js"
+          branch: chatgpt/snapshot-${{ github.run_id }}
+          base: ${{ github.event.repository.default_branch }}
+          delete-branch: true
