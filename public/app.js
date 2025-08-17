@@ -1,219 +1,151 @@
-/* public/app.js — robust answer rendering + clear error surfacing */
-const API_BASE = (window.CONFIG||{}).API_BASE || "";
+/* public/app.js — shared helpers only (no legacy Ask handlers, no alerts)
+   - KEEP: fetch helpers (jget/jpost)
+   - ADD: inline message + thinking + refs helpers
+   - UPDATE: formatRefsToSup merges adjacent [n][m] → <sup>n;m</sup>
+   - NEW: toMetricId, guessMetricIdFromQuestion, and pass-throughs for chart API
+*/
 
-async function jget(u){
-  const r = await fetch(API_BASE+u, { credentials: 'include' });
-  if(!r.ok){
-    const txt = await r.text().catch(()=>String(r.status));
-    throw new Error(txt || `HTTP ${r.status}`);
-  }
-  // try JSON else throw
-  try { return await r.json(); } catch { throw new Error('Invalid JSON from '+u); }
+const API_BASE = (window.CONFIG || {}).API_BASE || "";
+
+// JSON helpers
+async function jget(u) {
+  const r = await fetch(API_BASE + u);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
 }
-
-async function jpost(u,b){
-  const r = await fetch(API_BASE+u, {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    credentials: 'include',
-    body: JSON.stringify(b||{})
+async function jpost(u, b) {
+  const r = await fetch(API_BASE + u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(b || {}),
   });
-  if(!r.ok){
-    const txt = await r.text().catch(()=>String(r.status));
-    throw new Error(txt || `HTTP ${r.status}`);
-  }
-  try { return await r.json(); } catch { throw new Error('Invalid JSON from '+u); }
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
 }
 
-const $ = id => document.getElementById(id);
+// Tiny DOM helpers
+const $ = (sel, root = document) =>
+  typeof sel === "string" ? root.querySelector(sel.startsWith("#") ? sel : `#${sel}`) : sel;
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-let me = null;
-let autoTimers = [];
-function showThinking(s){ const t=$('thinking'); if(t) t.style.display = s?'':'none'; }
-function roleDisplay(r){ return r==='internal' ? 'admin' : (r||''); }
-function ensureAdminLink(){ const el=$('adminLink'); if(!el||!me) return; el.style.display=(me.role==='internal'||me.role==='admin')?'inline-flex':'none'; }
-function uncloack(){ document.body.classList.remove('cloak'); }
-
-function showError(msg){
-  let banner = $('errorBanner');
-  if(!banner){
-    banner = document.createElement('div');
-    banner.id = 'errorBanner';
-    banner.style.cssText = 'margin:8px 0;padding:10px 12px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;border-radius:10px;';
-    const wrap = document.querySelector('.wrap') || document.body;
-    wrap.prepend(banner);
-  }
-  banner.textContent = typeof msg === 'string' ? msg : (msg && msg.message) || 'Something went wrong.';
+// Inline message helper
+function showInlineMessage(msg, kind = "error") {
+  const box = $("#msg");
+  if (!box) return;
+  box.textContent = msg || "";
+  box.className = "msg " + (kind === "error" ? "" : "info");
+  box.style.display = msg ? "block" : "none";
+}
+function clearInlineMessage() {
+  const box = $("#msg");
+  if (!box) return;
+  box.textContent = "";
+  box.className = "msg";
+  box.style.display = "none";
 }
 
-async function hydrateMe(){
-  try{
-    me = await jget('/me');
-    $('username').textContent = me && me.username ? `${me.username} — ${roleDisplay(me.role)}` : '—';
-    ensureAdminLink();
-    uncloack();
-  }catch(e){
-    window.location.href = '/login.html';
-  }
+// Thinking overlay + inline status
+function setThinking(on) {
+  const overlay = $("#overlay");
+  const inline = $("#inlineStatus");
+  if (overlay) overlay.classList.toggle("hidden", !on);
+  if (inline) inline.style.display = on ? "flex" : "none";
+  const ask = $("#ask");
+  if (ask) ask.disabled = !!on;
 }
 
-// -------- Answer shaping --------
-function safeArray(x){ return Array.isArray(x) ? x : (x ? [x] : []); }
-
-function extractLead(resp){
-  // Common shapes
-  return (
-    resp?.answer ||
-    resp?.headline ||
-    resp?.summary ||
-    resp?.result?.answer ||
-    resp?.data?.answer ||
-    resp?.output?.answer ||
-    (typeof resp?.text === 'string' ? resp.text : '') ||
-    ''
-  );
-}
-
-function extractBullets(resp){
-  let bullets = resp?.bullets || resp?.points || resp?.result?.bullets || resp?.data?.bullets || resp?.output?.bullets || [];
-  // If none, derive from refs/secondary
-  if(!bullets?.length){
-    const refs = safeArray(resp?.refs || resp?.references || resp?.citations || resp?.result?.refs || resp?.secondary || []);
-    bullets = refs.slice(0,4).map(r => {
-      if(typeof r === 'string') return r;
-      const t = r.title || r.name || r.headline || r.snippet || r.text;
-      return t || (r.url ? new URL(r.url).hostname : '');
-    }).filter(Boolean);
-  }
-  return bullets.slice(0,5);
-}
-
-function extractQuotes(resp){
-  const qs = resp?.quotes || resp?.insights || resp?.result?.quotes || resp?.data?.quotes || resp?.output?.quotes || [];
-  return safeArray(qs).slice(0,5).map(q => {
-    if(typeof q === 'string') return { text:q, tag:'' };
-    return { text: q.text || q.quote || q.snippet || '', tag: q.tag || q.source || q.speaker || '' };
-  }).filter(q=>q.text);
-}
-
-function extractVisuals(resp){
-  // Accept resp.visuals / resp.slides / resp.result.visuals
-  const visuals = resp?.visuals || resp?.slides || resp?.result?.visuals || [];
-  return safeArray(visuals);
-}
-
-function deriveSections(resp){
-  const lead = extractLead(resp);
-  const bullets = extractBullets(resp);
-  const quotes = extractQuotes(resp);
-  const visuals = extractVisuals(resp);
-
-  // Heuristic buckets
-  const drivers = (resp.drivers || []).concat(bullets.filter(b=>/driver|increase|satisf|like|prefer/i.test(b)));
-  const barriers = (resp.barriers || []).concat(bullets.filter(b=>/barrier|decreas|dissatisf|pain|issue|concern|friction/i.test(b)));
-  const kpis = (resp.kpis || []).concat(bullets.filter(b=>/KPI|NPS|CSAT|awareness|consideration|trial|repeat|share|growth|decline/i.test(b)));
-  const trends = (resp.trends || []).concat(bullets.filter(b=>/trend|over time|month|quarter|year|increasing|decreasing/i.test(b)));
-
-  const pick=(arr,n)=>(arr||[]).slice(0,n);
-  return {
-    lead,
-    kpis:{bullets:pick(kpis,5),quotes:pick(quotes,3),slides:visuals},
-    drivers:{bullets:pick(drivers,5),quotes:pick(quotes,3),slides:visuals},
-    barriers:{bullets:pick(barriers,5),quotes:pick(quotes,3),slides:visuals},
-    trends:{bullets:pick(trends,5),quotes:pick(quotes,3),slides:visuals}
-  };
-}
-
-function renderQuotes(containerId, quotes){
-  const root = $(containerId); if(!root) return; root.innerHTML='';
-  (quotes||[]).forEach(q=>{
-    if(!q.text) return;
-    const div=document.createElement('div'); div.className='quote';
-    div.innerHTML = `${escapeHtml(q.text)}${q.tag?` <span class="tag">— ${escapeHtml(q.tag)}</span>`:''}`;
-    root.appendChild(div);
+// Merge bracketed citations into <sup>
+function formatRefsToSup(text) {
+  const s = String(text || "");
+  const merged = s.replace(/(?:\[\d+\])+/g, (match) => {
+    const nums = Array.from(match.matchAll(/\[(\d+)\]/g)).map((m) => m[1]);
+    return `<sup>${nums.join(";")}</sup>`;
   });
+  return merged
+    .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
+    .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
+}
+function setHTMLWithRefs(el, text) {
+  if (!el) return;
+  el.innerHTML = formatRefsToSup(text);
 }
 
-function escapeHtml(s){ return (s||'').replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\\'':'&#39;'}[m])); }
-
-function slidesFromVisuals(visuals){
-  const slides=[];
-  (visuals||[]).forEach(v=>{
-    if(v?.type==='slide'){
-      const page=Number(v.page||0); if(page<=1) return;
-      slides.push({ url: v.thumbUrl || v.url || `/api/drive-pdf?fileId=${encodeURIComponent(v.fileId)}&page=${page}`, page });
-    } else if (v?.url){
-      slides.push({ url: v.url, page: v.page||null });
-    }
+// Derive support bullets from raw snippets
+function deriveSupportBullets(snippets, { maxCount = 10, maxLen = 200 } = {}) {
+  const lines = [];
+  (snippets || []).forEach(s => {
+    String(s || "").split(/\n+/).forEach(t => {
+      const clean = String(t).replace(/\s+/g, " ").trim();
+      if (!clean) return;
+      lines.push(clean);
+    });
   });
-  return slides.slice(0,5);
-}
-
-function clearTimers(){ autoTimers.forEach(t=>clearInterval(t)); autoTimers=[]; }
-
-function renderCarousel(rootId, visuals, staggerMs){
-  const root=$(rootId); if(!root) return;
-  root.innerHTML='';
-  const slides=slidesFromVisuals(visuals);
-  if(!slides.length){ root.style.display='none'; return; }
-  root.style.display='block';
-
-  const viewport=document.createElement('div'); viewport.className='viewport';
-  const img=document.createElement('img'); viewport.appendChild(img);
-
-  const nav=document.createElement('div'); nav.className='nav';
-  const prev=document.createElement('button'); prev.innerHTML='&#x2039;';
-  const next=document.createElement('button'); next.innerHTML='&#x203A;';
-  nav.appendChild(prev); nav.appendChild(next);
-
-  const dots=document.createElement('div'); dots.className='dots';
-  root.appendChild(viewport); root.appendChild(nav); root.appendChild(dots);
-
-  let idx=0; let paused=false;
-  function draw(){ const s=slides[idx]; img.src=s.url; dots.querySelectorAll('button').forEach((b,i)=>b.classList.toggle('active',i===idx)); }
-  function go(i){ idx=(i+slides.length)%slides.length; draw(); }
-  slides.forEach((s,i)=>{ const b=document.createElement('button'); b.addEventListener('click',()=>{paused=true;go(i);}); dots.appendChild(b); });
-  prev.addEventListener('click',()=>{paused=true;go(idx-1);});
-  next.addEventListener('click',()=>{paused=true;go(idx+1);});
-  draw();
-  const timer=setInterval(()=>{ if(!paused) go(idx+1); },5000);
-  autoTimers.push(timer);
-}
-
-function renderBullets(id, list){
-  const ul=$(id); if(!ul) return; ul.innerHTML='';
-  (list||[]).forEach(t=>{ if(!t) return; const li=document.createElement('li'); li.textContent=t; ul.appendChild(li); });
-}
-
-// -------- Submit handler --------
-async function onSubmit(e){
-  e.preventDefault();
-  const q = $('q').value.trim();
-  if(!q) return;
-  clearTimers();
-  showError(''); // clear
-  showThinking(true);
-  try{
-    const resp = await jpost('/search', { q });
-    console.debug('Search response:', resp);
-    const sections = deriveSections(resp);
-
-    $('answerLead').textContent = sections.lead || '';
-    $('answerWrap').style.display = '';
-
-    renderBullets('kpiBullets', sections.kpis.bullets); renderQuotes('kpiQuotes', sections.kpis.quotes); renderCarousel('kpiSlides', sections.kpis.slides, 0);
-    renderBullets('driverBullets', sections.drivers.bullets); renderQuotes('driverQuotes', sections.drivers.quotes); renderCarousel('driverSlides', sections.drivers.slides, 600);
-    renderBullets('barrierBullets', sections.barriers.bullets); renderQuotes('barrierQuotes', sections.barriers.quotes); renderCarousel('barrierSlides', sections.barriers.slides, 1200);
-    renderBullets('trendBullets', sections.trends.bullets); renderQuotes('trendQuotes', sections.trends.quotes); renderCarousel('trendSlides', sections.trends.slides, 1800);
-  }catch(err){
-    console.error('Search error:', err);
-    showError(err && err.message || 'Error');
-  }finally{
-    showThinking(false);
+  const seen = new Set();
+  const out = [];
+  for (const l of lines) {
+    const t = l.slice(0, maxLen).replace(/[;:,]\s*$/, ".");
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(/[.!?]$/.test(t) ? t : t + ".");
+    if (out.length >= maxCount) break;
   }
+  return out;
 }
 
-document.addEventListener('DOMContentLoaded', ()=>{
-  hydrateMe();
-  const f = $('askForm'); if(f) f.addEventListener('submit', onSubmit);
+/* ==== NEW: Chart helpers/glue ==== */
+function toMetricId(label) {
+  return String(label || "")
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+}
+function guessMetricIdFromQuestion(q) {
+  const text = String(q || "").toLowerCase();
+  const SYNONYMS = [
+    { id: "SATISFACTION", rx: /\b(cs(at)?|sat(isfaction)?|overall\s+sat)\b/ },
+    { id: "NPS", rx: /\b(nps|net\s+promoter)\b/ },
+    { id: "AWARENESS", rx: /\b(aided|unaided|total)\s+awareness|\bawareness\b/ },
+    { id: "CONSIDERATION", rx: /\bconsideration\b/ },
+    { id: "PURCHASE_INTENT", rx: /\b(pi|purchase\s+intent|likelihood\s+to\s+buy|ltb)\b/ },
+    { id: "USAGE", rx: /\busage\b/ },
+    { id: "PREFERENCE", rx: /\bpreference\b/ },
+    { id: "TRUST", rx: /\btrust\b/ },
+    { id: "RECOMMEND", rx: /\brecommend(ation)?\b/ },
+  ];
+  for (const { id, rx } of SYNONYMS) {
+    if (rx.test(text)) return id;
+  }
+  const quoted = text.match(/["“”'‘’]([^"“”'‘’]+)["“”'‘’]/);
+  if (quoted && quoted[1]) return toMetricId(quoted[1]);
+  const m = text.match(/\btrend(?:ing)?\s+(?:of\s+)?([a-zA-Z0-9 _-]{3,})/);
+  if (m && m[1]) return toMetricId(m[1]);
+  return null;
+}
+async function fetchChart(metricId) {
+  if (!(window.app && typeof window.app.fetchChart === "function")) return;
+  return window.app.fetchChart(metricId);
+}
+function showChart(payload) {
+  if (!(window.app && typeof window.app.showChart === "function")) return;
+  return window.app.showChart(payload);
+}
+
+// Expose helpers
+window.App = Object.freeze({
+  jget,
+  jpost,
+  $,
+  $$,
+  showInlineMessage,
+  clearInlineMessage,
+  setThinking,
+  formatRefsToSup,
+  setHTMLWithRefs,
+  deriveSupportBullets,
+  toMetricId,
+  guessMetricIdFromQuestion,
+  fetchChart,
+  showChart,
 });
