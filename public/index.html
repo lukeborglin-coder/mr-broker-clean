@@ -75,6 +75,11 @@
     .dash-card li{ margin:6px 0; }
     .dash-card blockquote{ font-style:italic; color:#444; margin:10px 0; padding-left:10px; border-left:3px solid var(--soft-border); }
     .dash-card blockquote footer{ display:block; margin-top:6px; font-size:.9rem; color:#6b7280; }
+    
+    /* Mini chart inside Trends card */
+    .mini-chart-wrap{ margin-top:8px; }
+    .mini-chart-wrap canvas{ width:100%; height:160px; }
+
     /* Carousel */
     .carousel{ position:relative; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:#f8fafc; }
     .carousel-track{ display:flex; transition: transform .5s ease; }
@@ -117,7 +122,7 @@
     <select id="clientTop"></select>
   </div>
 
-  <main>
+  <main id="appRoot" style="visibility:hidden">
     <div class="hero">
       <h1>Ask about your research<span class="dot">.</span></h1>
       <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
@@ -280,9 +285,7 @@
   // helpers
   function setThinking(on){
     document.getElementById("overlay")?.classList.toggle("hidden", !on);
-    const inl = document.getElementById("inlineStatus");
-    if (inl) inl.style.display = on ? "flex" : "none";
-    const ask = document.getElementById("ask");
+        const ask = document.getElementById("ask");
     if (ask) ask.disabled = on;
   }
   function showMsg(text, type="error"){
@@ -435,7 +438,8 @@
   }
 
   // --- NEW: Chart helpers bound to window.app ---
-  let _chartInstance = null;
+  let _miniChartInstance = null;
+let _chartInstance = null;
 
   function renderChartPayload(payload){
     const panel = document.getElementById("chartsCard");
@@ -448,6 +452,7 @@
 
     const ctx = canvas.getContext("2d");
     if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
+    if (_miniChartInstance) { try{ _miniChartInstance.destroy(); }catch{} _miniChartInstance = null; }
     const cfg = {
       type: (payload.chart?.type === "bar" ? "bar" : "line"),
       data: {
@@ -471,6 +476,33 @@
       }
     };
     _chartInstance = new Chart(ctx, cfg);
+// Also render mini chart if Trends card exists
+try{
+  const miniCanvas = document.getElementById("trendMiniCanvas");
+  if (miniCanvas) {
+    const mctx = miniCanvas.getContext("2d");
+    const miniCfg = JSON.parse(JSON.stringify(cfg));
+    miniCfg.options = Object.assign({}, miniCfg.options, {
+      plugins: { legend: { display:false } },
+      scales: { x: { display:false }, y: { display:false } }
+    });
+    _miniChartInstance = new Chart(mctx, miniCfg);
+  }
+}catch(e){}
+    // Also render mini chart if Trends card exists
+    try{
+      const miniCanvas = document.getElementById("trendMiniCanvas");
+      if (miniCanvas) {
+        const mctx = miniCanvas.getContext("2d");
+        const miniCfg = JSON.parse(JSON.stringify(cfg));
+        miniCfg.options = Object.assign({}, miniCfg.options, {
+          plugins: { legend: { display:false } },
+          scales: { x: { display:false }, y: { display:false } }
+        });
+        _miniChartInstance = new Chart(mctx, miniCfg);
+      }
+    }catch(e){}
+
 
     const rows = Array.isArray(payload.table) ? payload.table : [];
     let html = '<table class="data-table"><thead><tr>';
@@ -754,6 +786,7 @@
   (async function init(){
     wireLogout();
     await fetchMe();
+    try{ document.getElementById("appRoot").style.visibility="visible"; }catch{}
     await loadClientLibraries();
     const ask = document.getElementById("ask");
     if (ask) ask.disabled = false;
