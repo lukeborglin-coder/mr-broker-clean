@@ -715,26 +715,17 @@ function requireInternal(req, res, next) {
 }
 
 // -------------------- Pages --------------------
-app.get("/", async (req, res) => {
+app.get("/", (req, res) => {
   if (!req.session?.user) return res.redirect("/login.html");
-  await serveHtmlWithUi(res, path.resolve("public/index.html"));
+  res.set("Cache-Control", "no-store");
+  res.sendFile(path.resolve("public/index.html"));
 });
-app.get("/admin", async (req, res) => {
+app.get("/admin", (req, res) => {
   if (!req.session?.user) return res.redirect("/login.html");
   if (req.session.user.role !== "internal") return res.redirect("/");
-  await serveHtmlWithUi(res, path.resolve("public/admin.html"));
+  res.set("Cache-Control", "no-store");
+  res.sendFile(path.resolve("public/admin.html"));
 });
-
-// New pages: Profile & Settings
-app.get("/profile", async (req, res) => {
-  if (!req.session?.user) return res.redirect("/login.html");
-  await serveHtmlWithUi(res, path.resolve("public/profile.html"));
-});
-app.get("/settings", async (req, res) => {
-  if (!req.session?.user) return res.redirect("/login.html");
-  await serveHtmlWithUi(res, path.resolve("public/settings.html"));
-});
-
 
 // -------------------- Auth APIs --------------------
 app.post("/auth/login", async (req, res) => {
@@ -777,7 +768,7 @@ app.get("/me", async (req, res) => {
   const me = req.session.user;
   const roleLabel = me.role === "internal" ? "admin" : me.role;
   res.json({
-    user: { username: me.username, role: roleLabel, allowedClients: me.allowedClients ?? null },
+    user: { username: me.username, role: roleLabel },
     activeClientId: req.session.activeClientId || null,
     clients,
   });
