@@ -1,151 +1,170 @@
-/* public/app.js — shared helpers only (no legacy Ask handlers, no alerts)
-   - KEEP: fetch helpers (jget/jpost)
-   - ADD: inline message + thinking + refs helpers
-   - UPDATE: formatRefsToSup merges adjacent [n][m] → <sup>n;m</sup>
-   - NEW: toMetricId, guessMetricIdFromQuestion, and pass-throughs for chart API
-*/
+// public/app.js — hydrate + Admin + single overlay + Dashboard (KPIs/Drivers/Barriers/Trends)
+const API_BASE = (window.CONFIG||{}).API_BASE || "";
+async function jget(u){ const r=await fetch(API_BASE+u); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function jpost(u,b){ const r=await fetch(API_BASE+u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+const $ = (id)=> document.getElementById(id);
 
-const API_BASE = (window.CONFIG || {}).API_BASE || "";
-
-// JSON helpers
-async function jget(u) {
-  const r = await fetch(API_BASE + u);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+function showOverlay(on){
+  const ov = $('#overlay'); const btn = $('#ask');
+  if (ov) ov.classList.toggle('show', !!on);
+  if (btn) btn.disabled = !!on;
 }
-async function jpost(u, b) {
-  const r = await fetch(API_BASE + u, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(b || {}),
+
+async function hydrate(){
+  try{
+    const me = await jget('/me');
+    const who = $('#who');
+    const roleLabel = me?.user?.role;
+    if (who){ who.textContent = (me?.user?.username||'') + ' — ' + roleLabel; who.classList.remove('hidden'); }
+    const adminEl = $('#adminLink');
+    if (adminEl && (roleLabel === 'admin' || roleLabel === 'internal')) adminEl.classList.remove('hidden');
+    $('#app').classList.remove('cloak');
+  }catch(e){ location.href = '/login.html'; }
+}
+
+// ==== Dashboard helpers ====
+function groupBulletsIntoThemes(bullets){
+  const out = { KPIs:[], "Key Drivers":[], "Key Barriers":[], "Trends Over Time":[] };
+  const lower = s => (s||"").toLowerCase();
+  (bullets||[]).forEach(b=>{
+    const t = lower(b);
+    if(/kpi|%|percent|nps|csat|satisfaction|awareness|consideration|usage/.test(t)) out.KPIs.push(b);
+    else if(/driver|because|due to|reason|leads to|contribute|influenc/.test(t)) out["Key Drivers"].push(b);
+    else if(/barrier|concern|issue|challenge|pain|limit|hesitan/.test(t)) out["Key Barriers"].push(b);
+    else out["Trends Over Time"].push(b);
   });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-// Tiny DOM helpers
-const $ = (sel, root = document) =>
-  typeof sel === "string" ? root.querySelector(sel.startsWith("#") ? sel : `#${sel}`) : sel;
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-// Inline message helper
-function showInlineMessage(msg, kind = "error") {
-  const box = $("#msg");
-  if (!box) return;
-  box.textContent = msg || "";
-  box.className = "msg " + (kind === "error" ? "" : "info");
-  box.style.display = msg ? "block" : "none";
-}
-function clearInlineMessage() {
-  const box = $("#msg");
-  if (!box) return;
-  box.textContent = "";
-  box.className = "msg";
-  box.style.display = "none";
-}
-
-// Thinking overlay + inline status
-function setThinking(on) {
-  const overlay = $("#overlay");
-  const inline = $("#inlineStatus");
-  if (overlay) overlay.classList.toggle("hidden", !on);
-  if (inline) inline.style.display = on ? "flex" : "none";
-  const ask = $("#ask");
-  if (ask) ask.disabled = !!on;
-}
-
-// Merge bracketed citations into <sup>
-function formatRefsToSup(text) {
-  const s = String(text || "");
-  const merged = s.replace(/(?:\[\d+\])+/g, (match) => {
-    const nums = Array.from(match.matchAll(/\[(\d+)\]/g)).map((m) => m[1]);
-    return `<sup>${nums.join(";")}</sup>`;
-  });
-  return merged
-    .replace(/\s+\[(\d+)\]/g, "<sup>$1</sup>")
-    .replace(/\[(\d+)\]/g, "<sup>$1</sup>");
-}
-function setHTMLWithRefs(el, text) {
-  if (!el) return;
-  el.innerHTML = formatRefsToSup(text);
-}
-
-// Derive support bullets from raw snippets
-function deriveSupportBullets(snippets, { maxCount = 10, maxLen = 200 } = {}) {
-  const lines = [];
-  (snippets || []).forEach(s => {
-    String(s || "").split(/\n+/).forEach(t => {
-      const clean = String(t).replace(/\s+/g, " ").trim();
-      if (!clean) return;
-      lines.push(clean);
-    });
-  });
-  const seen = new Set();
-  const out = [];
-  for (const l of lines) {
-    const t = l.slice(0, maxLen).replace(/[;:,]\s*$/, ".");
-    const key = t.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(/[.!?]$/.test(t) ? t : t + ".");
-    if (out.length >= maxCount) break;
-  }
   return out;
 }
 
-/* ==== NEW: Chart helpers/glue ==== */
-function toMetricId(label) {
-  return String(label || "")
-    .trim()
-    .replace(/[^A-Za-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-}
-function guessMetricIdFromQuestion(q) {
-  const text = String(q || "").toLowerCase();
-  const SYNONYMS = [
-    { id: "SATISFACTION", rx: /\b(cs(at)?|sat(isfaction)?|overall\s+sat)\b/ },
-    { id: "NPS", rx: /\b(nps|net\s+promoter)\b/ },
-    { id: "AWARENESS", rx: /\b(aided|unaided|total)\s+awareness|\bawareness\b/ },
-    { id: "CONSIDERATION", rx: /\bconsideration\b/ },
-    { id: "PURCHASE_INTENT", rx: /\b(pi|purchase\s+intent|likelihood\s+to\s+buy|ltb)\b/ },
-    { id: "USAGE", rx: /\busage\b/ },
-    { id: "PREFERENCE", rx: /\bpreference\b/ },
-    { id: "TRUST", rx: /\btrust\b/ },
-    { id: "RECOMMEND", rx: /\brecommend(ation)?\b/ },
-  ];
-  for (const { id, rx } of SYNONYMS) {
-    if (rx.test(text)) return id;
-  }
-  const quoted = text.match(/["“”'‘’]([^"“”'‘’]+)["“”'‘’]/);
-  if (quoted && quoted[1]) return toMetricId(quoted[1]);
-  const m = text.match(/\btrend(?:ing)?\s+(?:of\s+)?([a-zA-Z0-9 _-]{3,})/);
-  if (m && m[1]) return toMetricId(m[1]);
-  return null;
-}
-async function fetchChart(metricId) {
-  if (!(window.app && typeof window.app.fetchChart === "function")) return;
-  return window.app.fetchChart(metricId);
-}
-function showChart(payload) {
-  if (!(window.app && typeof window.app.showChart === "function")) return;
-  return window.app.showChart(payload);
+function extractQuotes(rawQuotes, refsText){
+  const quotes = [];
+  (rawQuotes||[]).forEach(q=>{
+    if(typeof q==='string') quotes.push({text:q, tag:'Respondent'});
+    else quotes.push({ text:q.text||q.quote||'', tag:q.speaker||q.tag||'Respondent' });
+  });
+  (refsText||"").split("\\n").forEach(line=>{
+    const m = line.match(/[“"](.*?)[”"]\\s*(—|- )\\s*(.+)$/);
+    if(m && m[1] && m[3]) quotes.push({ text:m[1], tag:m[3] });
+  });
+  return quotes;
 }
 
-// Expose helpers
-window.App = Object.freeze({
-  jget,
-  jpost,
-  $,
-  $$,
-  showInlineMessage,
-  clearInlineMessage,
-  setThinking,
-  formatRefsToSup,
-  setHTMLWithRefs,
-  deriveSupportBullets,
-  toMetricId,
-  guessMetricIdFromQuestion,
-  fetchChart,
-  showChart,
+function makeCarousel(slides, mountId, autoDelayMs){
+  const mount = document.getElementById(mountId);
+  if(!mount) return;
+  mount.innerHTML = `
+    <div class="carousel">
+      <div class="carousel-track"></div>
+      <div class="nav">
+        <button class="prev" aria-label="Previous">◀</button>
+        <button class="next" aria-label="Next">▶</button>
+      </div>
+    </div>`;
+  const track = mount.querySelector('.carousel-track');
+  slides.forEach(s=>{
+    const d = document.createElement('div');
+    d.className = 'carousel-slide';
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = s.url;
+    img.alt = s.alt || 'Slide';
+    d.appendChild(img);
+    track.appendChild(d);
+  });
+  let idx = 0, auto = true;
+  function go(i){
+    idx = (i+slides.length)%slides.length;
+    track.style.transform = `translateX(-${idx*100}%)`;
+  }
+  mount.querySelector('.prev').addEventListener('click', ()=>{ auto=false; go(idx-1); });
+  mount.querySelector('.next').addEventListener('click', ()=>{ auto=false; go(idx+1); });
+  if (slides.length>1 && autoDelayMs>0){
+    setInterval(()=>{ if(auto) go(idx+1); }, autoDelayMs);
+  }
+  go(0);
+}
+
+function buildDashCard({title, bullets=[], quotes=[], slides=[], autoDelayMs=5000}, staggerMs){
+  const grid = $('#dashGrid');
+  const qid = 'q'+Math.random().toString(36).slice(2,8);
+  const sid = 's'+Math.random().toString(36).slice(2,8);
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="dash-title"><h3>${title}</h3></div>
+    ${bullets.length? `<ul class="dash-bullets">`+bullets.slice(0,6).map(b=>`<li>${b}</li>`).join("")+`</ul>`:""}
+    ${quotes.length? `<div class="dash-quotes" id="${qid}">`+quotes.slice(0,3).map(q=>`<blockquote><em>${q.text}</em> — ${q.tag}</blockquote>`).join("")+`</div>`:""}
+    ${slides.length? `<div id="${sid}"></div>`:""}
+  `;
+  grid.appendChild(card);
+  if (slides.length){
+    setTimeout(()=> makeCarousel(slides, sid, autoDelayMs), staggerMs);
+  }
+}
+
+function slidesFromRefs(refs){
+  const out = [];
+  (refs||[]).forEach(r=>{
+    const fileId = r.fileId || r.id || r.sourceId;
+    const page = r.page || r.pageNumber || 1;
+    if (!fileId) return;
+    if (page<=1) return; // skip title slides
+    const url = `/api/drive-pdf?fileId=${encodeURIComponent(fileId)}#page=${page}`;
+    out.push({ url, alt: (r.title||'Slide') + ' — p'+page });
+  });
+  return out.slice(0,5);
+}
+
+function buildDashboard(payload){
+  const { bullets=[], quotes=[], refs=[], chartPayload=null } = payload||{};
+  const dash = $('#dashGrid');
+  dash.innerHTML = "";
+  const groups = groupBulletsIntoThemes(bullets);
+  const refsText = (refs||[]).map(r=>r.snippet||"").join("\\n");
+  const minedQuotes = extractQuotes(quotes, refsText);
+  const allSlides = slidesFromRefs(refs);
+
+  let stagger = 0;
+  const step = 700;
+  if (groups.KPIs.length || minedQuotes.length || allSlides.length){
+    buildDashCard({ title:"KPIs", bullets:groups.KPIs, quotes:minedQuotes, slides:allSlides }, stagger); stagger+=step;
+  }
+  if (groups["Key Drivers"].length){
+    buildDashCard({ title:"Key Drivers", bullets:groups["Key Drivers"], quotes:minedQuotes, slides:allSlides }, stagger); stagger+=step;
+  }
+  if (groups["Key Barriers"].length){
+    buildDashCard({ title:"Key Barriers", bullets:groups["Key Barriers"], quotes:minedQuotes, slides:allSlides }, stagger); stagger+=step;
+  }
+  if (groups["Trends Over Time"].length || chartPayload){
+    buildDashCard({ title:"Trends Over Time", bullets:groups["Trends Over Time"], quotes:minedQuotes, slides:allSlides }, stagger);
+  }
+  dash.style.display = (dash.children.length? 'grid' : 'none');
+}
+
+// ==== Ask ====
+async function ask(){
+  const q = $('#q').value.trim();
+  if (!q) return $('#q').focus();
+  showOverlay(true);
+  try{
+    const resp = await jpost('/search', { userQuery: q, generateSupport: true });
+    const aw = $('#answerWrap'), a = $('#answer');
+    if (resp.answer){ a.innerHTML = resp.answer; aw.classList.remove('hidden'); } else { aw.classList.add('hidden'); }
+    const bullets = (resp.additionalSupport||[]).slice(0,12);
+    const quotes = (resp.quotes||[]).map(q=>({ text:q.text||q.quote||q, tag:q.speaker||q.tag||'Respondent' }));
+    const refs = (resp.visuals||resp.refs||[]);
+    const chartPayload = resp.chart || resp.trend || null;
+    buildDashboard({ bullets, quotes, refs, chartPayload });
+  }catch(err){
+    alert('Search failed');
+  }finally{
+    showOverlay(false);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', ()=>{
+  hydrate();
+  $('#ask').addEventListener('click', ask);
+  $('#q').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); ask(); }});
+  $('#logoutBtn').addEventListener('click', async ()=>{ try{ await jpost('/auth/logout',{});}catch{} location.href='/login.html'; });
 });
