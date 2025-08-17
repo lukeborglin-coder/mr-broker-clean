@@ -48,21 +48,6 @@
     .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
     .msg.info{display:block;background:#fafbfd;color:#2b2f36}
 
-    /* Dashboard blocks */
-    .dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
-    .dash-card{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fff;position:relative}
-    .dash-card h4{margin:0 0 8px;font-size:1.02rem;color:#2b2f36}
-    .dash-card .bullets{padding-left:18px;margin:0 0 10px}
-    .dash-card .bullets li{margin-bottom:6px}
-    /* Carousel */
-    .carousel{position:relative;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#f8fafc}
-    .carousel-track{display:flex;transition:transform .5s ease;will-change:transform}
-    .carousel img{width:100%;height:auto;flex:0 0 100%;aspect-ratio:16/9;object-fit:cover;display:block}
-    .car-btn{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.9);border:1px solid var(--line);width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
-    .car-btn:hover{background:#fff}
-    .car-prev{left:8px}.car-next{right:8px}
-
-
     /* NEW: Charts & Data panel styling */
     #chartsCard .canvas-wrap{border:1px solid var(--line);border-radius:12px;padding:10px}
     #chartCanvas{width:100%;height:320px;display:block}
@@ -81,6 +66,24 @@
     }
     .admin-pill:hover{box-shadow:0 1px 0 rgba(0,0,0,.04)}
     .hidden{display:none}
+  
+    /* Dashboard layout */
+    .dash-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; }
+    .dash-card{ border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; box-shadow: var(--shadow); }
+    .dash-card h4{ margin:0 0 8px; font-size:1rem; color:#374151; letter-spacing:.02em; }
+    .dash-card ul{ margin:0; padding-left:18px; }
+    .dash-card li{ margin:6px 0; }
+    .dash-card blockquote{ font-style:italic; color:#444; margin:10px 0; padding-left:10px; border-left:3px solid var(--soft-border); }
+    .dash-card blockquote footer{ display:block; margin-top:6px; font-size:.9rem; color:#6b7280; }
+    /* Carousel */
+    .carousel{ position:relative; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:#f8fafc; }
+    .carousel-track{ display:flex; transition: transform .5s ease; }
+    .carousel-slide{ min-width:100%; aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; }
+    .carousel-slide img{ width:100%; height:100%; object-fit:cover; border:0; }
+    .caro-nav{ position:absolute; top:50%; transform:translateY(-50%); width:100%; display:flex; justify-content:space-between; pointer-events:none; }
+    .caro-btn{ pointer-events:auto; background:rgba(255,255,255,.85); border:1px solid var(--line); width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-weight:700; }
+    .caro-btn:hover{ background:#fff; }
+
   </style>
 </head>
 <body>
@@ -135,12 +138,6 @@
         <h3>Additional Support</h3>
         <ul id="supportList" class="compact-list"></ul>
         <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
-      </div>
-
-      
-      <div id="dashboardCard" class="panel" style="display:none;">
-        <h3>Insights Dashboard</h3>
-        <div id="dashGrid" class="dash-grid"></div>
       </div>
 
       <div id="slidesCard" class="panel" style="display:none;">
@@ -283,6 +280,8 @@
   // helpers
   function setThinking(on){
     document.getElementById("overlay")?.classList.toggle("hidden", !on);
+    const inl = document.getElementById("inlineStatus");
+    if (inl) inl.style.display = on ? "flex" : "none";
     const ask = document.getElementById("ask");
     if (ask) ask.disabled = on;
   }
@@ -331,75 +330,7 @@
     supportCollapsed = !supportCollapsed; renderSupportList();
   });
 
-  
-  // ---- Dashboard theming + carousel ----
-  function groupBulletsIntoThemes(bullets){
-    const themes = [
-      { key: 'drivers', title: 'Satisfaction Drivers', match: /(satisf|driver|ease|convenien|start|dosing|initiat|experience)/i, items: [], slides: [] },
-      { key: 'awareness', title: 'Awareness & Perception', match: /(aware|awareness|well[- ]?informed|perception|impression)/i, items: [], slides: [] },
-      { key: 'compare', title: 'Competitive Comparison', match: /(compare|versus|vs\b|comparison|spinraza|compared)/i, items: [], slides: [] },
-    ];
-    const misc = { key: 'other', title: 'Other Notables', match: /.*/, items: [], slides: [] };
-    bullets.forEach(b=>{
-      const t = String(b).toLowerCase();
-      const bucket = themes.find(th => th.match.test(t)) || misc;
-      bucket.items.push(b);
-    });
-    const out = themes.filter(t=>t.items.length).concat(misc.items.length? [misc]: []);
-    return out;
-  }
-
-  async function renderDashboard(bullets, ctxChunks){
-    const box = document.getElementById('dashboardCard');
-    const grid = document.getElementById('dashGrid');
-    if(!box || !grid){ return; }
-    grid.innerHTML = '';
-    const themes = groupBulletsIntoThemes(bullets);
-
-    // map slides to themes using textSnippet heuristics
-    themes.forEach(th=> th.slides = []);
-    ctxChunks.forEach(r=>{
-      const txt = String(r.textSnippet||'') + ' ' + String(r.study||'') + ' ' + String(r.reportTag||'');
-      const theme = themes.find(th => th.match.test(txt)) || themes.find(th=>th.key==='other');
-      if(theme && theme.slides.length < 5 && r.fileId && r.page){ theme.slides.push({fileId:r.fileId, page:r.page}); }
-    });
-
-    let stagger = 0;
-    for(const th of themes){
-      const card = document.createElement('div'); card.className = 'dash-card';
-      const h = document.createElement('h4'); h.textContent = th.title; card.appendChild(h);
-      const ul = document.createElement('ul'); ul.className='bullets';
-      th.items.slice(0,6).forEach(t=>{ const li=document.createElement('li'); li.textContent = t; ul.appendChild(li); });
-      card.appendChild(ul);
-      if (th.slides.length){
-        const carousel = document.createElement('div'); carousel.className='carousel';
-        const track = document.createElement('div'); track.className='carousel-track'; carousel.appendChild(track);
-        for(const s of th.slides){ const img=document.createElement('img'); img.alt = `Slide ${s.page}`; track.appendChild(img);
-          (async()=>{ try{ img.src = await renderPdfPageToDataUrl(s.fileId, s.page, 1.5);}catch{} })();
-        }
-        const prev = document.createElement('button'); prev.className='car-btn car-prev'; prev.innerHTML='&#10094;';
-        const next = document.createElement('button'); next.className='car-btn car-next'; next.innerHTML='&#10095;';
-        carousel.appendChild(prev); carousel.appendChild(next);
-        let idx = 0, len = th.slides.length, timer = null, stopped=false;
-        function go(i){ idx=(i+len)%len; track.style.transform = `translateX(-${idx*100}%)`; }
-        function start(){ if(timer) clearInterval(timer); if(!stopped) timer = setInterval(()=>go(idx+1), 5000 + stagger); }
-        function stop(){ if(timer) clearInterval(timer); stopped = true; }
-        prev.addEventListener('click', ()=>{ stop(); go(idx-1); });
-        next.addEventListener('click', ()=>{ stop(); go(idx+1); });
-        setTimeout(start, 800 + stagger);
-        stagger += 600; // stagger auto-advance across widgets
-        card.appendChild(carousel);
-      }
-      grid.appendChild(card);
-    }
-    box.style.display = themes.length ? 'block' : 'none';
-    // hide legacy sections if dashboard exists
-    if (themes.length){
-      const support = document.getElementById('supportCard'); if (support) support.style.display='none';
-      const slides  = document.getElementById('slidesCard');  if (slides) slides.style.display='none';
-    }
-  }
-let allSlides = []; // [{fileId,page,dataUrl?}]
+  let allSlides = []; // [{fileId,page,dataUrl?}]
   let slidesCollapsed = true;
   async function renderSlides(limit = 3){
     const grid = document.getElementById("slidesGrid");
@@ -620,6 +551,114 @@ let allSlides = []; // [{fileId,page,dataUrl?}]
       } else if (ansPanel){ ansPanel.style.display = "none"; }
 
       const supportCard = document.getElementById("supportCard");
+      // Build dashboard themes
+      const dash = document.getElementById("dash");
+      function pickTheme(text){
+        const s = String(text||"").toLowerCase();
+        if (/(kpi|top[- ]?box|nps|awareness|consideration|usage|penetration|index|score|satisfaction\s*\d+%)/.test(s)) return "KPIs";
+        if (/(driver|factor|due to|because|associated with|influenc|contribut|key driver)/.test(s)) return "Key Drivers";
+        if (/(barrier|concern|issue|challenge|risk|side effect|reason for not|obstacle)/.test(s)) return "Key Barriers";
+        if (/(trend|over time|increase|decrease|up|down|vs\s*w\d+|week\s*\d|yoy|remain(ed)? consistent|change(d)?)/.test(s)) return "Trends Over Time";
+        return "KPIs";
+      }
+      const bullets = Array.isArray(data?.supportingBullets) ? data.supportingBullets : [];
+      const refs = Array.isArray(ctxChunks) ? ctxChunks : [];
+      // Collect quotes
+      let quotes = Array.isArray(data?.quotes) ? data.quotes : [];
+      if (!quotes?.length){
+        // Try to mine from ref snippets: “quote” - tag
+        refs.forEach(r=>{
+          const t = String(r.textSnippet||"");
+          const m = t.match(/[“"]([^”"]{12,220})[”"]\s*[–—-]\s*([^\n]{2,80})/);
+          if (m) quotes.push({ text:m[1].trim(), tag:m[2].trim() });
+        });
+      }
+      // Bucket bullets and refs by theme
+      const byTheme = new Map();
+      function ensureTheme(t){ if(!byTheme.has(t)) byTheme.set(t, { bullets:[], quotes:[], slides:[] }); return byTheme.get(t); }
+      bullets.forEach(b=>{
+        const t = pickTheme(b.text||b)||"KPIs";
+        ensureTheme(t).bullets.push(b.text||b);
+      });
+      quotes.forEach(q=>{
+        const t = pickTheme(q.text||q)||"KPIs";
+        ensureTheme(t).quotes.push(q);
+      });
+      // Slides: choose refs with page>1 only (exclude title slides)
+      refs.forEach(r=>{
+        const pg = Number(r.page||0);
+        if (!pg || pg<=1) return; // skip title pages
+        const t = pickTheme(r.textSnippet||r.study||r.fileName||"");
+        const obj = ensureTheme(t);
+        if (obj.slides.length<5) obj.slides.push({ fileId: r.fileId, page: pg, title: r.study||r.fileName||"" });
+      });
+      // Render
+      if (dash){
+        dash.innerHTML = "";
+        const themeOrder = ["KPIs","Key Drivers","Key Barriers","Trends Over Time"];
+        let carouselIndex = 0;
+        themeOrder.forEach((name, idx)=>{
+          const box = byTheme.get(name);
+          if (!box || (!box.bullets.length && !box.quotes.length && !box.slides.length)) return;
+          const card = document.createElement("div");
+          card.className = "dash-card";
+          const h = document.createElement("h4"); h.textContent = name; card.appendChild(h);
+          if (box.bullets.length){
+            const ul = document.createElement("ul");
+            box.bullets.slice(0,6).forEach(t=>{ const li=document.createElement("li"); li.textContent = t.replace(/\s*\[\d+\]\s*$/,''); ul.appendChild(li); });
+            card.appendChild(ul);
+          }
+          if (box.quotes.length){
+            box.quotes.slice(0,3).forEach(q=>{
+              const bq = document.createElement("blockquote");
+              bq.innerHTML = `<em>“${q.text}”</em><footer>— ${q.tag||""}</footer>`;
+              card.appendChild(bq);
+            });
+          }
+          if (box.slides.length){
+            const wrap = document.createElement("div");
+            wrap.className = "carousel";
+            const track = document.createElement("div");
+            track.className = "carousel-track";
+            wrap.appendChild(track);
+            box.slides.forEach(s=>{
+              const slide = document.createElement("div");
+              slide.className = "carousel-slide";
+              const img = document.createElement("img");
+              img.loading = "lazy";
+              img.alt = s.title||"slide";
+              img.src = `/api/drive-pdf?fileId=${encodeURIComponent(s.fileId)}#page=${s.page}`;
+              slide.appendChild(img);
+              track.appendChild(slide);
+            });
+            const nav = document.createElement("div");
+            nav.className = "caro-nav";
+            const prev = document.createElement("button"); prev.className='caro-btn'; prev.innerHTML='‹';
+            const next = document.createElement("button"); next.className='caro-btn'; next.innerHTML='›';
+            nav.appendChild(prev); nav.appendChild(next);
+            wrap.appendChild(nav);
+            card.appendChild(wrap);
+            // Carousel behavior
+            let idxPos = 0;
+            const total = box.slides.length;
+            let timer = setInterval(()=>{ idxPos=(idxPos+1)%total; track.style.transform = `translateX(-${idxPos*100}%)`; }, 5000 + (carouselIndex*800));
+            carouselIndex++;
+            function stop(){ if(timer){ clearInterval(timer); timer=null; } }
+            prev.addEventListener('click', ()=>{ stop(); idxPos = (idxPos-1+total)%total; track.style.transform = `translateX(-${idxPos*100}%)`; });
+            next.addEventListener('click', ()=>{ stop(); idxPos = (idxPos+1)%total; track.style.transform = `translateX(-${idxPos*100}%)`; });
+          }
+          dash.appendChild(card);
+        });
+        dash.style.display = byTheme.size ? "grid" : "none";
+      }
+
+      // Hide legacy panels when dashboard has content
+      const hasDash = (document.querySelectorAll('#dash .dash-card').length>0);
+      if (supportCard) supportCard.style.display = hasDash ? "none" : supportCard.style.display;
+      if (slidesCard) slidesCard.style.display = hasDash ? "none" : slidesCard.style.display;
+      const quotesCard = document.getElementById("quotesCard");
+      if (quotesCard) quotesCard.style.display = hasDash ? "none" : quotesCard.style.display;
+
       const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
       let structured = normalizeSupportFromAPI(data?.supportingBullets || data?.supporting || data?.structured?.supporting);
       structured.sort((a,b) => (b.recencyEpoch||0) - (a.recencyEpoch||0));
@@ -680,7 +719,6 @@ let allSlides = []; // [{fileId,page,dataUrl?}]
       const dataCard = document.getElementById("dataCard");
       if (dataCard) dataCard.style.display = series.length ? "block" : "none";
       renderCharts(series);
-      try { await renderDashboard(supportAllBullets, ctxChunks); } catch {}
 
       const refsDetails = document.getElementById("refsDetails");
       const tbody = document.getElementById("refsBody");
