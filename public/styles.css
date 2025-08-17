@@ -294,3 +294,26 @@ details[open] summary::before{ transform: rotate(90deg); }
   display: none;
   white-space: nowrap;
 }
+
+
+/* === Jaice brand image & profile menu === */
+.brand { display:inline-flex; align-items:center; text-decoration:none; gap:8px; }
+.brand-logo { display:block; height:28px; width:auto; object-fit:contain; }
+
+.icon-btn {
+  appearance:none; background:#fff; border:1px solid var(--border);
+  width:40px; height:40px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center;
+  cursor:pointer; transition:all .12s ease;
+}
+.icon-btn:hover { background: var(--orange); border-color: var(--orange); color:#fff; }
+
+.profile { position:relative; }
+.menu {
+  position:absolute; right:0; top:44px; min-width: 180px; background:#fff; border:1px solid var(--border);
+  border-radius:12px; box-shadow: var(--shadow); padding:6px; z-index: 50;
+}
+.menu a, .menu button {
+  display:block; width:100%; text-align:left; background:none; border:0; padding:10px 12px;
+  border-radius:10px; color:#1c1d1f; text-decoration:none; font-weight:600; cursor:pointer;
+}
+.menu a:hover, .menu button:hover { background:#f6f7f9; }
