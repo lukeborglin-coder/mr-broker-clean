@@ -82,7 +82,17 @@ const DATA_RAW_SUBFOLDER =
   process.env.DATA_RAW_SUBFOLDER || "Raw Data";
 
 // -------------------- App --------------------
-const app = express();
+const app = express()
+
+// Session (fixed cookie settings)
+app.use(require('express-session')({
+  secret: process.env.SESSION_SECRET || 'change-me',
+  resave: false,
+  saveUninitialized: false,
+  proxy: true,
+  cookie: { httpOnly: true, secure: SECURE_COOKIES, sameSite: (SECURE_COOKIES?'none':'lax'), maxAge: 1000*60*60*24*7 }
+}));
+;
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
