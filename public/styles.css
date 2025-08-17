@@ -317,3 +317,7 @@ details[open] summary::before{ transform: rotate(90deg); }
   border-radius:10px; color:#1c1d1f; text-decoration:none; font-weight:600; cursor:pointer;
 }
 .menu a:hover, .menu button:hover { background:#f6f7f9; }
+
+/* Hero typography */
+.hero h1{ text-transform:uppercase; color:#5f6570; letter-spacing:.04em; font-weight:800; }
+.hero h1 .dot{ color: var(--orange); }
