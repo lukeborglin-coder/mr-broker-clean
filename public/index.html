@@ -48,6 +48,21 @@
     .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
     .msg.info{display:block;background:#fafbfd;color:#2b2f36}
 
+    /* Dashboard blocks */
+    .dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+    .dash-card{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fff;position:relative}
+    .dash-card h4{margin:0 0 8px;font-size:1.02rem;color:#2b2f36}
+    .dash-card .bullets{padding-left:18px;margin:0 0 10px}
+    .dash-card .bullets li{margin-bottom:6px}
+    /* Carousel */
+    .carousel{position:relative;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#f8fafc}
+    .carousel-track{display:flex;transition:transform .5s ease;will-change:transform}
+    .carousel img{width:100%;height:auto;flex:0 0 100%;aspect-ratio:16/9;object-fit:cover;display:block}
+    .car-btn{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.9);border:1px solid var(--line);width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+    .car-btn:hover{background:#fff}
+    .car-prev{left:8px}.car-next{right:8px}
+
+
     /* NEW: Charts & Data panel styling */
     #chartsCard .canvas-wrap{border:1px solid var(--line);border-radius:12px;padding:10px}
     #chartCanvas{width:100%;height:320px;display:block}
@@ -109,7 +124,6 @@
       <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
       <button id="ask" class="btn primary" disabled>Ask</button>
     </div>
-    <div id="inlineStatus" class="inline-thinking"><span class="spinner sm"></span><span>Thinking…</span></div>
     <div id="msg" class="msg"></div>
 
     <div id="out" style="display:none;">
@@ -121,6 +135,12 @@
         <h3>Additional Support</h3>
         <ul id="supportList" class="compact-list"></ul>
         <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
+      </div>
+
+      
+      <div id="dashboardCard" class="panel" style="display:none;">
+        <h3>Insights Dashboard</h3>
+        <div id="dashGrid" class="dash-grid"></div>
       </div>
 
       <div id="slidesCard" class="panel" style="display:none;">
@@ -232,10 +252,10 @@
       ME = me;
       const roleLabel = (me?.user?.role === "internal") ? "admin" : (me?.user?.role || "");
       const who = document.getElementById("who");
-      if (who) { who.textContent = `${me?.user?.username || ""} — ${roleLabel}`; who.classList.remove("hidden"); }
+      if (who) who.textContent = `${me?.user?.username || ""} — ${roleLabel}`;
 
       const isAdmin = (roleLabel === "admin");
-      const adminEl = document.getElementById("adminLink"); if (adminEl) adminEl.classList.toggle("hidden", !isAdmin);
+      document.getElementById("adminLink")?.setAttribute("style", isAdmin ? "display:inline-flex" : "display:none");
       const row = document.getElementById("clientTopRow");
       if (row) row.style.display = isAdmin ? "flex" : "none";
     }catch(e){
@@ -263,8 +283,6 @@
   // helpers
   function setThinking(on){
     document.getElementById("overlay")?.classList.toggle("hidden", !on);
-    const inl = document.getElementById("inlineStatus");
-    if (inl) inl.style.display = on ? "flex" : "none";
     const ask = document.getElementById("ask");
     if (ask) ask.disabled = on;
   }
@@ -313,7 +331,75 @@
     supportCollapsed = !supportCollapsed; renderSupportList();
   });
 
-  let allSlides = []; // [{fileId,page,dataUrl?}]
+  
+  // ---- Dashboard theming + carousel ----
+  function groupBulletsIntoThemes(bullets){
+    const themes = [
+      { key: 'drivers', title: 'Satisfaction Drivers', match: /(satisf|driver|ease|convenien|start|dosing|initiat|experience)/i, items: [], slides: [] },
+      { key: 'awareness', title: 'Awareness & Perception', match: /(aware|awareness|well[- ]?informed|perception|impression)/i, items: [], slides: [] },
+      { key: 'compare', title: 'Competitive Comparison', match: /(compare|versus|vs\b|comparison|spinraza|compared)/i, items: [], slides: [] },
+    ];
+    const misc = { key: 'other', title: 'Other Notables', match: /.*/, items: [], slides: [] };
+    bullets.forEach(b=>{
+      const t = String(b).toLowerCase();
+      const bucket = themes.find(th => th.match.test(t)) || misc;
+      bucket.items.push(b);
+    });
+    const out = themes.filter(t=>t.items.length).concat(misc.items.length? [misc]: []);
+    return out;
+  }
+
+  async function renderDashboard(bullets, ctxChunks){
+    const box = document.getElementById('dashboardCard');
+    const grid = document.getElementById('dashGrid');
+    if(!box || !grid){ return; }
+    grid.innerHTML = '';
+    const themes = groupBulletsIntoThemes(bullets);
+
+    // map slides to themes using textSnippet heuristics
+    themes.forEach(th=> th.slides = []);
+    ctxChunks.forEach(r=>{
+      const txt = String(r.textSnippet||'') + ' ' + String(r.study||'') + ' ' + String(r.reportTag||'');
+      const theme = themes.find(th => th.match.test(txt)) || themes.find(th=>th.key==='other');
+      if(theme && theme.slides.length < 5 && r.fileId && r.page){ theme.slides.push({fileId:r.fileId, page:r.page}); }
+    });
+
+    let stagger = 0;
+    for(const th of themes){
+      const card = document.createElement('div'); card.className = 'dash-card';
+      const h = document.createElement('h4'); h.textContent = th.title; card.appendChild(h);
+      const ul = document.createElement('ul'); ul.className='bullets';
+      th.items.slice(0,6).forEach(t=>{ const li=document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+      card.appendChild(ul);
+      if (th.slides.length){
+        const carousel = document.createElement('div'); carousel.className='carousel';
+        const track = document.createElement('div'); track.className='carousel-track'; carousel.appendChild(track);
+        for(const s of th.slides){ const img=document.createElement('img'); img.alt = `Slide ${s.page}`; track.appendChild(img);
+          (async()=>{ try{ img.src = await renderPdfPageToDataUrl(s.fileId, s.page, 1.5);}catch{} })();
+        }
+        const prev = document.createElement('button'); prev.className='car-btn car-prev'; prev.innerHTML='&#10094;';
+        const next = document.createElement('button'); next.className='car-btn car-next'; next.innerHTML='&#10095;';
+        carousel.appendChild(prev); carousel.appendChild(next);
+        let idx = 0, len = th.slides.length, timer = null, stopped=false;
+        function go(i){ idx=(i+len)%len; track.style.transform = `translateX(-${idx*100}%)`; }
+        function start(){ if(timer) clearInterval(timer); if(!stopped) timer = setInterval(()=>go(idx+1), 5000 + stagger); }
+        function stop(){ if(timer) clearInterval(timer); stopped = true; }
+        prev.addEventListener('click', ()=>{ stop(); go(idx-1); });
+        next.addEventListener('click', ()=>{ stop(); go(idx+1); });
+        setTimeout(start, 800 + stagger);
+        stagger += 600; // stagger auto-advance across widgets
+        card.appendChild(carousel);
+      }
+      grid.appendChild(card);
+    }
+    box.style.display = themes.length ? 'block' : 'none';
+    // hide legacy sections if dashboard exists
+    if (themes.length){
+      const support = document.getElementById('supportCard'); if (support) support.style.display='none';
+      const slides  = document.getElementById('slidesCard');  if (slides) slides.style.display='none';
+    }
+  }
+let allSlides = []; // [{fileId,page,dataUrl?}]
   let slidesCollapsed = true;
   async function renderSlides(limit = 3){
     const grid = document.getElementById("slidesGrid");
@@ -594,6 +680,7 @@
       const dataCard = document.getElementById("dataCard");
       if (dataCard) dataCard.style.display = series.length ? "block" : "none";
       renderCharts(series);
+      try { await renderDashboard(supportAllBullets, ctxChunks); } catch {}
 
       const refsDetails = document.getElementById("refsDetails");
       const tbody = document.getElementById("refsBody");
