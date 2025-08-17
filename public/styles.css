@@ -335,3 +335,23 @@ details[open] summary::before{ transform: rotate(90deg); }
 .caro-nav{ position:absolute; top:50%; transform:translateY(-50%); width:100%; display:flex; justify-content:space-between; pointer-events:none; padding:0 6px; }
 .caro-btn{ pointer-events:auto; background:rgba(255,255,255,.85); border:1px solid var(--line); width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-weight:700; }
 .caro-btn:hover{ background:#fff; }
+
+
+.headline{font-size:28px;letter-spacing:.8px;margin:0 0 14px 0;font-weight:800;text-transform:uppercase}
+.headline .period{color:#ff7a00}
+
+
+.ask{display:flex;gap:10px}
+.ask input{flex:1;padding:12px 14px;border:1px solid var(--line, #e9edf2);border-radius:12px;font-size:16px}
+.btn.brand{background:#ff7a00;color:#fff;border:1px solid #ff8a24;border-radius:12px;padding:10px 14px;font-weight:600}
+
+
+.thinking{position:fixed;inset:0;background:rgba(255,255,255,.75);display:grid;place-items:center;font-weight:700;gap:10px;z-index:1000}
+.spinner{width:28px;height:28px;border-radius:999px;border:3px solid #e5e7eb;border-top-color:#111;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+
+.user-pill{padding:6px 10px;border:1px solid var(--line, #e9edf2);border-radius:999px;font-size:.9rem;color:#374151}
+
+
+body.cloak main, body.cloak header{visibility:hidden}
