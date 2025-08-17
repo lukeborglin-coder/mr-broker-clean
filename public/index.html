@@ -73,7 +73,7 @@
     <div class="bar">
       <a href="/" class="brand" aria-label="Jaice home"><img src="/assets/Slide1.JPG?v=1" alt="Jaice" class="brand-logo"/></a>
       <div class="nav">
-        <div id="who" class="hidden"><div class="right"><span id="username" class="user-pill">—</span><a id="adminLink" class="btn ghost" href="/admin.html" style="display:none">Admin</a></div></div>
+        <div id="who" class="hidden"></div>
 
         <!-- NEW: Admin button (shown only for admins via JS) -->
         <a id="adminLink" href="/admin" class="admin-pill hidden" title="Admin">Admin</a>
@@ -100,55 +100,70 @@
   </div>
 
   <main>
-    <section class="hero">
-  <h1 class="headline">ASK ABOUT YOUR RESEARCH<span class="period">.</span></h1>
-  <form id="askForm" class="ask">
-    <input id="q" type="text" placeholder="Ask a question…" autocomplete="off" required/>
-    <button class="btn brand" type="submit">Ask</button>
-  </form>
-</section>
-
-<section id="answerWrap" class="answer-wrap" style="display:none">
-  <div id="answerLead" class="answer-lead"></div>
-
-  <div class="dash-grid">
-    <div class="card" id="card-kpis">
-      <div class="card-hd">KPIs</div>
-      <div class="card-bd">
-        <ul id="kpiBullets" class="bullets"></ul>
-        <div id="kpiQuotes" class="quotes"></div>
-        <div id="kpiSlides" class="carousel" data-name="kpi"></div>
-      </div>
+    <div class="hero">
+      <h1>Ask about your research<span class="dot">.</span></h1>
+      <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
     </div>
 
-    <div class="card" id="card-drivers">
-      <div class="card-hd">Key Drivers</div>
-      <div class="card-bd">
-        <ul id="driverBullets" class="bullets"></ul>
-        <div id="driverQuotes" class="quotes"></div>
-        <div id="driverSlides" class="carousel" data-name="drivers"></div>
-      </div>
+    <div class="askbox">
+      <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
+      <button id="ask" class="btn primary" disabled>Ask</button>
     </div>
+    <div id="inlineStatus" class="inline-thinking"><span class="spinner sm"></span><span>Thinking…</span></div>
+    <div id="msg" class="msg"></div>
 
-    <div class="card" id="card-barriers">
-      <div class="card-hd">Key Barriers</div>
-      <div class="card-bd">
-        <ul id="barrierBullets" class="bullets"></ul>
-        <div id="barrierQuotes" class="quotes"></div>
-        <div id="barrierSlides" class="carousel" data-name="barriers"></div>
+    <div id="out" style="display:none;">
+      <div id="answerPanel" class="panel answer-panel" style="display:none;">
+        <div id="answer" class="answer-body"></div>
       </div>
-    </div>
 
-    <div class="card" id="card-trends">
-      <div class="card-hd">Trends Over Time</div>
-      <div class="card-bd">
-        <ul id="trendBullets" class="bullets"></ul>
-        <div id="trendQuotes" class="quotes"></div>
-        <div id="trendSlides" class="carousel" data-name="trends"></div>
+      <div id="supportCard" class="panel" style="display:none;">
+        <h3>Additional Support</h3>
+        <ul id="supportList" class="compact-list"></ul>
+        <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
       </div>
+
+      <div id="slidesCard" class="panel" style="display:none;">
+        <h3>Report Slides</h3>
+        <div id="slidesGrid"></div>
+        <button id="toggleSlidesBtn" class="linklike" style="display:none;margin-top:8px;">Show more</button>
+      </div>
+
+      <div id="quotesCard" class="panel" style="display:none;">
+        <h3>Supporting Quotes</h3>
+        <div id="quotes"></div>
+      </div>
+
+      <div id="dataCard" class="panel" style="display:none;">
+        <h3>Supporting Data</h3>
+        <div id="dataGrid"></div>
+      </div>
+
+      <!-- NEW: Charts & Data -->
+      <div id="chartsCard" class="panel" style="display:none;">
+        <h3>Charts &amp; Data</h3>
+        <div class="canvas-wrap">
+          <canvas id="chartCanvas" aria-label="Metric chart"></canvas>
+        </div>
+        <div id="chartTable" class="table-wrap" style="margin-top:12px;"></div>
+        <div id="chartFootnote"></div>
+      </div>
+
+      <details id="refsDetails" class="panel" style="display:none;">
+        <summary>
+          <h3 style="display:inline;">References</h3>
+          <span class="muted" style="margin-left:8px;">(click to expand)</span>
+        </summary>
+        <div class="table-wrap">
+          <table class="data-table" id="refsTable">
+            <thead>
+              <tr><th>#</th><th>Name</th><th>Month</th><th>Year</th><th>Methodology</th><th>Link</th></tr>
+            </thead>
+            <tbody id="refsBody"></tbody>
+          </table>
+        </div>
+      </details>
     </div>
-  </div>
-</section>
   </main>
 
   <div id="overlay" class="overlay hidden">
@@ -217,7 +232,7 @@
       ME = me;
       const roleLabel = (me?.user?.role === "internal") ? "admin" : (me?.user?.role || "");
       const who = document.getElementById("who");
-      if (who){ who.textContent = `${me?.user?.username || ""} — ${roleLabel}`; who.classList.remove("hidden"); }
+      if (who) { who.textContent = `${me?.user?.username || ""} — ${roleLabel}`; who.classList.remove("hidden"); }
 
       const isAdmin = (roleLabel === "admin");
       const adminEl = document.getElementById("adminLink"); if (adminEl) adminEl.classList.toggle("hidden", !isAdmin);
@@ -626,9 +641,5 @@
 
   <!-- keep for any shared functionality that your project already uses -->
   <script src="/app.js" defer></script>
-<div id="thinking" class="thinking" style="display:none">
-  <div class="spinner" aria-hidden="true"></div>
-  <div>Thinking…</div>
-</div>
 </body>
 </html>
