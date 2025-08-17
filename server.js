@@ -87,9 +87,25 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
 
+
+// Protect direct hits to raw HTML files before static serves them
+app.use((req, res, next) => {
+  try{
+    if (req.path === "/index.html") {
+      if (!req.session?.user) return res.redirect("/login.html");
+      return res.redirect("/"); // normalize
+    }
+    if (req.path === "/admin.html") {
+      if (!req.session?.user) return res.redirect("/login.html");
+      if (req.session.user.role !== "internal") return res.redirect("/");
+      return res.redirect("/admin"); // normalize
+    }
+    next();
+  }catch{ next(); }
+});
 // Static with no-store for dev iteration
 app.use(
-  express.static("public", {
+  express.static("public", { index: false, 
     setHeaders(res, p) {
       if (/\.(html|css|js)$/i.test(p)) {
         res.setHeader("Cache-Control", "no-store");
@@ -738,6 +754,8 @@ async function serveHtmlWithUi(res, filePath) {
 }
 
 // -------------------- Pages --------------------
+app.get("/login", async (req,res)=>{ await serveHtmlWithUi(res, path.resolve("public/login.html")); });
+
 app.get("/", async (req, res) => {
   if (!req.session?.user) return res.redirect("/login.html");
   await serveHtmlWithUi(res, path.resolve("public/index.html"));
