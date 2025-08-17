@@ -1,0 +1,68 @@
+--- a/server.js
++++ b/server.js
+@@ -715,17 +715,26 @@
+ }
+ 
+ // -------------------- Pages --------------------
+-app.get("/", (req, res) => {
++app.get("/", async (req, res) => {
+   if (!req.session?.user) return res.redirect("/login.html");
+-  res.set("Cache-Control", "no-store");
+-  res.sendFile(path.resolve("public/index.html"));
++  await serveHtmlWithUi(res, path.resolve("public/index.html"));
+ });
+-app.get("/admin", (req, res) => {
++app.get("/admin", async (req, res) => {
+   if (!req.session?.user) return res.redirect("/login.html");
+   if (req.session.user.role !== "internal") return res.redirect("/");
+-  res.set("Cache-Control", "no-store");
+-  res.sendFile(path.resolve("public/admin.html"));
++  await serveHtmlWithUi(res, path.resolve("public/admin.html"));
+ });
++
++// New pages: Profile & Settings
++app.get("/profile", async (req, res) => {
++  if (!req.session?.user) return res.redirect("/login.html");
++  await serveHtmlWithUi(res, path.resolve("public/profile.html"));
++});
++app.get("/settings", async (req, res) => {
++  if (!req.session?.user) return res.redirect("/login.html");
++  await serveHtmlWithUi(res, path.resolve("public/settings.html"));
++});
++
+ 
+ // -------------------- Auth APIs --------------------
+ app.post("/auth/login", async (req, res) => {
+@@ -768,7 +777,7 @@
+   const me = req.session.user;
+   const roleLabel = me.role === "internal" ? "admin" : me.role;
+   res.json({
+-    user: { username: me.username, role: roleLabel },
++    user: { username: me.username, role: roleLabel, allowedClients: me.allowedClients ?? null },
+     activeClientId: req.session.activeClientId || null,
+     clients,
+   });
+--- /dev/null
++++ b/public/ui/user-menu.js
+@@ -0,0 +1,1 @@
++(function(){console.log('user menu placeholder')})();
+
+--- /dev/null
++++ b/public/profile.html
+@@ -0,0 +1,1 @@
++<!doctype html><title>Profile</title>
+
+--- /dev/null
++++ b/public/profile.js
+@@ -0,0 +1,1 @@
++console.log('profile js');
+
+--- /dev/null
++++ b/public/settings.html
+@@ -0,0 +1,1 @@
++<!doctype html><title>Settings</title>
+
+--- /dev/null
++++ b/public/settings.js
+@@ -0,0 +1,1 @@
++console.log('settings js');
