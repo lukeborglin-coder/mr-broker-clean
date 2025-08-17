@@ -67,28 +67,18 @@
     .admin-pill:hover{box-shadow:0 1px 0 rgba(0,0,0,.04)}
     .hidden{display:none}
   
-    /* Dashboard layout */
-    .dash-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; }
-    .dash-card{ border:1px solid var(--line); border-radius:14px; padding:14px; background:#fff; box-shadow: var(--shadow); }
-    .dash-card h4{ margin:0 0 8px; font-size:1rem; color:#374151; letter-spacing:.02em; }
-    .dash-card ul{ margin:0; padding-left:18px; }
-    .dash-card li{ margin:6px 0; }
-    .dash-card blockquote{ font-style:italic; color:#444; margin:10px 0; padding-left:10px; border-left:3px solid var(--soft-border); }
-    .dash-card blockquote footer{ display:block; margin-top:6px; font-size:.9rem; color:#6b7280; }
-    
-    /* Mini chart inside Trends card */
-    .mini-chart-wrap{ margin-top:8px; }
-    .mini-chart-wrap canvas{ width:100%; height:160px; }
-
-    /* Carousel */
-    .carousel{ position:relative; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:#f8fafc; }
-    .carousel-track{ display:flex; transition: transform .5s ease; }
-    .carousel-slide{ min-width:100%; aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; }
-    .carousel-slide img{ width:100%; height:100%; object-fit:cover; border:0; }
-    .caro-nav{ position:absolute; top:50%; transform:translateY(-50%); width:100%; display:flex; justify-content:space-between; pointer-events:none; }
-    .caro-btn{ pointer-events:auto; background:rgba(255,255,255,.85); border:1px solid var(--line); width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-weight:700; }
-    .caro-btn:hover{ background:#fff; }
-
+    /* Dashboard boxes */
+    .dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:12px}
+    .dash-card{border:1px solid var(--line);border-radius:14px;background:#fff;padding:14px;position:relative}
+    .dash-card h3{margin:2px 0 10px;font-size:1.05rem}
+    .dash-bullets{padding-left:18px;margin:8px 0}
+    .dash-quote{font-style:italic;margin:10px 0;padding-left:8px;border-left:3px solid #eee}
+    .carousel{position:relative;overflow:hidden;border-radius:12px;background:#fafafa;height:220px}
+    .carousel img{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;opacity:0;transition:opacity .45s ease}
+    .carousel img.active{opacity:1}
+    .caro-nav{position:absolute;top:50%;left:0;right:0;display:flex;justify-content:space-between;transform:translateY(-50%);padding:0 6px}
+    .caro-nav button{background:rgba(255,255,255,.85);border:1px solid var(--line);border-radius:999px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:800;cursor:pointer}
+    .caro-nav button:hover{filter:brightness(.97)}
   </style>
 </head>
 <body>
@@ -122,7 +112,7 @@
     <select id="clientTop"></select>
   </div>
 
-  <main id="appRoot" style="visibility:hidden">
+  <main>
     <div class="hero">
       <h1>Ask about your research<span class="dot">.</span></h1>
       <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
@@ -138,6 +128,9 @@
       <div id="answerPanel" class="panel answer-panel" style="display:none;">
         <div id="answer" class="answer-body"></div>
       </div>
+
+      <div id="dashGrid" class="dash-grid" style="display:none;"></div>
+
 
       <div id="supportCard" class="panel" style="display:none;">
         <h3>Additional Support</h3>
@@ -165,38 +158,7 @@
       <div id="chartsCard" class="panel" style="display:none;">
         <h3>Charts &amp; Data</h3>
         <div class="canvas-wrap">
-          <canvas id="chartCanvas" aria-label="Metric chart"></canvas>
-        </div>
-        <div id="chartTable" class="table-wrap" style="margin-top:12px;"></div>
-        <div id="chartFootnote"></div>
-      </div>
-
-      <details id="refsDetails" class="panel" style="display:none;">
-        <summary>
-          <h3 style="display:inline;">References</h3>
-          <span class="muted" style="margin-left:8px;">(click to expand)</span>
-        </summary>
-        <div class="table-wrap">
-          <table class="data-table" id="refsTable">
-            <thead>
-              <tr><th>#</th><th>Name</th><th>Month</th><th>Year</th><th>Methodology</th><th>Link</th></tr>
-            </thead>
-            <tbody id="refsBody"></tbody>
-          </table>
-        </div>
-      </details>
-    </div>
-  </main>
-
-  <div id="overlay" class="overlay hidden">
-    <div class="spinner"></div>
-    <div class="overlay-text">Thinking…</div>
-  </div>
-
-  <div id="chartTip" class="chart-tooltip"></div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script>
+          <canvas id="chartCanvas" aria-label="Metric chart<script>
     if (window.pdfjsLib) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
@@ -285,7 +247,9 @@
   // helpers
   function setThinking(on){
     document.getElementById("overlay")?.classList.toggle("hidden", !on);
-        const ask = document.getElementById("ask");
+    const inl = document.getElementById("inlineStatus");
+    if (inl) inl.style.display = on ? "flex" : "none";
+    const ask = document.getElementById("ask");
     if (ask) ask.disabled = on;
   }
   function showMsg(text, type="error"){
@@ -438,10 +402,10 @@
   }
 
   // --- NEW: Chart helpers bound to window.app ---
-  let _miniChartInstance = null;
-let _chartInstance = null;
+  let _chartInstance = null;
 
   function renderChartPayload(payload){
+    window.__lastChartPayload = payload;
     const panel = document.getElementById("chartsCard");
     const canvas = document.getElementById("chartCanvas");
     const tableWrap = document.getElementById("chartTable");
@@ -452,7 +416,6 @@ let _chartInstance = null;
 
     const ctx = canvas.getContext("2d");
     if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
-    if (_miniChartInstance) { try{ _miniChartInstance.destroy(); }catch{} _miniChartInstance = null; }
     const cfg = {
       type: (payload.chart?.type === "bar" ? "bar" : "line"),
       data: {
@@ -476,33 +439,6 @@ let _chartInstance = null;
       }
     };
     _chartInstance = new Chart(ctx, cfg);
-// Also render mini chart if Trends card exists
-try{
-  const miniCanvas = document.getElementById("trendMiniCanvas");
-  if (miniCanvas) {
-    const mctx = miniCanvas.getContext("2d");
-    const miniCfg = JSON.parse(JSON.stringify(cfg));
-    miniCfg.options = Object.assign({}, miniCfg.options, {
-      plugins: { legend: { display:false } },
-      scales: { x: { display:false }, y: { display:false } }
-    });
-    _miniChartInstance = new Chart(mctx, miniCfg);
-  }
-}catch(e){}
-    // Also render mini chart if Trends card exists
-    try{
-      const miniCanvas = document.getElementById("trendMiniCanvas");
-      if (miniCanvas) {
-        const mctx = miniCanvas.getContext("2d");
-        const miniCfg = JSON.parse(JSON.stringify(cfg));
-        miniCfg.options = Object.assign({}, miniCfg.options, {
-          plugins: { legend: { display:false } },
-          scales: { x: { display:false }, y: { display:false } }
-        });
-        _miniChartInstance = new Chart(mctx, miniCfg);
-      }
-    }catch(e){}
-
 
     const rows = Array.isArray(payload.table) ? payload.table : [];
     let html = '<table class="data-table"><thead><tr>';
@@ -583,114 +519,6 @@ try{
       } else if (ansPanel){ ansPanel.style.display = "none"; }
 
       const supportCard = document.getElementById("supportCard");
-      // Build dashboard themes
-      const dash = document.getElementById("dash");
-      function pickTheme(text){
-        const s = String(text||"").toLowerCase();
-        if (/(kpi|top[- ]?box|nps|awareness|consideration|usage|penetration|index|score|satisfaction\s*\d+%)/.test(s)) return "KPIs";
-        if (/(driver|factor|due to|because|associated with|influenc|contribut|key driver)/.test(s)) return "Key Drivers";
-        if (/(barrier|concern|issue|challenge|risk|side effect|reason for not|obstacle)/.test(s)) return "Key Barriers";
-        if (/(trend|over time|increase|decrease|up|down|vs\s*w\d+|week\s*\d|yoy|remain(ed)? consistent|change(d)?)/.test(s)) return "Trends Over Time";
-        return "KPIs";
-      }
-      const bullets = Array.isArray(data?.supportingBullets) ? data.supportingBullets : [];
-      const refs = Array.isArray(ctxChunks) ? ctxChunks : [];
-      // Collect quotes
-      let quotes = Array.isArray(data?.quotes) ? data.quotes : [];
-      if (!quotes?.length){
-        // Try to mine from ref snippets: “quote” - tag
-        refs.forEach(r=>{
-          const t = String(r.textSnippet||"");
-          const m = t.match(/[“"]([^”"]{12,220})[”"]\s*[–—-]\s*([^\n]{2,80})/);
-          if (m) quotes.push({ text:m[1].trim(), tag:m[2].trim() });
-        });
-      }
-      // Bucket bullets and refs by theme
-      const byTheme = new Map();
-      function ensureTheme(t){ if(!byTheme.has(t)) byTheme.set(t, { bullets:[], quotes:[], slides:[] }); return byTheme.get(t); }
-      bullets.forEach(b=>{
-        const t = pickTheme(b.text||b)||"KPIs";
-        ensureTheme(t).bullets.push(b.text||b);
-      });
-      quotes.forEach(q=>{
-        const t = pickTheme(q.text||q)||"KPIs";
-        ensureTheme(t).quotes.push(q);
-      });
-      // Slides: choose refs with page>1 only (exclude title slides)
-      refs.forEach(r=>{
-        const pg = Number(r.page||0);
-        if (!pg || pg<=1) return; // skip title pages
-        const t = pickTheme(r.textSnippet||r.study||r.fileName||"");
-        const obj = ensureTheme(t);
-        if (obj.slides.length<5) obj.slides.push({ fileId: r.fileId, page: pg, title: r.study||r.fileName||"" });
-      });
-      // Render
-      if (dash){
-        dash.innerHTML = "";
-        const themeOrder = ["KPIs","Key Drivers","Key Barriers","Trends Over Time"];
-        let carouselIndex = 0;
-        themeOrder.forEach((name, idx)=>{
-          const box = byTheme.get(name);
-          if (!box || (!box.bullets.length && !box.quotes.length && !box.slides.length)) return;
-          const card = document.createElement("div");
-          card.className = "dash-card";
-          const h = document.createElement("h4"); h.textContent = name; card.appendChild(h);
-          if (box.bullets.length){
-            const ul = document.createElement("ul");
-            box.bullets.slice(0,6).forEach(t=>{ const li=document.createElement("li"); li.textContent = t.replace(/\s*\[\d+\]\s*$/,''); ul.appendChild(li); });
-            card.appendChild(ul);
-          }
-          if (box.quotes.length){
-            box.quotes.slice(0,3).forEach(q=>{
-              const bq = document.createElement("blockquote");
-              bq.innerHTML = `<em>“${q.text}”</em><footer>— ${q.tag||""}</footer>`;
-              card.appendChild(bq);
-            });
-          }
-          if (box.slides.length){
-            const wrap = document.createElement("div");
-            wrap.className = "carousel";
-            const track = document.createElement("div");
-            track.className = "carousel-track";
-            wrap.appendChild(track);
-            box.slides.forEach(s=>{
-              const slide = document.createElement("div");
-              slide.className = "carousel-slide";
-              const img = document.createElement("img");
-              img.loading = "lazy";
-              img.alt = s.title||"slide";
-              img.src = `/api/drive-pdf?fileId=${encodeURIComponent(s.fileId)}#page=${s.page}`;
-              slide.appendChild(img);
-              track.appendChild(slide);
-            });
-            const nav = document.createElement("div");
-            nav.className = "caro-nav";
-            const prev = document.createElement("button"); prev.className='caro-btn'; prev.innerHTML='‹';
-            const next = document.createElement("button"); next.className='caro-btn'; next.innerHTML='›';
-            nav.appendChild(prev); nav.appendChild(next);
-            wrap.appendChild(nav);
-            card.appendChild(wrap);
-            // Carousel behavior
-            let idxPos = 0;
-            const total = box.slides.length;
-            let timer = setInterval(()=>{ idxPos=(idxPos+1)%total; track.style.transform = `translateX(-${idxPos*100}%)`; }, 5000 + (carouselIndex*800));
-            carouselIndex++;
-            function stop(){ if(timer){ clearInterval(timer); timer=null; } }
-            prev.addEventListener('click', ()=>{ stop(); idxPos = (idxPos-1+total)%total; track.style.transform = `translateX(-${idxPos*100}%)`; });
-            next.addEventListener('click', ()=>{ stop(); idxPos = (idxPos+1)%total; track.style.transform = `translateX(-${idxPos*100}%)`; });
-          }
-          dash.appendChild(card);
-        });
-        dash.style.display = byTheme.size ? "grid" : "none";
-      }
-
-      // Hide legacy panels when dashboard has content
-      const hasDash = (document.querySelectorAll('#dash .dash-card').length>0);
-      if (supportCard) supportCard.style.display = hasDash ? "none" : supportCard.style.display;
-      if (slidesCard) slidesCard.style.display = hasDash ? "none" : slidesCard.style.display;
-      const quotesCard = document.getElementById("quotesCard");
-      if (quotesCard) quotesCard.style.display = hasDash ? "none" : quotesCard.style.display;
-
       const ctxChunks = Array.isArray(data?.references?.chunks) ? data.references.chunks : [];
       let structured = normalizeSupportFromAPI(data?.supportingBullets || data?.supporting || data?.structured?.supporting);
       structured.sort((a,b) => (b.recencyEpoch||0) - (a.recencyEpoch||0));
@@ -737,6 +565,7 @@ try{
       const quotesEl = document.getElementById("quotes");
       if (quotesEl) quotesEl.innerHTML = "";
       const quotes = Array.isArray(data?.quotes) ? data.quotes.slice(0,5) : [];
+      window.__lastQuotes = quotes;
       quotes.forEach(q=>{
         const bq=document.createElement("blockquote");
         bq.innerHTML = String(q).replace(/\s*[.!?]+$/,"")
@@ -751,6 +580,8 @@ try{
       const dataCard = document.getElementById("dataCard");
       if (dataCard) dataCard.style.display = series.length ? "block" : "none";
       renderCharts(series);
+      // Build dashboard
+      try { buildDashboard({ bullets: supportAllBullets||[], quotes: (quotes||[]), slides: allSlides||[], chartPayload: window.__lastChartPayload||null }); } catch{}
 
       const refsDetails = document.getElementById("refsDetails");
       const tbody = document.getElementById("refsBody");
@@ -786,7 +617,131 @@ try{
   (async function init(){
     wireLogout();
     await fetchMe();
-    try{ document.getElementById("appRoot").style.visibility="visible"; }catch{}
+    await loadClientLibraries();
+    const ask = document.getElementById("ask");
+    if (ask) ask.disabled = false;
+    ask?.addEventListener("click", doAsk);
+    document.getElementById("q")?.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter"){ e.preventDefault(); doAsk(); }
+    });
+  })();
+  </script>
+
+  <!-- keep for any shared functionality that your project already uses -->
+  <script src="/app.js" defer>
+  // --- Dashboard grouping ---
+  function buildDashboard({bullets=[], quotes=[], slides=[], chartPayload=null}){
+    const grid = document.getElementById("dashGrid");
+    if (!grid) return;
+    // simple theming
+    const buckets = {
+      "KPIs": [], "Key Drivers": [], "Key Barriers": [], "Trends Over Time": []
+    };
+    bullets.forEach(b=>{
+      const t = b.toLowerCase();
+      if (/\b(nps|%|percent|score|kpi|index|rating|top-2|mean|median)\b/.test(t)) buckets["KPIs"].push(b);
+      else if (/\b(driver|because|due to|ease|convenien|dosing|start|initiat|experience|benefit|improv|satisf)\b/.test(t)) buckets["Key Drivers"].push(b);
+      else if (/\b(barrier|challenge|concern|side effect|safety|cost|access|coverage|insurance|delay|friction)\b/.test(t)) buckets["Key Barriers"].push(b);
+      else buckets["Trends Over Time"].push(b);
+    });
+    // If we have a chart payload ensure Trends box exists
+    if (chartPayload && !buckets["Trends Over Time"].length) buckets["Trends Over Time"] = ["See trend chart below."];
+
+    // Build cards
+    grid.innerHTML = "";
+    let boxIndex = 0;
+    const makeCarousel = (imgs, idx) => {
+      const wrap = document.createElement('div'); wrap.className = 'carousel';
+      const nav = document.createElement('div'); nav.className='caro-nav';
+      const prev=document.createElement('button'); prev.textContent='‹';
+      const next=document.createElement('button'); next.textContent='›';
+      nav.appendChild(prev); nav.appendChild(next);
+      const filtered = imgs.filter(s=> (Number(s.page||1) > 1)).slice(0,5);
+      const imgEls = filtered.map(s=>{
+        const im = document.createElement('img');
+        im.alt = 'Slide '+(s.page||''); if (s.dataUrl) im.src = s.dataUrl;
+        return im;
+      });
+      imgEls.forEach(im=> wrap.appendChild(im));
+      wrap.appendChild(nav);
+      let cur=0; let playing=true; let timer=null;
+      function show(i){
+        imgEls.forEach((im,ix)=> im.classList.toggle('active', ix===i));
+      }
+      function start(){
+        if (timer) clearInterval(timer);
+        if (!imgEls.length) return;
+        show(cur);
+        timer = setInterval(()=>{ cur = (cur+1)%imgEls.length; show(cur); }, 5000 + (idx%3)*800);
+      }
+      prev.addEventListener('click', ()=>{ playing=false; if (timer) clearInterval(timer); cur=(cur-1+imgEls.length)%imgEls.length; show(cur); });
+      next.addEventListener('click', ()=>{ playing=false; if (timer) clearInterval(timer); cur=(cur+1)%imgEls.length; show(cur); });
+      // async load images lazily if not set
+      filtered.forEach(async (s,i)=>{
+        if (!s.dataUrl){ try{ s.dataUrl = await renderPdfPageToDataUrl(s.fileId, s.page, 1.4); imgEls[i].src = s.dataUrl; if(i===0) show(0);}catch{} }
+      });
+      start();
+      return wrap;
+    };
+
+    Object.entries(buckets).forEach(([title,items])=>{
+      if (!items.length && title!=="Trends Over Time") return;
+      const card = document.createElement('div'); card.className='dash-card';
+      const h = document.createElement('h3'); h.textContent = title; card.appendChild(h);
+      if (title==="Trends Over Time" && chartPayload){
+        const mini = document.createElement('canvas'); mini.width=400; mini.height=200; mini.style.marginBottom='10px'; card.appendChild(mini);
+        try{
+          if (window.Chart){
+            const labels = chartPayload.labels || [];
+            const series = (chartPayload.series||[])[0] || {label:'', data:[]};
+            new Chart(mini.getContext('2d'), { type:'line', data:{ labels, datasets:[{label:series.label, data:series.data}]}, options:{plugins:{legend:{display:false}}, scales:{x:{display:false}, y:{display:false}}} });
+          }
+        }catch{}
+      }
+      if (items.length){
+        const ul = document.createElement('ul'); ul.className='dash-bullets';
+        items.slice(0,6).forEach(t=>{ const li=document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+        card.appendChild(ul);
+      }
+      // supporting quotes (italic)
+      const qts = quotes.slice(0,3);
+      if (qts.length){
+        qts.forEach(q=>{ const p=document.createElement('div'); p.className='dash-quote'; p.innerHTML = q; card.appendChild(p); });
+      }
+      // slides carousel
+      if (slides && slides.length){
+        card.appendChild(makeCarousel(slides, boxIndex++));
+      }
+      grid.appendChild(card);
+    });
+    grid.style.display = 'grid';
+    // hide old sections to avoid duplication
+    const hideIds = ['supportCard','quotesCard','slidesCard'];
+    hideIds.forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display='none'; });
+  }
+ef="${r.fileUrl||"#"}" target="_blank" rel="noopener">open source</a></td>
+        `;
+        tbody?.appendChild(tr);
+      });
+      if (refsDetails) refsDetails.style.display = ctxChunks.length ? "block" : "none";
+
+      const metricGuess = (window.App && window.app?.guessMetricIdFromQuestion)
+        ? window.app?.guessMetricIdFromQuestion(question)
+        : null;
+      if (metricGuess) {
+        try { await window.app?.fetchChart(metricGuess); } catch {}
+      }
+
+    }catch(e){
+      showMsg("Search failed. Please try again.");
+    }finally{
+      setThinking(false);
+    }
+  }
+
+  (async function init(){
+    wireLogout();
+    await fetchMe();
     await loadClientLibraries();
     const ask = document.getElementById("ask");
     if (ask) ask.disabled = false;
