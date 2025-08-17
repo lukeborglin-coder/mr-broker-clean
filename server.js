@@ -1035,131 +1035,36 @@ function rowsToVariables(rows) {
     }
     return undefined;
   };
-  const toNum = (v) => {
-    if (v == null) return NaN;
-    const n = Number(String(v).replace(/[^0-9.\-]/g, ""));
-    return isFinite(n) ? n : NaN;
-  };
-  const normSeg = (k) => {
-    const s = String(k || "")
-      .replace(/pct\.?|percent(age)?|%/ig, "")
-      .replace(/\b(n|count|base|total\s*n)\b/ig, "")
-      .replace(/[_\-:]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return s;
-  };
-
-  // gather keys across rows
-  const keySet = new Set();
-  for (const r of rows) Object.keys(r).forEach(k => keySet.add(k));
-  const keys = Array.from(keySet);
-
-  // detect base pct / n keys
-  const pctCandidates = ["Pct","Percent","%","Pct.","Percentage"];
-  const nCandidates = ["N","Count","Base","n","Total N","TotalN"];
-  const findKey = (cands) => {
-    for (const c of cands) {
-      const hit = keys.find(k => k.toLowerCase() === c.toLowerCase());
-      if (hit) return hit;
-    }
-    // fallback: first key that contains the token
-    for (const c of cands) {
-      const hit = keys.find(k => k.toLowerCase().includes(c.toLowerCase()));
-      if (hit) return hit;
-    }
-    return null;
-  };
-  const basePctKey = findKey(pctCandidates);
-  const baseNKey = findKey(nCandidates);
-
-  // detect segment columns: keys that look like percent columns but aren't the base
-  const segMap = new Map(); // segLabel -> { pctKeys:[], nKeys:[] }
-  for (const k of keys) {
-    const lk = k.toLowerCase();
-    const isPctLike = /pct\.?|percent(age)?|%/.test(lk);
-    const isNLike = /\b(n|count|base|total\s*n)\b/.test(lk);
-    if (isPctLike && k !== basePctKey) {
-      const label = normSeg(k);
-      if (!label) continue;
-      if (!segMap.has(label)) segMap.set(label, { pctKeys: [], nKeys: [] });
-      segMap.get(label).pctKeys.push(k);
-    } else if (isNLike && k !== baseNKey) {
-      const label = normSeg(k);
-      if (!label) continue;
-      if (!segMap.has(label)) segMap.set(label, { pctKeys: [], nKeys: [] });
-      segMap.get(label).nKeys.push(k);
-    }
-  }
 
   const byQ = new Map();
   for (const r of rows) {
-    // skip Base rows
-    const rawCode = get(r, ["Code","Value","Category","Option","Choice","Key"]) || "";
-    const rawLabel = get(r, ["Label","Text","Option Label","Answer"]) || "";
-    if (/^base:?\s*$/i.test(String(rawCode).trim()) || /^base:?\s*$/i.test(String(rawLabel).trim())) continue;
-
     const q = String(get(r, ["Question","Variable","Var","Metric","Name"]) || "").trim();
-    const code = String(rawCode).trim();
-    const label = String(rawLabel || code).trim();
+    const code = String(get(r, ["Code","Value","Category","Option","Choice","Key"]) || "").trim();
+    const label = String(get(r, ["Label","Text","Option Label","Answer"]) || code).trim();
+    let pctRaw = get(r, ["Pct","Percent","%","Pct.","Percent%","Percentage"]);
+    let nRaw   = get(r, ["N","Count","Base","n","Total N"]);
     const table = get(r, ["Table","Source","Q","Sheet"]) || "";
 
     if (!q || !code) continue;
+    const pct = Number(String(pctRaw || "").toString().replace(/[^0-9.\-]/g,""));
+    const n   = Number(String(nRaw   || "").toString().replace(/[^0-9.\-]/g,""));
 
-    let pct = toNum(get(r, [basePctKey].filter(Boolean)));
-    let n   = toNum(get(r, [baseNKey].filter(Boolean)));
-    if (!isFinite(pct)) pct = NaN;
-    if (!isFinite(n)) n = NaN;
-
-    if (!byQ.has(q)) byQ.set(q, { q, baseN: 0, rows: [], table, cutsAcc: {} });
+    if (!byQ.has(q)) byQ.set(q, { q, baseN: 0, rows: [], table });
     const bucket = byQ.get(q);
-
     bucket.rows.push({ value: code, label, pct: isFinite(pct) ? pct : 0, n: isFinite(n) ? n : 0 });
     if (!bucket.baseN && isFinite(n) && n > 0) bucket.baseN = n;
-
-    // collect per-segment values
-    for (const [segLabel, keysObj] of segMap.entries()) {
-      let spct = NaN, sn = NaN;
-      // choose first pctKey present with a number
-      for (const pk of keysObj.pctKeys) {
-        const v = toNum(r[pk]);
-        if (isFinite(v)) { spct = v; break; }
-      }
-      for (const nk of keysObj.nKeys) {
-        const v = toNum(r[nk]);
-        if (isFinite(v)) { sn = v; break; }
-      }
-      if (!isFinite(spct) && !isFinite(sn)) continue;
-      if (!bucket.cutsAcc[segLabel]) bucket.cutsAcc[segLabel] = { byCode: {}, baseN: 0 };
-      bucket.cutsAcc[segLabel].byCode[code] = {
-        pct: isFinite(spct) ? spct : 0,
-        n: isFinite(sn) ? sn : 0
-      };
-      if (!bucket.cutsAcc[segLabel].baseN && isFinite(sn) && sn > 0) {
-        bucket.cutsAcc[segLabel].baseN = sn;
-      }
-    }
   }
 
   const variables = {};
-  for (const { q, baseN, rows, table, cutsAcc } of byQ.values()) {
+  for (const { q, baseN, rows, table } of byQ.values()) {
     const varId = toMetricId(q);
-    const stats = Object.fromEntries(rows.map((r) => [r.value, { pct: r.pct, n: r.n }]));
-    const cuts = {};
-    for (const [segLabel, acc] of Object.entries(cutsAcc || {})) {
-      cuts[segLabel] = {
-        base: { description: segLabel, n: acc.baseN || 0 },
-        stats: acc.byCode || {}
-      };
-    }
     variables[varId] = {
       label: q,
       type: "single",
       unit: "pct",
       base: { description: "All qualified", n: baseN || 0 },
       codes: rows.map((r) => ({ value: r.value, label: r.label })),
-      stats,
-      cuts,
+      stats: Object.fromEntries(rows.map((r) => [r.value, { pct: r.pct, n: r.n }])),
       provenance: { table }
     };
   }
@@ -1243,10 +1148,10 @@ async function writeProjectCache({ clientId, projectId, title, fieldStart, field
   const seriesDir = path.join(baseDir, "series");
   await ensureDir(seriesDir);
   for (const [varId, v] of Object.entries(variables)) {
-    // --- base (All) series ---
     const sPath = path.join(seriesDir, `${varId}.json`);
     let series = { metricId: varId, label: v.label, unit: v.unit || "pct", series: [] };
     try { series = JSON.parse(await fsp.readFile(sPath, "utf8")); } catch {}
+
     let value = undefined;
     let baseN = v.base?.n || 0;
     if (v.stats?.Top2Box?.pct != null) value = v.stats.Top2Box.pct;
@@ -1256,36 +1161,13 @@ async function writeProjectCache({ clientId, projectId, title, fieldStart, field
       const firstKey = v.codes?.[0]?.value;
       if (firstKey && v.stats?.[firstKey]?.pct != null) value = v.stats[firstKey].pct;
     }
+
     if (value != null) {
       const point = { projectId, xLabel: title, value, baseN, ts: recencyEpoch || 0 };
       const idx = series.series.findIndex((p) => p.projectId === projectId);
       if (idx >= 0) series.series[idx] = point; else series.series.push(point);
       series.series.sort((a,b)=> (a.ts||0)-(b.ts||0) || a.xLabel.localeCompare(b.xLabel, undefined, { numeric:true }));
       await fsp.writeFile(sPath, JSON.stringify(series, null, 2), "utf8");
-    }
-
-    // --- per-segment series ---
-    for (const [segName, segObj] of Object.entries(v.cuts || {})) {
-      const segId = toMetricId(segName);
-      const sSegPath = path.join(seriesDir, `${varId}__SEG__${segId}.json`);
-      let sSeries = { metricId: varId, segmentId: segId, segmentName: segName, label: `${v.label} — ${segName}`, unit: v.unit || "pct", series: [] };
-      try { sSeries = JSON.parse(await fsp.readFile(sSegPath, "utf8")); } catch {}
-      let sValue = undefined;
-      let sBaseN = segObj.base?.n || 0;
-      if (segObj.stats?.Top2Box?.pct != null) sValue = segObj.stats.Top2Box.pct;
-      else if (segObj.stats?.index != null) sValue = segObj.stats.index;
-      else if (segObj.extras?.mean != null) sValue = segObj.extras.mean;
-      else {
-        const firstKey = v.codes?.[0]?.value;
-        if (firstKey && segObj.stats?.[firstKey]?.pct != null) sValue = segObj.stats[firstKey].pct;
-      }
-      if (sValue != null) {
-        const point = { projectId, xLabel: title, value: sValue, baseN: sBaseN, ts: recencyEpoch || 0 };
-        const idx = sSeries.series.findIndex((p) => p.projectId === projectId);
-        if (idx >= 0) sSeries.series[idx] = point; else sSeries.series.push(point);
-        sSeries.series.sort((a,b)=> (a.ts||0)-(b.ts||0) || a.xLabel.localeCompare(b.xLabel, undefined, { numeric:true }));
-        await fsp.writeFile(sSegPath, JSON.stringify(sSeries, null, 2), "utf8");
-      }
     }
   }
 }
@@ -1360,6 +1242,7 @@ async function ingestClientData(clientId) {
   return { ok: true, parsedCount, projects: parsedProjects };
 }
 
+
 async function rebuildSeriesForMetric(clientId, metricId, segmentId){
   const baseDir = path.join(DATA_CACHE_DIR, clientId);
   const projectsDir = path.join(baseDir, "projects");
@@ -1395,8 +1278,8 @@ async function rebuildSeriesForMetric(clientId, metricId, segmentId){
           series.label = `${v.label} — ${key}`;
           series.segmentName = key;
         } else {
-          // If not found, keep base stats
           series.segmentName = segmentId;
+          series.label = `${v.label} — ${segmentId}`;
         }
       } else {
         series.label = v.label || series.label;
@@ -1425,6 +1308,7 @@ async function rebuildSeriesForMetric(clientId, metricId, segmentId){
   await fsp.writeFile(sPath, JSON.stringify(series, null, 2), "utf8");
   return series;
 }
+
       if (value != null) {
         series.label = v.label || series.label;
         series.unit = v.unit || series.unit;
@@ -1802,12 +1686,10 @@ app.post("/search", requireSession, async (req, res) => {
 });
 
 // -------------------- Chart Query (reads data-cache) --------------------
-
 app.get("/api/chart-query", requireSession, async (req, res) => {
   try {
     let clientId = String(req.query.clientId || "").trim();
     const metricId = String(req.query.metricId || "").trim();
-    const segment = String(req.query.segment || "").trim();
     if (!metricId) return res.status(400).json({ error: "metricId required" });
 
     const isAdmin = req.session?.user?.role === "internal";
@@ -1817,18 +1699,18 @@ app.get("/api/chart-query", requireSession, async (req, res) => {
     if (!clientId) return res.status(400).json({ error: "clientId required" });
 
     const baseDir   = path.join(DATA_CACHE_DIR, clientId);
+    const indexPath = path.join(baseDir, "index.json");
     const seriesDir = path.join(baseDir, "series");
-    try { await fsp.mkdir(seriesDir, { recursive: true }); } catch {}
+    const sPath     = path.join(seriesDir, `${metricId}.json`);
 
-    const segId = segment ? toMetricId(segment) : "";
-    const sPath = path.join(seriesDir, `${metricId}${segId ? `__SEG__${segId}` : ""}.json`);
+    try { await fsp.mkdir(seriesDir, { recursive: true }); } catch {}
 
     let series;
     try {
       const raw = await fsp.readFile(sPath, "utf8");
       series = JSON.parse(raw);
     } catch {
-      series = await rebuildSeriesForMetric(clientId, metricId, segId || null);
+      series = await rebuildSeriesForMetric(clientId, metricId);
     }
 
     if (!series || !Array.isArray(series.series) || !series.series.length) {
@@ -1850,17 +1732,14 @@ app.get("/api/chart-query", requireSession, async (req, res) => {
     }));
 
     const unit = (series.unit || "pct").toLowerCase();
-    const segLabel = series.segmentName || (segment || "").trim();
-    const baseLabel = series.label || metricId;
-    const fullLabel = segLabel ? `${baseLabel}` : baseLabel;
-    const footnote = `Trend for ${baseLabel}${segLabel ? ` (${segLabel})` : ""} across ${pts.length} project${pts.length===1?"":"s"}. Values shown in ${unit === "pct" ? "percent (%)" : unit}.`;
+    const footnote = `Trend for ${series.label} across ${pts.length} project${pts.length===1?"":"s"}. Values shown in ${unit === "pct" ? "percent (%)" : unit}.`;
 
     return res.json({
       chart: {
         type: chartType,
         labels,
         datasets: [{
-          label: fullLabel,
+          label: series.label || metricId,
           data: values
         }]
       },
@@ -1869,17 +1748,9 @@ app.get("/api/chart-query", requireSession, async (req, res) => {
       meta: {
         clientId,
         metricId,
-        segment: segLabel || null,
         unit: unit === "pct" ? "pct" : unit
       }
     });
-  } catch (e) {
-    console.error("[/api/chart-query] error:", e);
-    res.status(500).json({ error: "Chart query failed" });
-  }
-});
-
-
   } catch (e) {
     console.error("[/api/chart-query] error:", e);
     res.status(500).json({ error: "Chart query failed" });
