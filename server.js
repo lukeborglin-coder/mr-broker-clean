@@ -1,4 +1,3 @@
-
 // server.js — auth + Drive crawl + RAG + auto-tagging + recency re-ranking
 // Adds: "Secondary Information" web results in /search; maps 'internal' -> 'admin' in /me
 // Adds: Role selection in /admin/users/create; /admin/library-stats; manifest write on ingest
@@ -498,8 +497,7 @@ async function extractTextFromFile(file) {
       for (const el of page.pageElements || []) {
         const elements = el.shape?.text?.textElements || [];
         const s = elements.map((t) => t.textRun?.content || "").join("");
-        if (s.trim()) text.push(s.trim());
-      }
+        if (s.trim()) text.push(s.trim());      }
     }
     return { text: text.join("\n\n") };
   }
