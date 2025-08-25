@@ -1,0 +1,11 @@
+ERROR 2025-08-24T04:17:46.925Z mkdir bootstrap failed: fsp is not defined
+INFO 2025-08-24T04:17:46.927Z Admin user already exists; not overwriting
+INFO 2025-08-24T04:17:46.933Z Jaice server running on port 9000
+INFO 2025-08-24T04:17:46.933Z Secure cookies: false
+INFO 2025-08-24T04:17:46.934Z AI Model: gpt-4o-mini
+INFO 2025-08-24T04:17:46.934Z Embedding Model: text-embedding-3-small
+INFO 2025-08-24T04:17:46.934Z Auto-ingest on start: true
+INFO 2025-08-24T04:17:46.934Z Recurring sync: Every 1 hours
+INFO 2025-08-24T04:17:46.934Z 🚀 Auto-ingest enabled - starting initial sync
+INFO 2025-08-24T04:17:46.934Z ⏰ Scheduled sync enabled - will run every 60 minutes
+WARN 2025-08-24T04:17:48.937Z No Google Drive root folder configured - skipping sync

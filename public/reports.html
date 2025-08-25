@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Reports — Jaice</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <style>
+    :root {
+      --jaice-orange: #ff7a00;
+      --text-primary: #1c1d1f;
+      --text-muted: #666;
+      --logo-grey: #6b7280;
+      --background: #ffffff;
+      --border: #e0e4e7;
+      --white: #fff;
+      --shadow-soft: 0 1px 3px rgba(0,0,0,0.1);
+      --shadow-medium: 0 4px 12px rgba(0,0,0,0.15);
+      --shadow-strong: 0 8px 24px rgba(0,0,0,0.2);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--background);
+      color: var(--text-primary);
+      overflow-x: hidden;
+    }
+
+    /* SIMPLIFIED LAYOUT - NO SIDEBAR */
+    .app-layout {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      background: white;
+    }
+
+    /* NEW HEADER DESIGN - Full width with centered navigation */
+    .header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 70px;
+      background: white;
+      border-bottom: 1px solid var(--border);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 32px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    /* Logo on left */
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      color: var(--text-primary);
+      flex-shrink: 0;
+    }
+
+    .logo img {
+      height: 32px;
+      width: auto;
+    }
+
+    /* CENTERED NAVIGATION */
+    .main-nav {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 40px;
+    }
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      padding: 12px 20px;
+      color: var(--text-primary);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 16px;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .nav-link:hover {
+      background: #f8f9fa;
+      color: var(--jaice-orange);
+    }
+
+    .nav-link.active {
+      color: var(--jaice-orange);
+      font-weight: 600;
+    }
+
+    .nav-link.active::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 20px;
+      right: 20px;
+      height: 2px;
+      background: var(--jaice-orange);
+      border-radius: 1px;
+    }
+
+    /* Right side - user info and profile */
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      position: relative;
+      z-index: 1001;
+      flex-shrink: 0;
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .profile {
+      position: relative;
+      z-index: 1002;
+    }
+
+    .profile-btn {
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--white);
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: all 0.2s ease;
+    }
+
+    .profile-btn:hover {
+      background: #f8f9fa;
+      border-color: var(--jaice-orange);
+    }
+
+    .profile-menu {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 8px;
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow-medium);
+      min-width: 180px;
+      z-index: 1003;
+      display: none;
+      overflow: hidden;
+    }
+
+    .profile-menu.show {
+      display: block;
+    }
+
+    .profile-menu a,
+    .profile-menu button {
+      display: block;
+      width: 100%;
+      padding: 12px 16px;
+      text-align: left;
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      text-decoration: none;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .profile-menu a:hover,
+    .profile-menu button:hover {
+      background: #f8f9fa;
+    }
+
+    .company-name {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+
+    /* Client Selector */
+    .client-selector-corner {
+      position: fixed;
+      top: 80px;
+      right: 32px;
+      z-index: 999;
+      display: none;
+    }
+
+    .client-selector-corner.show {
+      display: block;
+    }
+
+    .client-selector-corner select {
+      padding: 10px 32px 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--white);
+      font-size: 14px;
+      min-width: 220px;
+      box-shadow: var(--shadow-soft);
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e");
+      background-position: right 8px center;
+      background-repeat: no-repeat;
+      background-size: 16px;
+      transition: all 0.2s ease;
+    }
+
+    /* MAIN CONTENT - No sidebar, full width */
+    .main-content {
+      flex: 1;
+      margin-top: 70px;
+      display: flex;
+      flex-direction: column;
+      min-height: calc(100vh - 70px);
+      background: white;
+    }
+
+    .content {
+      flex: 1;
+      padding: 40px 32px;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* REPORTS PAGE */
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .page-title-section h1 {
+      font-size: 36px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0 0 8px 0;
+      letter-spacing: -0.5px;
+    }
+
+    .page-subtitle {
+      font-size: 16px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .create-report-btn {
+      background: linear-gradient(135deg, var(--jaice-orange) 0%, #e86900 100%);
+      color: var(--white);
+      border: none;
+      border-radius: 12px;
+      padding: 14px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: var(--shadow-soft);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .create-report-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-medium);
+    }
+
+    .slides-section {
+      margin-top: 8px;
+    }
+
+    .slides-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 8px 0 10px;
+    }
+
+    .slides-header h2 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+
+    .slides-sub {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--text-muted);
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .empty-state-icon {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 24px;
+      background: linear-gradient(135deg, var(--jaice-orange), #e86900);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 32px;
+    }
+
+    .empty-state h3 {
+      font-size: 24px;
+      margin-bottom: 12px;
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .empty-state p {
+      font-size: 16px;
+      margin-bottom: 32px;
+      line-height: 1.5;
+    }
+
+    .reports-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 24px;
+      margin-top: 24px;
+    }
+
+    .report-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: var(--shadow-soft);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .report-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--jaice-orange), #e86900);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .report-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-strong);
+    }
+
+    .report-card:hover::before {
+      opacity: 1;
+    }
+
+    .report-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .report-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 0;
+      line-height: 1.3;
+      flex: 1;
+      margin-right: 12px;
+    }
+
+    .report-menu {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .report-menu-btn {
+      background: none;
+      border: none;
+      padding: 8px;
+      cursor: pointer;
+      color: var(--text-muted);
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .report-menu-btn:hover {
+      background: #f8f9fa;
+      color: var(--jaice-orange);
+    }
+
+    .report-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow-medium);
+      min-width: 160px;
+      z-index: 100;
+      display: none;
+      overflow: hidden;
+    }
+
+    .report-dropdown.show {
+      display: block;
+    }
+
+    .report-dropdown button {
+      display: block;
+      width: 100%;
+      padding: 12px 16px;
+      border: none;
+      background: none;
+      text-align: left;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text-primary);
+      transition: background-color 0.2s;
+      font-weight: 500;
+    }
+
+    .report-dropdown button:hover {
+      background: #f8f9fa;
+    }
+
+    .report-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+
+    .report-items-count {
+      background: linear-gradient(135deg, var(--jaice-orange), #e86900);
+      color: var(--white);
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .report-date {
+      font-weight: 500;
+    }
+
+    .report-preview {
+      margin-bottom: 20px;
+    }
+
+    .preview-item {
+      background: linear-gradient(135deg, #f8f9fa 0%, #f1f3f4 100%);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .preview-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .preview-item .item-type {
+      font-weight: 700;
+      color: var(--jaice-orange);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      display: inline-block;
+      background: rgba(255, 122, 0, 0.1);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .preview-content {
+      color: var(--text-primary);
+      font-weight: 400;
+    }
+
+    .report-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--white);
+      color: var(--text-primary);
+      transition: all 0.2s ease;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: center;
+      flex: 1;
+    }
+
+    .btn:hover {
+      background: #f8f9fa;
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--jaice-orange) 0%, #e86900 100%);
+      border-color: var(--jaice-orange);
+      color: var(--white);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #e86900 0%, #d45e00 100%);
+      transform: translateY(-1px);
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 1024px) {
+      .main-nav {
+        display: none;
+      }
+      
+      .content {
+        padding: 24px 20px;
+      }
+      
+      .client-selector-corner {
+        position: relative;
+        top: auto;
+        right: auto;
+        margin-bottom: 20px;
+      }
+      
+      .reports-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+      }
+      
+      .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 20px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .header {
+        padding: 0 16px;
+      }
+      
+      .content {
+        padding: 20px 16px;
+      }
+      
+      .page-title-section h1 {
+        font-size: 28px;
+      }
+      
+      .report-card {
+        padding: 20px;
+      }
+    }
+  </style>
+  <link rel="stylesheet" href="/modern-bridge.css"/>
+</head>
+<body>
+  <!-- Fixed Header with Centered Navigation -->
+  <header class="header">
+    <!-- Logo on Left -->
+    <a href="/" class="logo">
+      <img src="/assets/Slide1.JPG" alt="Jaice" />
+    </a>
+    
+    <!-- Centered Navigation -->
+    <nav class="main-nav">
+      <a href="/" class="nav-link">Home</a>
+      <a href="/reports.html" class="nav-link active">Reports</a>
+      <a href="/admin" class="nav-link" id="adminNavLink" style="display: none;">Admin</a>
+    </nav>
+    
+    <!-- Right Side - User Info & Profile -->
+    <div class="header-right">
+      <div class="user-info"><span id="userDisplay">Loading...</span></div>
+      <div class="company-name" id="companyNameDisplay" style="display: none;">GENENTECH</div>
+
+      <div class="profile">
+        <button class="profile-btn" id="profileBtn" aria-haspopup="true" aria-expanded="false" title="Account">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 12c2.761 0 5-2.239 5-5S14.761 2 12 2 7 4.239 7 7s2.239 5 5 5zm0 2c-4.418 0-8 2.239-8 5v1h16v-1c0-2.761-3.582-5-8-5z"/>
+          </svg>
+        </button>
+        <div class="profile-menu" id="profileMenu">
+          <a href="/admin" id="adminCenterLink" style="display: none;">Admin Center</a>
+          <button id="logoutBtn" type="button">Sign Out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Client Selector -->
+  <div class="client-selector-corner" id="clientSelectorCorner">
+    <select id="clientSelect">
+      <option value="">Select a client library</option>
+    </select>
+  </div>
+
+  <div class="app-layout">
+    <!-- Main Content (No Sidebar) -->
+    <main class="main-content">
+      <div class="content">
+        <!-- Page Header -->
+        <div class="page-header">
+          <div class="page-title-section">
+            <h1>Reports</h1>
+            <p class="page-subtitle">Save and organize your research findings</p>
+          </div>
+          <button class="create-report-btn" id="createReportBtn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+            Create Report
+          </button>
+        </div>
+
+        <!-- Saved Reports (local) -->
+        <section>
+          <div class="slides-header">
+            <h2>Saved Reports</h2>
+            <div class="slides-sub">Your personal collections of findings</div>
+          </div>
+
+          <div class="reports-grid" id="reportsGrid"></div>
+          <div class="empty-state" id="emptyState" style="display: none;">
+            <div class="empty-state-icon">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+            </div>
+            <h3>No reports yet</h3>
+            <p>Start by creating your first report to save and organize your research findings.</p>
+            <button class="btn btn-primary" onclick="showCreateReportModal()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+              Create Your First Report
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Create Report Modal -->
+  <div class="modal-overlay" id="createReportModal">
+    <div class="modal">
+      <h2 class="modal-title">Create New Report</h2>
+      <p class="modal-subtitle">Give your report a name and description to get started.</p>
+
+      <div class="form-group">
+        <label class="form-label" for="reportName">Report Name</label>
+        <input type="text" id="reportName" class="form-input" placeholder="Enter report name" maxlength="100" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="reportDescription">Description (Optional)</label>
+        <input type="text" id="reportDescription" class="form-input" placeholder="Brief description of this report" maxlength="200" />
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="cancelReportBtn">Cancel</button>
+        <button class="btn btn-primary" id="confirmCreateReportBtn">Create Report</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Global state
+    let currentUser = null;
+    let currentClient = null;
+    let userReports = JSON.parse(localStorage.getItem('userReports') || '[]');
+
+    // Initialize the application
+    document.addEventListener('DOMContentLoaded', initializeApp);
+
+    async function initializeApp() {
+      try {
+        const me = await fetch('/me');
+        if (!me.ok) { window.location.href = '/login.html'; return; }
+        const userData = await me.json();
+        currentUser = userData.user;
+        currentClient = userData.activeClientId;
+
+        updateUserDisplay();
+        await loadClientLibraries();
+        setupEventListeners();
+
+        // Load local saved reports only
+        renderReports();
+
+      } catch (error) {
+        console.error('Failed to initialize app:', error);
+        window.location.href = '/login.html';
+      }
+    }
+
+    function updateUserDisplay() {
+      const userDisplay = document.getElementById('userDisplay');
+      const companyNameDisplay = document.getElementById('companyNameDisplay');
+      const adminCenterLink = document.getElementById('adminCenterLink');
+      const adminNavLink = document.getElementById('adminNavLink');
+      const clientSelectorCorner = document.getElementById('clientSelectorCorner');
+
+      if (currentUser) {
+        const roleDisplay = currentUser.role === 'admin' ? 'admin' : currentUser.role;
+        userDisplay.textContent = `${currentUser.username} (${roleDisplay})`;
+
+        if (currentUser.role === 'admin') {
+          if (adminCenterLink) adminCenterLink.style.display = 'block';
+          if (adminNavLink) adminNavLink.style.display = 'block';
+          if (clientSelectorCorner) clientSelectorCorner.classList.add('show');
+          if (companyNameDisplay) companyNameDisplay.style.display = 'none';
+        } else {
+          if (companyNameDisplay) {
+            companyNameDisplay.style.display = 'block';
+            companyNameDisplay.textContent = 'GENENTECH';
+          }
+          if (clientSelectorCorner) clientSelectorCorner.classList.remove('show');
+          if (adminCenterLink) adminCenterLink.style.display = 'none';
+          if (adminNavLink) adminNavLink.style.display = 'none';
+        }
+      }
+    }
+
+    async function loadClientLibraries() {
+      try {
+        const response = await fetch('/api/client-libraries');
+        if (response.ok) {
+          const libraries = await response.json();
+          const clientSelect = document.getElementById('clientSelect');
+          clientSelect.innerHTML = '<option value="">Select a client library</option>';
+          libraries.forEach(lib => {
+            const option = document.createElement('option');
+            option.value = lib.id;
+            option.textContent = lib.name;
+            clientSelect.appendChild(option);
+          });
+          if (currentClient) clientSelect.value = currentClient;
+        }
+      } catch (error) {
+        console.warn('Failed to load client libraries:', error);
+      }
+    }
+
+    function setupEventListeners() {
+      // Profile menu
+      const profileBtn = document.getElementById('profileBtn');
+      const profileMenu = document.getElementById('profileMenu');
+      profileBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = profileMenu.classList.toggle('show');
+        profileBtn.setAttribute('aria-expanded', String(open));
+      });
+      document.addEventListener('click', () => { profileMenu.classList.remove('show'); profileBtn.setAttribute('aria-expanded','false'); });
+
+      // Create report button (local)
+      const createReportBtn = document.getElementById('createReportBtn');
+      createReportBtn.addEventListener('click', showCreateReportModal);
+
+      // Modal events
+      const createReportModal = document.getElementById('createReportModal');
+      const cancelReportBtn = document.getElementById('cancelReportBtn');
+      const confirmCreateReportBtn = document.getElementById('confirmCreateReportBtn');
+      cancelReportBtn.addEventListener('click', hideCreateReportModal);
+      confirmCreateReportBtn.addEventListener('click', createNewReport);
+      createReportModal.addEventListener('click', (e) => { if (e.target === createReportModal) hideCreateReportModal(); });
+
+      // Client switching for admins
+      const clientSelect = document.getElementById('clientSelect');
+      clientSelect.addEventListener('change', async (e) => {
+        const selectedClientId = e.target.value;
+        if (selectedClientId) {
+          try {
+            await fetch('/auth/switch-client', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ clientId: selectedClientId })
+            });
+            currentClient = selectedClientId;
+          } catch (error) {
+            console.error('Failed to switch client:', error);
+          }
+        }
+      });
+
+      // Logout
+      const logoutBtn = document.getElementById('logoutBtn');
+      logoutBtn.addEventListener('click', async () => {
+        try { await fetch('/auth/logout', { method: 'POST' }); } finally { window.location.href = '/login.html'; }
+      });
+    }
+
+    // Local "Saved Reports" functionality
+    function showCreateReportModal() {
+      const modal = document.getElementById('createReportModal');
+      modal.classList.add('show');
+      document.getElementById('reportName').value = '';
+      document.getElementById('reportDescription').value = '';
+      setTimeout(() => { document.getElementById('reportName').focus(); }, 100);
+    }
+    
+    function hideCreateReportModal() {
+      document.getElementById('createReportModal').classList.remove('show');
+    }
+    
+    function createNewReport() {
+      const name = document.getElementById('reportName').value.trim();
+      const description = document.getElementById('reportDescription').value.trim();
+      if (!name) { alert('Please enter a report name'); return; }
+      const newReport = {
+        id: 'report_' + Date.now(),
+        name, description, items: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      userReports.unshift(newReport);
+      saveReportsToStorage();
+      renderReports();
+      hideCreateReportModal();
+      showToast(`Report "${name}" created successfully!`);
+    }
+    
+    function saveReportsToStorage() { localStorage.setItem('userReports', JSON.stringify(userReports)); }
+    
+    function renderReports() {
+      const reportsGrid = document.getElementById('reportsGrid');
+      const emptyState = document.getElementById('emptyState');
+      if (!userReports.length) { reportsGrid.style.display = 'none'; emptyState.style.display = 'block'; return; }
+      reportsGrid.style.display = 'grid'; emptyState.style.display = 'none'; reportsGrid.innerHTML = '';
+      userReports.forEach(report => reportsGrid.appendChild(createReportCard(report)));
+    }
+    
+    function createReportCard(report) {
+      const card = document.createElement('div'); card.className = 'report-card';
+      const itemsCount = report.items ? report.items.length : 0;
+      const createdDate = new Date(report.createdAt).toLocaleDateString();
+      const updatedDate = new Date(report.updatedAt).toLocaleDateString();
+      const previewItems = (report.items || []).slice(0, 2);
+      card.innerHTML = `
+        <div class="report-header">
+          <h3 class="report-title">${escapeHtml(report.name)}</h3>
+          <div class="report-menu">
+            <button class="report-menu-btn" onclick="toggleReportMenu('${report.id}')">⋯</button>
+            <div class="report-dropdown" id="menu-${report.id}">
+              <button onclick="viewReport('${report.id}')">View Details</button>
+              <button onclick="duplicateReport('${report.id}')">Duplicate</button>
+              <button onclick="exportReport('${report.id}')">Export PDF</button>
+              <button onclick="deleteReport('${report.id}')" style="color: #dc2626;">Delete</button>
+            </div>
+          </div>
+        </div>
+        <div class="report-meta">
+          <span class="report-items-count">${itemsCount} item${itemsCount !== 1 ? 's' : ''}</span>
+          <span class="report-date">Created ${createdDate}</span>
+          ${updatedDate !== createdDate ? `<span class="report-date">Updated ${updatedDate}</span>` : ''}
+        </div>
+        ${report.description ? `<p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px; line-height: 1.4;">${escapeHtml(report.description)}</p>` : ''}
+        <div class="report-preview">
+          ${previewItems.length ? previewItems.map(item => `
+            <div class="preview-item">
+              <div class="item-type">${item.type || 'Content'}</div>
+              <div class="preview-content">${truncateText(stripHtml(item.headline || item.content || 'Saved content'), 100)}</div>
+            </div>`).join('') : '<div class="preview-item"><div class="preview-content" style="color: var(--text-muted); font-style: italic;">No content added yet</div></div>'}
+        </div>
+        <div class="report-actions">
+          <button class="btn" onclick="viewReport('${report.id}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+            View
+          </button>
+          <button class="btn btn-primary" onclick="exportReport('${report.id}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+            Export PDF
+          </button>
+        </div>`;
+      return card;
+    }
+    
+    function toggleReportMenu(reportId) {
+      document.querySelectorAll('.report-dropdown').forEach(menu => { if (menu.id !== `menu-${reportId}`) menu.classList.remove('show'); });
+      const menu = document.getElementById(`menu-${reportId}`);
+      menu.classList.toggle('show');
+      setTimeout(() => {
+        document.addEventListener('click', function closeMenu(e) {
+          if (!menu.contains(e.target)) { menu.classList.remove('show'); document.removeEventListener('click', closeMenu); }
+        });
+      }, 10);
+    }
+    
+    function viewReport(reportId) {
+      const report = userReports.find(r => r.id === reportId);
+      if (!report) return;
+      alert(`Report: ${report.name}\n\nItems: ${report.items.length}\nCreated: ${new Date(report.createdAt).toLocaleString()}\n\n(Detail view TBD)`);
+    }
+    
+    function duplicateReport(reportId) {
+      const report = userReports.find(r => r.id === reportId); if (!report) return;
+      const duplicatedReport = { ...report, id: 'report_' + Date.now(), name: report.name + ' (Copy)', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      userReports.unshift(duplicatedReport); saveReportsToStorage(); renderReports(); showToast('Report duplicated successfully!');
+    }
+    
+    function exportReport(reportId) {
+      const report = userReports.find(r => r.id === reportId); if (!report) return;
+      showToast(`PDF export for "${report.name}" would be generated here.`);
+    }
+    
+    function deleteReport(reportId) {
+      const report = userReports.find(r => r.id === reportId); if (!report) return;
+      if (confirm(`Delete "${report.name}"? This cannot be undone.`)) {
+        userReports = userReports.filter(r => r.id !== reportId);
+        saveReportsToStorage(); renderReports(); showToast(`Report "${report.name}" deleted.`);
+      }
+    }
+
+    // Toast helper
+    function showToast(message) {
+      const toast = document.createElement('div');
+      toast.style.cssText = `
+        position: fixed; top: 80px; right: 24px; background: var(--white);
+        border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px;
+        box-shadow: var(--shadow-medium); z-index: 1001; max-width: 400px;
+        font-size: 14px; font-weight: 500; color: var(--text-primary); animation: slideInRight 0.3s ease;`;
+      toast.textContent = message; document.body.appendChild(toast);
+      setTimeout(() => { toast.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+      }, 3000);
+    }
+    
+    // Toast animations
+    (function addToastAnimations(){
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes slideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }`;
+      document.head.appendChild(style);
+    })();
+
+    // Utils
+    function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text ?? ''; return div.innerHTML; }
+    function stripHtml(html) { const div = document.createElement('div'); div.innerHTML = html ?? ''; return div.textContent || div.innerText || ''; }
+    function truncateText(text, maxLength) { if ((text ?? '').length <= maxLength) return text ?? ''; return (text ?? '').slice(0, maxLength) + '...'; }
+
+    // Expose some handlers
+    window.toggleReportMenu = toggleReportMenu;
+    window.viewReport = viewReport;
+    window.duplicateReport = duplicateReport;
+    window.exportReport = exportReport;
+    window.deleteReport = deleteReport;
+    window.showCreateReportModal = showCreateReportModal;
+  </script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+/* Page-scoped styles for Admin; header styles come from the shared partial */
+:root { --border:#eef2f7; --muted:#6b7280; --muted2:#9ca3af; --accent:#fb923c; }
+.page--admin .container { max-width:1180px; margin:24px auto 80px; padding:0 20px; }
+
+.page--admin .page-head { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
+.page--admin .page-head h1 { margin:0; font-size:28px; }
+
+.pill { padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--border); }
+.pill--ok { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
+
+.page--admin .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:24px; }
+.page--admin .stat { border:1px solid var(--border); border-radius:16px; padding:16px 18px; background:#fff; }
+.page--admin .stat__value { font-size:28px; font-weight:800; color:var(--accent); }
+.page--admin .stat__label { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+
+.page--admin .card { border:1px solid var(--border); border-radius:16px; padding:16px 18px; background:#fff; margin-bottom:20px; }
+.page--admin .card__head { display:flex; align-items:center; justify-content:space-between; }
+.page--admin .label { display:block; font-weight:600; margin-bottom:6px; }
+
+.page--admin #librarySelect { width:100%; height:40px; border:1px solid #e5e7eb; border-radius:10px; padding:0 12px; background:#fff; margin-bottom:12px; }
+.page--admin .library-stats { color:var(--muted); font-size:14px; }
+
+.page--admin .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+.page--admin .list { list-style:none; padding-left:0; margin:0; }
+.page--admin .list li { padding:10px 8px; border-bottom:1px solid #f3f4f6; }
+.page--admin .list li:last-child { border-bottom:0; }
+.page--admin .muted { color:var(--muted2); }
+
+.btn { cursor:pointer; border:0; background:transparent; }
+.btn--link { color:var(--accent); font-weight:700; }
+.btn--link:hover { text-decoration:underline; }
+
+@media (max-width:980px){
+  .page--admin .grid{grid-template-columns:1fr}
+  .page--admin .stats{grid-template-columns:1fr}
+}

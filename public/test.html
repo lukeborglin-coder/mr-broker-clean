@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Jaice — Research Q&A</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <style>
+    :root{
+      --brand:#ff7a00; --ink:#111; --muted:#5f6570; --line:#e9edf2;
+      --soft:#fff7ed; --soft-border:#ffead6; --accent-left:#ea580c;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:#fff;color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line)}
+    .bar{max-width:none;width:100%;margin:0;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .brand{display:flex;align-items:baseline;gap:6px}
+    .brand .cog{font-weight:800;color:#2b2f36;font-size:24px;letter-spacing:.1px}
+    .brand .gpt{font-weight:400;color:var(--brand);font-size:24px;margin-left:-2px}
+    .brand .beta{font-size:.78rem;color:#9aa2ad;font-weight:700;letter-spacing:.06em}
+    .nav{display:flex;align-items:center;gap:10px}
+    #who{color:var(--muted);font-size:.85rem}
+    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;cursor:pointer;text-decoration:none}
+    .btn.small{padding:10px 14px;font-size:.92rem;line-height:1;height:40px}
+    .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    .btn.ghost:hover{background:var(--brand);border-color:var(--brand);color:#fff}
+    .btn.primary{background:var(--brand);color:#fff;border:0;padding:16px 24px;border-radius:18px;font-size:1.05rem}
+    .client-top-below{display:none;width:100%;margin:8px 0 0;padding:0 24px;display:flex;justify-content:flex-end}
+    .client-top-below select{height:40px;border-radius:10px;border:1px solid(var(--line));background:#fff;padding:0 10px;font-size:.9rem;color:var(--muted);min-width:260px;}
+    main{max-width:none;width:100%;margin:24px 0 32px;padding:0 24px}
+    .hero{text-align:center;margin:0 0 8px}
+    .hero h1{font-size:34px;margin:0 0 6px}
+    .hero h1 .dot{color:var(--brand)}
+    .hero p{margin:0;color:var(--muted)}
+    .askbox{display:grid;grid-template-columns:1fr 140px;gap:12px;width:100%;margin:18px auto 0}
+    .askbox input{padding:18px 20px;font-size:1.05rem;border-radius:18px;border:1px solid var(--line);background:#f4f4f4;color:var(--ink)}
+    .inline-thinking{display:none;align-items:center;gap:8px;color:#9aa2ad;font-size:.9rem;margin-top:6px}
+    .linklike{background:none;border:0;color:#2563eb;text-decoration:underline;cursor:pointer;font-size:.9rem;padding:0}
+    .panel{margin-top:22px;border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff}
+    .panel h3{margin:0 0 8px;font-size:.95rem;color:var(--muted);font-weight:600}
+    .answer-panel{background:var(--soft);border-color:var(--soft-border);position:relative}
+    .answer-panel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;border-radius:14px 0 0 14px;background:var(--accent-left)}
+    .answer-body{line-height:1.55;font-size:1.02rem}
+    #slidesGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+    #slidesGrid img{width:100%;border-radius:10px;border:1px solid var(--line);background:#f8fafc;aspect-ratio:16/9;object-fit:cover}
+    #dataGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .chart-card{border:1px solid var(--line);border-radius:12px;padding:10px}
+    .msg{margin-top:8px;border:1px solid var(--line);background:#fff5f5;color:#8b0000;border-radius:10px;padding:10px 12px;display:none}
+    .msg.info{display:block;background:#fafbfd;color:#2b2f36}
+    .admin-pill{
+      display:inline-flex;align-items:center;justify-content:center;
+      height:36px;padding:0 12px;margin-right:8px;
+      border-radius:999px;border:1px solid var(--line);
+      background:#fff;color:#111;font-weight:600;text-decoration:none;
+    }
+    .admin-pill:hover{box-shadow:0 1px 0 rgba(0,0,0,.04)}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <a href="/" class="brand" aria-label="Jaice home"><img src="/assets/Slide1.JPG?v=1" alt="Jaice" class="brand-logo"/></a>
+      <div class="nav">
+        <div id="who">test_user — admin</div>
+        <a id="adminLink" href="/admin" class="admin-pill" title="Admin">Admin</a>
+        <div class="profile">
+          <button id="profileBtn" class="icon-btn" title="Profile" aria-haspopup="menu" aria-expanded="false">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 12c2.761 0 5-2.239 5-5S14.761 2 12 2 7 4.239 7 7s2.239 5 5 5zm0 2c-4.418 0-8 2.239-8 5v1h16v-1c0-2.761-3.582-5-8-5z"/>
+            </svg>
+          </button>
+          <div id="profileMenu" class="menu hidden">
+            <div class="small" id="whoMenu" style="padding:8px 12px;color:#666;">test_user · admin</div>
+            <a href="/profile">My profile</a>
+            <a href="/settings">Settings</a>
+            <button id="logoutBtn" type="button">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="client-top-below" id="clientTopRow" style="display:flex;">
+    <select id="clientTop">
+      <option value="" selected disabled>Select a client library</option>
+      <option value="demo">Demo Client</option>
+    </select>
+  </div>
+
+  <main>
+    <div class="hero">
+      <h1>Ask about your research<span class="dot">.</span></h1>
+      <p class="muted">Search across your uploaded reports, questionnaires, and data.</p>
+    </div>
+
+    <div class="askbox">
+      <input id="q" placeholder="e.g., What has satisfaction for Product X looked like over the past few years?"/>
+      <button id="ask" class="btn primary">Ask</button>
+    </div>
+    <div id="inlineStatus" class="inline-thinking"><span class="spinner sm"></span><span>Thinking…</span></div>
+    <div id="msg" class="msg"></div>
+
+    <div id="out" style="display:none;">
+      <div id="answerPanel" class="panel answer-panel" style="display:none;">
+        <div id="answer" class="answer-body"></div>
+      </div>
+
+      <div id="themesCard" class="panel" style="display:none;">
+        <div id="themesGrid" class="themes-grid"></div>
+      </div>
+
+      <div id="supportCard" class="panel" style="display:none;">
+        <h3>Additional Support</h3>
+        <ul id="supportList" class="compact-list"></ul>
+        <button id="toggleMoreBtn" class="linklike" style="display:none;">Show more</button>
+      </div>
+
+      <div id="slidesCard" class="panel" style="display:none;">
+        <h3>Report Slides</h3>
+        <div id="slidesGrid"></div>
+        <button id="toggleSlidesBtn" class="linklike" style="display:none;margin-top:8px;">Show more</button>
+      </div>
+
+      <div id="quotesCard" class="panel" style="display:none;">
+        <h3>Supporting Quotes</h3>
+        <div id="quotes"></div>
+      </div>
+
+      <div id="dataCard" class="panel" style="display:none;">
+        <h3>Supporting Data</h3>
+        <div id="dataGrid"></div>
+      </div>
+
+      <div id="chartsCard" class="panel" style="display:none;">
+        <h3>Charts & Data</h3>
+        <div class="canvas-wrap">
+          <canvas id="chartCanvas" aria-label="Metric chart"></canvas>
+        </div>
+        <div id="chartTable" class="table-wrap" style="margin-top:12px;"></div>
+        <div id="chartFootnote"></div>
+      </div>
+
+      <details id="refsDetails" class="panel" style="display:none;">
+        <summary>
+          <h3 style="display:inline;">References</h3>
+          <span class="muted" style="margin-left:8px;">(click to expand)</span>
+        </summary>
+        <div class="table-wrap">
+          <table class="data-table" id="refsTable">
+            <thead>
+              <tr><th>#</th><th>Name</th><th>Month</th><th>Year</th><th>Methodology</th><th>Link</th></tr>
+            </thead>
+            <tbody id="refsBody"></tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  </main>
+
+  <div id="overlay" class="overlay hidden">
+    <div class="spinner"></div>
+    <div class="overlay-text">Thinking…</div>
+  </div>
+
+  <div id="chartTip" class="chart-tooltip"></div>
+
+  <script>
+  // Mock functionality for testing UI
+  function showMsg(text, type="error"){
+    const el = document.getElementById("msg");
+    if (!el) return;
+    el.textContent = text;
+    el.className = "msg " + (type==="error"?"":"info");
+    el.style.display = "block";
+  }
+
+  function setThinking(on){
+    document.getElementById("overlay")?.classList.toggle("hidden", !on);
+    const inl = document.getElementById("inlineStatus");
+    if (inl) inl.style.display = on ? "flex" : "none";
+    const ask = document.getElementById("ask");
+    if (ask) ask.disabled = on;
+  }
+
+  function mockSearch(){
+    const question = document.getElementById("q").value.trim();
+    if (!question) {
+      showMsg("Enter a question to search.");
+      return;
+    }
+
+    setThinking(true);
+    
+    // Mock response after 2 seconds
+    setTimeout(() => {
+      setThinking(false);
+      document.getElementById("out").style.display = "block";
+      
+      // Show mock answer
+      const ansPanel = document.getElementById("answerPanel");
+      const ans = document.getElementById("answer");
+      ansPanel.style.display = "block";
+      ans.innerHTML = "This is a mock response to demonstrate the interface. Your actual search functionality would connect to your backend API to provide real research insights and data.";
+      
+      showMsg("This is a demo interface. Connect your backend to enable real search functionality.", "info");
+    }, 2000);
+  }
+
+  // Wire up the interface
+  document.getElementById("ask").addEventListener("click", mockSearch);
+  document.getElementById("q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      mockSearch();
+    }
+  });
+
+  // Profile menu functionality
+  const btn = document.getElementById("profileBtn");
+  const menu = document.getElementById("profileMenu");
+  if (btn && menu) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.classList.toggle("hidden");
+    });
+    document.addEventListener("click", () => {
+      menu.classList.add("hidden");
+    });
+  }
+  </script>
+</body>
+</html>

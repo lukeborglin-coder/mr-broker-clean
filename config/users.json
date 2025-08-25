@@ -1,0 +1,35 @@
+{
+  "users": [
+    {
+      "username": "CognitiveAdmin",
+      "passwordHash": "$2a$10$msZKUT3rHj.4BPrQL5DRGe.ba8FQ7DwUS5931kDtjf2HlaSceVxMm",
+      "role": "admin",
+      "allowedClients": "*"
+    },
+    {
+      "username": "genentech_user",
+      "passwordHash": "$2a$10$6A/a2IzBjyj8Xt6HCmXvYehZp0q9xZ0Rm4wdP6hFiI9WfR64YzOcu",
+      "role": "client",
+      "allowedClients": "sample_client_1",
+      "createdAt": "2025-08-21T01:04:21.538Z"
+    },
+    {
+      "username": "cognitive_admin",
+      "passwordHash": "$2a$10$lhMzcAsOU7CkPzwHLpeu6O.DKa6FN1mjmyAIEZNqyweCJKJgapTlS",
+      "role": "admin",
+      "allowedClients": "*"
+    },
+    {
+      "username": "cognitive_internal",
+      "passwordHash": "$2a$10$EdkM16KxkN2E4yUN5wp1oOASvT9XVWwPqdMGTYXtrvxO8kKJepktC",
+      "role": "internal",
+      "allowedClients": "*"
+    },
+    {
+      "username": "CognitiveAdmin",
+      "passwordHash": "$2a$10$FDvTgtpD2NdSTUSqLUwwlOCGpMjKQ7OlEAOnLVNLdGy0qERbAr1J6",
+      "role": "admin",
+      "allowedClients": "*"
+    }
+  ]
+}

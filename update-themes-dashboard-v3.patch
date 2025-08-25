@@ -1,0 +1,42 @@
+--- a/server.js+++ b/server.js@@ -1071,6 +1071,34 @@     }
+ 
+     logger.info(`Processed ${relevantChunks.length} relevant chunks`);
++    // --- BEGIN: add theme aggregates for dashboard ---
++    const byReportType = {};
++    const byYear = {};
++    for (const c of relevantChunks) {
++      if (c?.reportTag) byReportType[c.reportTag] = (byReportType[c.reportTag] || 0) + 1;
++      if (c?.yearTag)   byYear[c.yearTag]       = (byYear[c.yearTag] || 0) + 1;
++    }
++
++    const themes = [
++      {
++        key: "byReportType",
++        title: "References by Report Type",
++        type: "bar",
++        data: Object.entries(byReportType)
++          .map(([label, value]) => ({ label, value }))
++          .sort((a,b)=> b.value - a.value)
++      },
++      {
++        key: "byYear",
++        title: "References by Year",
++        type: "bar",
++        data: Object.entries(byYear)
++          .map(([label, value]) => ({ label, value }))
++          .sort((a,b)=> String(a.label).localeCompare(String(b.label)))
++      }
++    ];
++    // --- END: add theme aggregates for dashboard ---
++
+ 
+     // Step 4: Generate answer (mentions low evidence if needed)
+     let generatedAnswer;
+@@ -1111,7 +1139,7 @@     res.json({
+       answer: generatedAnswer,
+       references: { chunks: relevantChunks },
+-      themes: [],
++      themes,
+       quotes: [],
+       visuals: [],
+       supportingData: [],

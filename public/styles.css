@@ -1,0 +1,127 @@
+/* === Report slide styling fixes === */
+.report-slide-preview { 
+  overflow: visible !important;
+}
+
+.report-slide-preview img { 
+  width: 100% !important; 
+  height: auto !important; 
+  object-fit: contain !important; 
+  display: block !important;
+  max-height: 100% !important;
+}
+
+.report-slide-card { 
+  overflow: visible !important; 
+}
+
+.slide-overlay { 
+  display: none !important; 
+}
+
+/* Loading spinner styles */
+.slide-loading {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.9);
+  z-index: 2;
+}
+
+.slide-loading .spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #ff7a00;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* === Admin page alignment with Home/Reports === */
+.app-header{display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 20px;border-bottom:1px solid #eee;background:#fff}
+.app-header__left{display:flex;align-items:center;gap:14px}
+.app-header__right{display:flex;align-items:center;gap:14px}
+.app-nav{display:flex;gap:16px}
+.nav-link{padding:6px 8px;border-radius:8px;color:#444;text-decoration:none}
+.nav-link.active{border-bottom:2px solid #ff7a00}
+.beta-badge{font-size:11px;padding:2px 6px;border-radius:999px;background:#111;color:#fff}
+
+.user-chip{display:flex;align-items:center;gap:8px}
+.user-chip .avatar{width:24px;height:24px}
+
+.container{max-width:1100px;margin:24px auto;padding:0 16px}
+.page-title{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.status-pill{background:#e9f9ef;color:#15803d;border:1px solid #cfeedd;border-radius:999px;padding:6px 10px;font-size:12px}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
+.kpi-card{border:1px solid #eee;border-radius:14px;padding:18px;background:#fff}
+.kpi-value{font-size:28px;font-weight:700;color:#ff7a00}
+.kpi-label{font-size:12px;text-transform:uppercase;color:#666}
+
+.panel{border:1px solid #eee;border-radius:14px;padding:18px;background:#fff;margin-bottom:18px}
+.panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.field{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.select{height:38px;border:1px solid #ddd;border-radius:10px;padding:0 10px;background:#fff}
+
+.stats-row{display:flex;gap:10px;margin-top:12px}
+.stat-chip{border:1px solid #eee;border-radius:10px;padding:10px 12px;background:#fafafa}
+.stat-chip span{font-size:12px;color:#666}
+.stat-chip strong{display:block;font-size:16px;color:#111}
+
+.split-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.list{display:flex;flex-direction:column;gap:10px}
+.list-item{display:flex;align-items:center;justify-content:space-between;border:1px solid #eee;border-radius:12px;padding:12px;background:#fff}
+.list-main .title{font-weight:600}
+.list-main .meta{font-size:12px;color:#666}
+.role-pill{font-size:11px;border:1px solid #ffd9bf;background:#fff7f0;color:#c2410c;border-radius:999px;padding:4px 8px}
+.link{background:none;border:none;padding:0;color:#0b63ce;cursor:pointer}
+.link-danger{color:#b42318}
+.empty{color:#888;font-size:13px}
+
+/* === Overflow menu & report styles === */
+.response-card{ position: relative; }
+.response-menu-button{ position:absolute; right:10px; top:10px; background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:2px 8px; cursor:pointer; line-height:1; font-weight:700; z-index:1000; }
+.response-menu{ position:absolute; right:10px; top:36px; display:none; background:#fff; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.08); z-index:1000; min-width:180px; }
+.response-menu.open{ display:block; }
+.response-menu-item{ display:block; width:100%; text-align:left; padding:10px 12px; background:none; border:none; font-size:14px; cursor:pointer; }
+.response-menu-item:hover{ background:#f3f4f6; }
+.response-expansion, .response-summary{ margin-top:10px; padding:10px 12px; border-left:3px solid #e5e7eb; background:#fafafa; border-radius:6px; }
+.is-dismissed{ display:none; }
+
+.active-report-bar{ position:fixed; left:16px; right:16px; bottom:16px; background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; display:none; align-items:center; justify-content:space-between; box-shadow:0 6px 24px rgba(0,0,0,.08); z-index:999; }
+.active-report-bar .ar-actions button, .active-report-bar .ar-actions .ar-link{ margin-left:6px; padding:6px 10px; border:1px solid #e5e7eb; border-radius:8px; background:#fff; cursor:pointer; font-size:13px; }
+.active-report-bar .ar-actions .ar-link{ text-decoration:none; }
+.toast{ position:fixed; left:50%; transform:translateX(-50%); bottom:80px; background:#111827; color:#fff; padding:8px 12px; border-radius:8px; opacity:0; transition:opacity .2s ease; z-index:1000; }
+.toast.show{ opacity:1; }
+
+/* Additional fixes for broken images and slide previews */
+.no-preview{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--text-muted,#6b7280);
+  font-size:12px;
+  background:rgba(0,0,0,0.02);
+  border-radius:10px;
+  display:none;
+}
+
+.report-slide-preview.broken .no-preview{
+  display:flex;
+}
+
+.report-slide-preview.broken img{
+  display:none !important;
+}
+
+.report-slide-preview img{
+  image-rendering:auto;
+}

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin • JAICE</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <% const active='admin'; %>
+  <%- include('./partials/header.ejs') %>
+
+  <main class="page page--admin">
+    <div class="container">
+      <div class="page-head">
+        <h1>Admin Center</h1>
+        <span id="systemHealth" class="pill pill--ok">System Healthy</span>
+      </div>
+
+      <section class="stats">
+        <div class="stat">
+          <div class="stat__value" id="totalAdmins">0</div>
+          <div class="stat__label">Total Admins</div>
+        </div>
+        <div class="stat">
+          <div class="stat__value" id="totalClients">0</div>
+          <div class="stat__label">Total Clients</div>
+        </div>
+        <div class="stat">
+          <div class="stat__value" id="totalLibraries">0</div>
+          <div class="stat__label">Client Libraries</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Library Statistics</h2>
+        <label class="label" for="librarySelect">Select Client Library</label>
+        <select id="librarySelect">
+          <option value="">Choose a library…</option>
+        </select>
+        <div id="libraryStats" class="library-stats"></div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card__head">
+            <h2>Client Accounts</h2>
+            <button id="btnAddClient" class="btn btn--link">Add New Client</button>
+          </div>
+          <ul id="clientAccountsList" class="list"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card__head">
+            <h2>Admin Accounts</h2>
+            <button id="btnAddAdmin" class="btn btn--link">Add New Admin</button>
+          </div>
+          <ul id="adminAccountsList" class="list"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card__head">
+            <h2>Today’s Activity</h2>
+          </div>
+          <ul id="activityList" class="list"><li class="muted">No activity yet.</li></ul>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "sheetHints": ["Tables", "Tab", "Summary"],
+  "stopAtText": ["Comparison Groups:", "Independent T-Test", "Base: Evrysdi"],
+  "waveRegex": "^W\\d+$"
+}

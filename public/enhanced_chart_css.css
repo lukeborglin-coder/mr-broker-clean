@@ -1,0 +1,281 @@
+/* Enhanced Chart Container Styles - Prevents Overlap and Improves Layout */
+
+/* FIXED: Chart container styling to prevent text overlap */
+.chart-container, .chart-wrapper {
+  position: relative !important;
+  background: #fff !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  padding: 20px !important;
+  margin: 16px 0 !important;
+  overflow: visible !important;
+  z-index: 1 !important;
+  min-height: 280px !important; /* Increased minimum height */
+}
+
+/* Wide chart containers need more space */
+.dashboard-item.wide-chart .chart-container,
+.dashboard-item.wide-chart .chart-wrapper {
+  min-height: 350px !important;
+  padding: 24px !important;
+}
+
+/* Chart canvas specific fixes with proper spacing */
+.chart-container canvas, 
+.chart-wrapper canvas {
+  border-radius: 8px !important;
+  max-width: 100% !important;
+  max-height: calc(100% - 60px) !important; /* Leave space for labels */
+  display: block !important;
+  position: relative !important;
+  z-index: 2 !important;
+  margin: 0 auto !important;
+}
+
+/* Ensure chart containers don't interfere with each other */
+[id^="chart-"] {
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible !important;
+  z-index: auto !important;
+  min-height: 200px !important;
+}
+
+/* Chart title styling with proper spacing */
+.chart-wrapper h5 {
+  margin: 0 0 16px 0 !important;
+  color: #2d3748 !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  text-align: center !important;
+  padding-bottom: 8px !important;
+  border-bottom: 2px solid var(--jaice-orange) !important;
+}
+
+/* Dashboard item adjustments for better chart display */
+.dashboard-item {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px; /* Reduced from 24px */
+  box-shadow: var(--shadow-soft);
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: visible; /* Allow charts to extend if needed */
+}
+
+.dashboard-item h4 {
+  margin: 0 0 12px 0 !important; /* Reduced bottom margin */
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--jaice-orange);
+  padding-bottom: 8px; /* Reduced padding */
+  padding-right: 40px;
+}
+
+/* Chart description with better spacing */
+.chart-description {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 12px !important; /* Reduced margin */
+  text-align: left;
+}
+
+/* Bullets list with better spacing */
+.bullets {
+  margin: 12px 0 !important; /* Reduced margins */
+  padding-left: 20px;
+}
+
+.bullets li {
+  margin-bottom: 6px !important; /* Reduced spacing */
+  line-height: 1.4; /* Tighter line height */
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+/* Quote section improvements */
+.quote-section {
+  margin: 12px 0 !important; /* Reduced margin */
+}
+
+.quote-item {
+  margin: 8px 0 !important; /* Reduced margin */
+  padding: 12px; /* Reduced padding */
+  background: #f8f9fa;
+  border-left: 3px solid var(--jaice-orange);
+  border-radius: 4px;
+  font-style: italic;
+  color: #666;
+  position: relative;
+}
+
+.quote-text {
+  margin-bottom: 8px;
+  font-size: 14px; /* Slightly smaller */
+  line-height: 1.4;
+  font-style: italic;
+  padding-right: 60px; /* Space for speaker tag */
+}
+
+.quote-speaker {
+  position: absolute;
+  bottom: 8px; /* Adjusted position */
+  right: 12px;
+  font-size: 11px; /* Slightly smaller */
+  color: #999;
+  font-weight: 500;
+  font-style: normal;
+  margin: 0;
+}
+
+/* Enhanced dashboard flow for better spacing */
+.dashboard-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 20px; /* Reduced from 24px */
+}
+
+.dashboard-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px; /* Reduced from 24px */
+}
+
+/* Loading state improvements */
+.chart-container.loading {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--text-muted) !important;
+  font-size: 14px !important;
+  min-height: 250px !important;
+  background: #fff !important;
+  position: relative !important;
+}
+
+.chart-container.loading::before {
+  content: '' !important;
+  width: 20px !important;
+  height: 20px !important;
+  background-image: url('/assets/Circle.png') !important;
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  animation: spin 1s linear infinite !important;
+  margin-right: 10px !important;
+  border: none !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+  .dashboard-row {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  
+  .chart-container, .chart-wrapper {
+    min-height: 240px !important;
+    padding: 16px !important;
+  }
+  
+  .dashboard-item.wide-chart .chart-container,
+  .dashboard-item.wide-chart .chart-wrapper {
+    min-height: 300px !important;
+    padding: 20px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .chart-container, .chart-wrapper {
+    min-height: 220px !important;
+    padding: 12px !important;
+    margin: 12px 0 !important;
+  }
+  
+  .dashboard-item {
+    padding: 16px;
+  }
+  
+  .dashboard-item h4 {
+    font-size: 16px;
+  }
+  
+  .chart-wrapper h5 {
+    font-size: 14px !important;
+  }
+}
+
+/* Chart tooltip enhancements */
+.chart-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  background: rgba(45, 55, 72, 0.95);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  display: none;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+}
+
+/* Improved chart legends for better readability */
+.chart-container .chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #4a5568;
+}
+
+.chart-legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Animation for chart entrance */
+@keyframes chartFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chart-container canvas {
+  animation: chartFadeIn 0.5s ease-out;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .chart-container, .chart-wrapper {
+    border-color: #000 !important;
+    background: #fff !important;
+  }
+  
+  .chart-wrapper h5 {
+    color: #000 !important;
+    border-bottom-color: #000 !important;
+  }
+}

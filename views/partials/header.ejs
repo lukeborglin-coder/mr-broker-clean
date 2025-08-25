@@ -1,0 +1,51 @@
+<header class="site-topbar">
+  <div class="site-topbar__inner">
+    <a class="brand" href="/">
+      <img src="/logo-jaice.svg" alt="JAICE" class="brand__logo">
+      <span class="beta">BETA</span>
+    </a>
+
+    <nav class="nav">
+      <a href="/" class="nav__link <%= active==='home' ? 'nav__link--active' : '' %>">Home</a>
+      <a href="/reports" class="nav__link <%= active==='reports' ? 'nav__link--active' : '' %>">Reports</a>
+      <a href="/admin" class="nav__link <%= active==='admin' ? 'nav__link--active' : '' %>">Admin</a>
+    </nav>
+
+    <div class="topbar-right">
+      <div class="user-pill">
+        <span><%= (currentUser && currentUser.username) || 'CognitiveAdmin' %></span>
+        <span class="role"><%= currentUser && currentUser.role ? '(' + currentUser.role + ')' : '(admin)' %></span>
+      </div>
+
+      <div class="library-select">
+        <select id="librarySelectGlobal" data-role="global-library-select" aria-label="Select a client library">
+          <option value="">Select a client library</option>
+        </select>
+      </div>
+
+      <button id="profileMenuButton" class="kebab" aria-label="More">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<style>
+/* Header styles are inline so this matches Home/Reports without touching your site.css */
+.site-topbar{position:sticky;top:0;background:#fff;border-bottom:1px solid #eef2f7;z-index:50}
+.site-topbar__inner{height:64px;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0 20px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none}
+.brand__logo{height:24px}
+.beta{font-size:10px;padding:2px 6px;border-radius:999px;border:1px solid #e5e7eb;color:#6b7280}
+.nav{display:flex;align-items:center;gap:28px}
+.nav__link{text-decoration:none;color:#4b5563;font-weight:600;padding:6px 0;position:relative}
+.nav__link:hover{color:#111827}
+.nav__link--active{color:#111827}
+.nav__link--active::after{content:"";position:absolute;left:0;right:0;bottom:-14px;height:3px;background:#fb923c;border-radius:2px}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.user-pill{font-weight:600}
+.user-pill .role{color:#6b7280;margin-left:4px}
+.library-select select{height:36px;padding:0 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff}
+.kebab{width:32px;height:32px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;display:inline-flex;align-items:center;justify-content:center;gap:3px;cursor:pointer}
+.kebab span{width:3px;height:3px;border-radius:50%;background:#6b7280;display:inline-block}
+</style>
